@@ -24,7 +24,13 @@ dist-ssr
 *.sw?
 AGENTS.md
 
+# Rust build artifacts
+src-tauri/target/
+
 # Environment
 .env
 todo.md
 .codegraph/
+.vite/
+src-tauri/crates/omega-cli/target/
+omega-cli/target/debug/omega-cli.exe

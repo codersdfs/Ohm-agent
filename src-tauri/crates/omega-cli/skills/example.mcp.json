@@ -1,0 +1,5 @@
+{
+  "name": "web-search",
+  "description": "Search the web for current information on any topic",
+  "endpoint": "http://localhost:8080/mcp"
+}

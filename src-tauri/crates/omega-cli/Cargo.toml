@@ -1,0 +1,18 @@
+[package]
+name = "omega-cli"
+version = "0.1.0"
+edition = "2021"
+description = "A fast, keyboard-driven terminal chat app powered by AI"
+
+[dependencies]
+ratatui = "0.28"
+crossterm = "0.28"
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+async-trait = "0.1"
+providers = { path = "../providers" }
+harness = { path = "../harness" }
+mcp = { path = "../mcp" }
+clap = { version = "4", features = ["derive"] }
+serde_json = "1"
