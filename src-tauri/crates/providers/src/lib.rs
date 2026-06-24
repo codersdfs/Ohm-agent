@@ -118,6 +118,12 @@ impl ProviderKind {
             | Self::Kimi | Self::MiniMax | Self::OpenRouter | Self::Azure
             | Self::Bedrock | Self::HuggingFace | Self::Mistral)
     }
+
+    pub fn supports_streaming(&self) -> bool {
+        matches!(self, Self::OpenAI | Self::XAI | Self::Cerebras | Self::Groq
+            | Self::Kimi | Self::MiniMax | Self::OpenRouter | Self::Azure
+            | Self::Bedrock | Self::HuggingFace | Self::Mistral | Self::Local)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -273,7 +279,10 @@ pub fn create_provider(config: &ProviderConfig) -> Result<Box<dyn LlmProvider>, 
             Ok(Box::new(mistral::MistralProvider::new(api_key, base_url)))
         }
         ProviderKind::Local => {
-            let url = base_url.unwrap_or_else(|| "http://127.0.0.1:11434/v1".into());
+            let mut url = base_url.unwrap_or_else(|| "http://127.0.0.1:11434".into());
+            if !url.ends_with("/v1") {
+                url = format!("{}/v1", url.trim_end_matches('/'));
+            }
             Ok(Box::new(local::LocalProvider::new(url)))
         }
     }
