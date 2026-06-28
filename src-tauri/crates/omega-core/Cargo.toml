@@ -1,0 +1,29 @@
+[package]
+name = "omega-core"
+version = "0.1.0"
+edition = "2021"
+description = "Omega Agent core library — shared between Tauri GUI and CLI"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+log = "0.4"
+tokio = { version = "1", features = ["full"] }
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+colored = "3"
+regex = "1.0"
+glob = "0.3"
+walkdir = "2"
+directories = "5"
+pulldown-cmark = "0.13"
+syntect = "5"
+similar = "2"
+indicatif = "0.17"
+anyhow = "1"
+
+providers = { path = "../providers" }
+harness = { path = "../harness" }
+memory = { path = "../memory" }
+mcp = { path = "../mcp" }
+omega-table = { path = "../omega-table" }
