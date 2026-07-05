@@ -17,6 +17,8 @@ struct AnthropicToolDef {
 #[derive(Serialize)]
 struct AnthropicRequest {
     model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    system: Option<String>,
     messages: Vec<AnthropicMessage>,
     max_tokens: u32,
     temperature: f32,
@@ -107,16 +109,7 @@ impl AnthropicProvider {
         for msg in &request.messages {
             match msg.role.as_str() {
                 "system" => {
-                    // Anthropic handles system separately via system param,
-                    // but we'll include it as a user message for compatibility
-                    messages.push(AnthropicMessage {
-                        role: "user".into(),
-                        content: serde_json::json!([{"type": "text", "text": &msg.content}]),
-                    });
-                    messages.push(AnthropicMessage {
-                        role: "assistant".into(),
-                        content: serde_json::json!([{"type": "text", "text": "Understood."}]),
-                    });
+                    // Skipped — extracted separately as the request-level `system` field
                 }
                 "user" => {
                     messages.push(AnthropicMessage {
@@ -187,8 +180,14 @@ impl LlmProvider for AnthropicProvider {
         let messages = Self::convert_messages(&request);
         let tools = request.tools.as_ref().map(|t| Self::convert_tools(t));
 
+        let system = request.messages.iter()
+            .find(|m| m.role == "system")
+            .map(|m| m.content.clone())
+            .filter(|s| !s.is_empty());
+
         let body = AnthropicRequest {
             model: request.config.model.clone(),
+            system,
             messages,
             max_tokens: request.config.max_tokens,
             temperature: request.config.temperature,
@@ -254,8 +253,14 @@ impl LlmProvider for AnthropicProvider {
         let messages = Self::convert_messages(&request);
         let tools = request.tools.as_ref().map(|t| Self::convert_tools(t));
 
+        let system = request.messages.iter()
+            .find(|m| m.role == "system")
+            .map(|m| m.content.clone())
+            .filter(|s| !s.is_empty());
+
         let body = AnthropicRequest {
             model: request.config.model.clone(),
+            system,
             messages,
             max_tokens: request.config.max_tokens,
             temperature: request.config.temperature,
@@ -351,10 +356,10 @@ impl LlmProvider for AnthropicProvider {
 
                                 // Convert accumulated tool calls to delta format
                                 if !tool_calls_map.is_empty() {
-                                    let deltas: Vec<crate::DeltaToolCall> = tool_calls_map.values().map(|(idx, name, args)| {
+                                    let deltas: Vec<crate::DeltaToolCall> = tool_calls_map.iter().map(|(tool_id, (idx, name, args))| {
                                         crate::DeltaToolCall {
                                             index: *idx,
-                                            id: None,
+                                            id: Some(tool_id.clone()),
                                             tool_type: None,
                                             function: Some(crate::DeltaToolCallFunction {
                                                 name: Some(name.clone()),

@@ -1,0 +1,22 @@
+[package]
+name = "omega"
+version = "0.1.0"
+edition = "2021"
+description = "Omega Agent CLI — AI coding assistant"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1"
+colored = "3"
+rpassword = "7"
+directories = "5"
+chrono = { version = "0.4", features = ["serde"] }
+env_logger = "0.11"
+log = "0.4"
+
+omega-core = { path = "../omega-core" }
+providers = { path = "../providers" }
+tool-harness = { path = "../tool-harness" }

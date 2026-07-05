@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::AppState;
+use crate::{AppState, MutexExt};
 use crate::ChatEmitter;
 use colored::Colorize;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -111,7 +111,7 @@ pub async fn send_message(
     log::debug!("send_message: agent={}, content={:?}", request.agent_type, request.content.chars().take(50).collect::<String>());
 
     let config = request.provider.unwrap_or_else(|| {
-        let s = state.provider_config.lock().unwrap();
+        let s = state.provider_config.lock_guard();
         s.clone()
     });
 
@@ -162,15 +162,30 @@ pub async fn send_message(
             });
 
             for tc in &tool_calls {
+                let args = match serde_json::from_str(&tc.function.arguments) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        messages.push(providers::ChatMessage {
+                            role: "tool".into(),
+                            content: format!("Error parsing arguments for `{}`: {}.\nArguments received: {}", tc.function.name, e, tc.function.arguments),
+                            tool_calls: None,
+                            tool_call_id: Some(tc.id.clone()),
+                            name: Some(tc.function.name.clone()),
+                        });
+                        continue;
+                    }
+                };
                 let tool_request = crate::commands::tools::ToolRequest {
                     tool: tc.function.name.clone(),
-                    args: serde_json::from_str(&tc.function.arguments)
-                        .unwrap_or(serde_json::Value::Null),
+                    args,
                 };
-                let result = crate::commands::tools::execute_tool_inner(state, tool_request).await?;
+                let result = match crate::commands::tools::execute_tool_inner(state, tool_request).await {
+                    Ok(r) => r,
+                    Err(e) => crate::commands::tools::ToolResult::err(e),
+                };
                 messages.push(providers::ChatMessage {
                     role: "tool".into(),
-                    content: result.output,
+                    content: if result.success { result.output } else { result.error.unwrap_or_default() },
                     tool_calls: None,
                     tool_call_id: Some(tc.id.clone()),
                     name: Some(tc.function.name.clone()),
@@ -186,6 +201,77 @@ pub async fn send_message(
     }
 }
 
+async fn handle_tool_calls(
+    state: &AppState,
+    tool_calls: &[providers::ToolCall],
+    messages: &mut Vec<providers::ChatMessage>,
+    permission_mode: &str,
+) -> Result<(), String> {
+    messages.push(providers::ChatMessage {
+        role: "assistant".into(),
+        content: String::new(),
+        tool_calls: Some(tool_calls.to_vec()),
+        tool_call_id: None,
+        name: None,
+    });
+    for tc in tool_calls {
+        eprintln!("  {} {} {}", "\u{25b6}", tc.function.name.bold(), tc.function.arguments.dimmed());
+        let args = match serde_json::from_str(&tc.function.arguments) {
+            Ok(v) => v,
+            Err(e) => {
+                messages.push(providers::ChatMessage {
+                    role: "tool".into(),
+                    content: format!("Error parsing arguments for `{}`: {}.\nArguments received: {}", tc.function.name, e, tc.function.arguments),
+                    tool_calls: None,
+                    tool_call_id: Some(tc.id.clone()),
+                    name: Some(tc.function.name.clone()),
+                });
+                continue;
+            }
+        };
+        let tool_request = crate::commands::tools::ToolRequest {
+            tool: tc.function.name.clone(),
+            args,
+        };
+        let diff_path = if matches!(tc.function.name.as_str(), "write" | "edit") {
+            tool_request.args.get("filePath").and_then(|v| v.as_str()).map(|p| p.to_string())
+        } else {
+            None
+        };
+        let old = diff_path.as_ref().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
+        match check_permission(permission_mode, &tc.function.name, &tc.function.arguments).await {
+            Permission::Allow => {}
+            Permission::Deny => {
+                messages.push(providers::ChatMessage {
+                    role: "tool".into(),
+                    content: format!("Tool `{}` was denied by permission mode", tc.function.name),
+                    tool_calls: None,
+                    tool_call_id: Some(tc.id.clone()),
+                    name: Some(tc.function.name.clone()),
+                });
+                continue;
+            }
+            Permission::Abort => return Err("Message aborted by user".into()),
+        }
+        let result = match crate::commands::tools::execute_tool_inner(state, tool_request).await {
+            Ok(r) => r,
+            Err(e) => crate::commands::tools::ToolResult::err(e),
+        };
+        if let Some(ref path) = diff_path {
+            let new = std::fs::read_to_string(path).unwrap_or_default();
+            show_diff(path, &old, &new);
+        }
+        messages.push(providers::ChatMessage {
+            role: "tool".into(),
+            content: if result.success { result.output } else { result.error.unwrap_or_default() },
+            tool_calls: None,
+            tool_call_id: Some(tc.id.clone()),
+            name: Some(tc.function.name.clone()),
+        });
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamMessageRequest {
     pub content: String,
@@ -196,30 +282,32 @@ pub struct StreamMessageRequest {
     pub permission_mode: String,
 }
 
-pub async fn stream_message<E: ChatEmitter>(
+pub async fn stream_message_with_history<E: ChatEmitter>(
     state: &AppState,
     request: StreamMessageRequest,
     emitter: &E,
+    messages: &mut Vec<providers::ChatMessage>,
 ) -> Result<String, String> {
     log::debug!("stream_message: agent={}", request.agent_type);
 
     let config = request.provider.unwrap_or_else(|| {
-        let s = state.provider_config.lock().unwrap();
+        let s = state.provider_config.lock_guard();
         s.clone()
     });
 
     let tools = crate::commands::tools::tool_definitions();
 
-    let mut messages: Vec<providers::ChatMessage> = vec![];
-    let sys_prompt = request.system_prompt
-        .unwrap_or_else(crate::commands::tools::default_system_prompt);
-    messages.push(providers::ChatMessage {
-        role: "system".into(),
-        content: sys_prompt,
-        tool_calls: None,
-        tool_call_id: None,
-        name: None,
-    });
+    if messages.is_empty() {
+        let sys_prompt = request.system_prompt
+            .unwrap_or_else(crate::commands::tools::default_system_prompt);
+        messages.push(providers::ChatMessage {
+            role: "system".into(),
+            content: sys_prompt,
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        });
+    }
     messages.push(providers::ChatMessage {
         role: "user".into(),
         content: request.content,
@@ -238,6 +326,7 @@ pub async fn stream_message<E: ChatEmitter>(
         max_loops -= 1;
 
         if config.kind.supports_streaming() {
+            log::debug!("streaming: provider={:?} tools={}", config.kind, tools.len());
             let provider = providers::create_provider(&config)?;
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
@@ -263,7 +352,7 @@ pub async fn stream_message<E: ChatEmitter>(
             spinner.enable_steady_tick(std::time::Duration::from_millis(80));
 
             let mut streaming_text = false;
-            let mut tool_call_deltas: Vec<(usize, String, String)> = vec![];
+            let mut tool_call_deltas: Vec<(usize, String, String, String)> = vec![];
             let mut last_usage: Option<providers::Usage> = None;
 
             while let Some(chunk) = rx.recv().await {
@@ -276,27 +365,37 @@ pub async fn stream_message<E: ChatEmitter>(
                     full_response.push_str(&chunk.content);
                 }
 
-                if let Some(deltas) = chunk.delta_tool_calls {
+                if let Some(ref deltas) = chunk.delta_tool_calls {
+                    log::debug!("received {} tool call deltas", deltas.len());
                     for d in deltas {
-                        let pos = tool_call_deltas.iter().position(|(idx, _, _)| *idx == d.index);
+                        let pos = tool_call_deltas.iter().position(|(idx, _, _, _)| *idx == d.index);
                         if let Some(p) = pos {
                             let entry = &mut tool_call_deltas[p];
+                            if let Some(ref id_val) = d.id {
+                                if entry.1.is_empty() {
+                                    entry.1.push_str(id_val);
+                                }
+                            }
                             if let Some(ref name) = d.function.as_ref().and_then(|f| f.name.as_ref()) {
-                                entry.1.push_str(name);
+                                entry.2.push_str(name);
                             }
                             if let Some(ref args) = d.function.as_ref().and_then(|f| f.arguments.as_ref()) {
-                                entry.2.push_str(args);
+                                entry.3.push_str(args);
                             }
                         } else {
+                            let mut id_buf = String::new();
                             let mut name_buf = String::new();
                             let mut args_buf = String::new();
+                            if let Some(ref id_val) = d.id {
+                                id_buf.push_str(id_val);
+                            }
                             if let Some(ref n) = d.function.as_ref().and_then(|f| f.name.as_ref()) {
                                 name_buf.push_str(n);
                             }
                             if let Some(ref a) = d.function.as_ref().and_then(|f| f.arguments.as_ref()) {
                                 args_buf.push_str(a);
                             }
-                            tool_call_deltas.push((d.index, name_buf, args_buf));
+                            tool_call_deltas.push((d.index, id_buf, name_buf, args_buf));
                         }
                     }
                 }
@@ -310,9 +409,10 @@ pub async fn stream_message<E: ChatEmitter>(
             spinner.finish_and_clear();
 
             if !tool_call_deltas.is_empty() {
-                let tool_calls: Vec<providers::ToolCall> = tool_call_deltas.iter().map(|(index, name, args)| {
+                log::debug!("executing {} accumulated tool calls", tool_call_deltas.len());
+                let tool_calls: Vec<providers::ToolCall> = tool_call_deltas.iter().map(|(_index, id, name, args)| {
                     providers::ToolCall {
-                        id: format!("call_{}", index),
+                        id: if id.is_empty() { format!("call_{}", _index) } else { id.clone() },
                         tool_type: "function".into(),
                         function: providers::ToolCallFunction {
                             name: name.clone(),
@@ -321,53 +421,7 @@ pub async fn stream_message<E: ChatEmitter>(
                     }
                 }).collect();
 
-                messages.push(providers::ChatMessage {
-                    role: "assistant".into(),
-                    content: String::new(),
-                    tool_calls: Some(tool_calls.clone()),
-                    tool_call_id: None,
-                    name: None,
-                });
-                for tc in &tool_calls {
-                    eprintln!("  {} {} {}", "▶", tc.function.name.bold(), tc.function.arguments.dimmed());
-                    let tool_request = crate::commands::tools::ToolRequest {
-                        tool: tc.function.name.clone(),
-                        args: serde_json::from_str(&tc.function.arguments)
-                            .unwrap_or(serde_json::Value::Null),
-                    };
-                    let diff_path = if matches!(tc.function.name.as_str(), "write" | "edit") {
-                        tool_request.args.get("filePath").and_then(|v| v.as_str()).map(|p| p.to_string())
-                    } else {
-                        None
-                    };
-                    let old = diff_path.as_ref().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
-                    match check_permission(&request.permission_mode, &tc.function.name, &tc.function.arguments).await {
-                        Permission::Allow => {}
-                        Permission::Deny => {
-                            messages.push(providers::ChatMessage {
-                                role: "tool".into(),
-                                content: format!("Tool `{}` was denied by permission mode", tc.function.name),
-                                tool_calls: None,
-                                tool_call_id: Some(tc.id.clone()),
-                                name: Some(tc.function.name.clone()),
-                            });
-                            continue;
-                        }
-                        Permission::Abort => return Err("Message aborted by user".into()),
-                    }
-                    let result = crate::commands::tools::execute_tool_inner(state, tool_request).await?;
-                    if let Some(ref path) = diff_path {
-                        let new = std::fs::read_to_string(path).unwrap_or_default();
-                        show_diff(path, &old, &new);
-                    }
-                    messages.push(providers::ChatMessage {
-                        role: "tool".into(),
-                        content: result.output,
-                        tool_calls: None,
-                        tool_call_id: Some(tc.id.clone()),
-                        name: Some(tc.function.name.clone()),
-                    });
-                }
+                handle_tool_calls(state, &tool_calls, messages, &request.permission_mode).await?;
                 continue;
             }
 
@@ -401,53 +455,7 @@ pub async fn stream_message<E: ChatEmitter>(
             spinner.finish_and_clear();
 
             if let Some(tool_calls) = response.tool_calls {
-                messages.push(providers::ChatMessage {
-                    role: "assistant".into(),
-                    content: String::new(),
-                    tool_calls: Some(tool_calls.clone()),
-                    tool_call_id: None,
-                    name: None,
-                });
-                for tc in &tool_calls {
-                    eprintln!("  {} {} {}", "▶", tc.function.name.bold(), tc.function.arguments.dimmed());
-                    let tool_request = crate::commands::tools::ToolRequest {
-                        tool: tc.function.name.clone(),
-                        args: serde_json::from_str(&tc.function.arguments)
-                            .unwrap_or(serde_json::Value::Null),
-                    };
-                    let diff_path = if matches!(tc.function.name.as_str(), "write" | "edit") {
-                        tool_request.args.get("filePath").and_then(|v| v.as_str()).map(|p| p.to_string())
-                    } else {
-                        None
-                    };
-                    let old = diff_path.as_ref().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
-                    match check_permission(&request.permission_mode, &tc.function.name, &tc.function.arguments).await {
-                        Permission::Allow => {}
-                        Permission::Deny => {
-                            messages.push(providers::ChatMessage {
-                                role: "tool".into(),
-                                content: format!("Tool `{}` was denied by permission mode", tc.function.name),
-                                tool_calls: None,
-                                tool_call_id: Some(tc.id.clone()),
-                                name: Some(tc.function.name.clone()),
-                            });
-                            continue;
-                        }
-                        Permission::Abort => return Err("Message aborted by user".into()),
-                    }
-                    let result = crate::commands::tools::execute_tool_inner(state, tool_request).await?;
-                    if let Some(ref path) = diff_path {
-                        let new = std::fs::read_to_string(path).unwrap_or_default();
-                        show_diff(path, &old, &new);
-                    }
-                    messages.push(providers::ChatMessage {
-                        role: "tool".into(),
-                        content: result.output,
-                        tool_calls: None,
-                        tool_call_id: Some(tc.id.clone()),
-                        name: Some(tc.function.name.clone()),
-                    });
-                }
+                handle_tool_calls(state, &tool_calls, messages, &request.permission_mode).await?;
                 continue;
             }
 
@@ -465,23 +473,341 @@ pub async fn stream_message<E: ChatEmitter>(
     }
 }
 
-pub fn list_models(config: &providers::ProviderConfig) -> Result<Vec<String>, String> {
-    log::info!("list_models for provider={:?}", config.kind);
-    match config.kind {
-        providers::ProviderKind::OpenAI => Ok(vec![
-            "gpt-4o".into(), "gpt-4o-mini".into(), "gpt-4-turbo".into(), "gpt-3.5-turbo".into(),
-        ]),
-        providers::ProviderKind::Anthropic => Ok(vec![
-            "claude-3-5-sonnet-20241022".into(), "claude-3-5-haiku-20241022".into(),
-            "claude-opus-4-20250514".into(),
-        ]),
-        providers::ProviderKind::Groq => Ok(vec![
-            "llama-3.3-70b-versatile".into(), "mixtral-8x7b-32768".into(),
-        ]),
-        providers::ProviderKind::XAI => Ok(vec![
-            "grok-3".into(), "grok-3-mini".into(),
-        ]),
-        providers::ProviderKind::Local => Ok(vec!["ollama".into()]),
-        _ => Ok(vec!["unknown".into()]),
+pub async fn stream_message<E: ChatEmitter>(
+    state: &AppState,
+    request: StreamMessageRequest,
+    emitter: &E,
+) -> Result<String, String> {
+    let mut messages = Vec::new();
+    stream_message_with_history(state, request, emitter, &mut messages).await
+}
+
+pub async fn list_models(config: &providers::ProviderConfig) -> Vec<String> {
+    match providers::fetch_models(config).await {
+        Ok(models) => models.into_iter().map(|m| m.id).collect(),
+        Err(_) => {
+            let fallback: &[&str] = match config.kind {
+                providers::ProviderKind::OpenAI => &[
+                    "gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo",
+                ],
+                providers::ProviderKind::Anthropic => &[
+                    "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022",
+                    "claude-opus-4-20250514",
+                ],
+                providers::ProviderKind::Groq => &[
+                    "llama-3.3-70b-versatile", "mixtral-8x7b-32768",
+                ],
+                providers::ProviderKind::XAI => &[
+                    "grok-3", "grok-3-mini",
+                ],
+                providers::ProviderKind::Local => &["ollama"],
+                _ => &["unknown"],
+            };
+            fallback.iter().map(|s| s.to_string()).collect()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ChatEmitter;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    struct TestEmitter;
+
+    impl ChatEmitter for TestEmitter {
+        fn emit_token(&self, _token: &str) -> Result<(), String> { Ok(()) }
+        fn emit_done(&self, _full: &str) -> Result<(), String> { Ok(()) }
+        fn emit_error(&self, _error: &str) -> Result<(), String> { Ok(()) }
+    }
+
+    fn sse_line(value: &serde_json::Value) -> String {
+        format!("data: {}\n\n", serde_json::to_string(value).unwrap())
+    }
+
+    fn build_sse_response(events: &[serde_json::Value]) -> Vec<u8> {
+        let mut body = String::new();
+        for event in events {
+            body.push_str(&sse_line(event));
+        }
+        body.push_str("data: [DONE]\n\n");
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .into_bytes()
+    }
+
+    fn tool_call_sse() -> Vec<u8> {
+        build_sse_response(&[
+            serde_json::json!({"choices":[{"index":0,"delta":{"content":""},"finish_reason":null}]}),
+            serde_json::json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_abc","type":"function","function":{"name":"glob","arguments":""}}]},"finish_reason":null}]}),
+            serde_json::json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"pattern\":\"**/*.rs\"}"}}]},"finish_reason":null}]}),
+            serde_json::json!({"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}),
+        ])
+    }
+
+    fn text_sse() -> Vec<u8> {
+        build_sse_response(&[
+            serde_json::json!({"choices":[{"index":0,"delta":{"content":"Done"},"finish_reason":null}]}),
+            serde_json::json!({"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}),
+        ])
+    }
+
+    #[tokio::test]
+    async fn test_stream_message_tool_calls_execute_and_push_results() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let request_count = Arc::new(AtomicUsize::new(0));
+        let counter = request_count.clone();
+        let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(());
+
+        let handle = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = cancel_rx.changed() => break,
+                    result = listener.accept() => {
+                        match result {
+                            Ok((mut stream, _)) => {
+                                let mut buf = [0u8; 4096];
+                                let _ = stream.read(&mut buf).await;
+                                let idx = counter.fetch_add(1, Ordering::SeqCst);
+                                let resp = if idx == 0 { tool_call_sse() } else { text_sse() };
+                                let _ = stream.write_all(&resp).await;
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                }
+            }
+        });
+
+        tokio::task::yield_now().await;
+
+        let cfg = providers::ProviderConfig {
+            kind: providers::ProviderKind::Local,
+            api_key: None,
+            base_url: Some(format!("http://127.0.0.1:{}", port)),
+            model: "mock".into(),
+            max_tokens: 1024,
+            temperature: 0.0,
+        };
+        let state = AppState::new_with_provider_config(":memory:", cfg.clone());
+
+        let request = StreamMessageRequest {
+            content: "list rust files".into(),
+            agent_type: "chat".into(),
+            provider: Some(cfg),
+            system_prompt: None,
+            permission_mode: "off".into(),
+        };
+
+        let emitter = TestEmitter;
+        let mut messages = Vec::new();
+        let result = stream_message_with_history(&state, request, &emitter, &mut messages).await;
+
+        assert!(result.is_ok(), "stream_message_with_history failed: {:?}", result.err());
+        assert!(!messages.is_empty(), "messages buffer should contain history");
+
+        let roles: Vec<&str> = messages.iter().map(|m| m.role.as_str()).collect();
+        assert!(
+            roles.contains(&"user"),
+            "should have user message, got roles: {:?}",
+            roles
+        );
+        assert!(
+            roles.contains(&"tool"),
+            "should have tool result message, got roles: {:?}",
+            roles
+        );
+        assert!(
+            roles.contains(&"assistant"),
+            "should have assistant response, got roles: {:?}",
+            roles
+        );
+
+        let first_assistant = messages.iter().find(|m| m.role == "assistant").unwrap();
+        assert!(
+            first_assistant.tool_calls.is_some(),
+            "first assistant message should have tool_calls"
+        );
+
+        drop(cancel_tx);
+        handle.await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_stream_message_preserves_history_across_calls() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let request_count = Arc::new(AtomicUsize::new(0));
+        let counter = request_count.clone();
+        let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(());
+
+        let handle = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = cancel_rx.changed() => break,
+                    result = listener.accept() => {
+                        match result {
+                            Ok((mut stream, _)) => {
+                                let mut buf = [0u8; 4096];
+                                let _ = stream.read(&mut buf).await;
+                                let idx = counter.fetch_add(1, Ordering::SeqCst);
+                                let resp = if idx == 0 { tool_call_sse() } else { text_sse() };
+                                let _ = stream.write_all(&resp).await;
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                }
+            }
+        });
+
+        tokio::task::yield_now().await;
+
+        let cfg = providers::ProviderConfig {
+            kind: providers::ProviderKind::Local,
+            api_key: None,
+            base_url: Some(format!("http://127.0.0.1:{}", port)),
+            model: "mock".into(),
+            max_tokens: 1024,
+            temperature: 0.0,
+        };
+        let state = AppState::new_with_provider_config(":memory:", cfg.clone());
+        let emitter = TestEmitter;
+        let mut messages = Vec::new();
+
+        let r1 = stream_message_with_history(
+            &state,
+            StreamMessageRequest {
+                content: "first call".into(),
+                agent_type: "chat".into(),
+                provider: Some(cfg.clone()),
+                system_prompt: None,
+                permission_mode: "off".into(),
+            },
+            &emitter,
+            &mut messages,
+        )
+        .await;
+        assert!(r1.is_ok());
+
+        let r2 = stream_message_with_history(
+            &state,
+            StreamMessageRequest {
+                content: "second call".into(),
+                agent_type: "chat".into(),
+                provider: Some(cfg.clone()),
+                system_prompt: None,
+                permission_mode: "off".into(),
+            },
+            &emitter,
+            &mut messages,
+        )
+        .await;
+        assert!(r2.is_ok());
+
+        assert!(
+            messages.len() > 4,
+            "history should grow across calls, got {} messages",
+            messages.len()
+        );
+
+        let msgs: Vec<&str> = messages.iter().map(|m| m.role.as_str()).collect();
+        let user_positions: Vec<usize> = msgs.iter().enumerate()
+            .filter(|(_, r)| **r == "user")
+            .map(|(i, _)| i)
+            .collect();
+        assert!(
+            user_positions.len() >= 2,
+            "should have at least 2 user messages (1 per call), got {}",
+            user_positions.len()
+        );
+
+        drop(cancel_tx);
+        handle.await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_stream_message_handles_parse_error_tool_call() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let request_count = Arc::new(AtomicUsize::new(0));
+        let counter = request_count.clone();
+        let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(());
+
+        let handle = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = cancel_rx.changed() => break,
+                    result = listener.accept() => {
+                        match result {
+                            Ok((mut stream, _)) => {
+                                let mut buf = [0u8; 4096];
+                                let _ = stream.read(&mut buf).await;
+                                let idx = counter.fetch_add(1, Ordering::SeqCst);
+                                let resp = if idx == 0 {
+                                    // Tool call with invalid JSON arguments
+                                    build_sse_response(&[
+                                        serde_json::json!({"choices":[{"index":0,"delta":{"content":""},"finish_reason":null}]}),
+                                        serde_json::json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_unparseable","type":"function","function":{"name":"glob","arguments":""}}]},"finish_reason":null}]}),
+                                        serde_json::json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"NOT_VALID_JSON"}}]},"finish_reason":null}]}),
+                                        serde_json::json!({"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}),
+                                    ])
+                                } else {
+                                    text_sse()
+                                };
+                                let _ = stream.write_all(&resp).await;
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                }
+            }
+        });
+
+        tokio::task::yield_now().await;
+
+        let cfg = providers::ProviderConfig {
+            kind: providers::ProviderKind::Local,
+            api_key: None,
+            base_url: Some(format!("http://127.0.0.1:{}", port)),
+            model: "mock".into(),
+            max_tokens: 1024,
+            temperature: 0.0,
+        };
+        let state = AppState::new_with_provider_config(":memory:", cfg.clone());
+        let emitter = TestEmitter;
+        let mut messages = Vec::new();
+        let result = stream_message_with_history(
+            &state,
+            StreamMessageRequest {
+                content: "run broken tool".into(),
+                agent_type: "chat".into(),
+                provider: Some(cfg),
+                system_prompt: None,
+                permission_mode: "off".into(),
+            },
+            &emitter,
+            &mut messages,
+        )
+        .await;
+
+        assert!(result.is_ok(), "should not crash on parse error: {:?}", result.err());
+
+        let roles: Vec<&str> = messages.iter().map(|m| m.role.as_str()).collect();
+        assert!(
+            roles.contains(&"tool"),
+            "should have a tool message even with parse error, got: {:?}",
+            roles
+        );
+
+        drop(cancel_tx);
+        handle.await.ok();
     }
 }

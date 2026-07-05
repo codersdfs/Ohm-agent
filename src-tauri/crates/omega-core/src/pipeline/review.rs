@@ -1,6 +1,6 @@
 use crate::commands::tools::GateViolationInfo;
 use crate::pipeline::review_score::{aggregate_scores, ScoreBreakdown, PromotionStats};
-use crate::AppState;
+use crate::{AppState, MutexExt};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,8 +19,8 @@ impl ReviewAgent {
 
     /// Run Gate check (always on, synchronous, fast).
     pub fn gate_check(state: &AppState, content: &str) -> Vec<GateViolationInfo> {
-        let db = state.rules_db.lock().unwrap();
-        let lang = state.detected_language.lock().unwrap().clone();
+        let db = state.rules_db.lock_guard();
+        let lang = state.detected_language.lock_guard().clone();
         let violations = db.check_content(content, &lang);
 
         if violations.is_empty() {
@@ -41,7 +41,7 @@ impl ReviewAgent {
         code: &str,
         context: &str,
     ) -> Result<String, String> {
-        let config = state.provider_config.lock().unwrap().clone();
+        let config = state.provider_config.lock_guard().clone();
         let review_prompt = format!(
             "You are a Code Review agent. Analyze this code for:\n\
             1. Logic errors and bugs\n\
@@ -98,7 +98,7 @@ impl ReviewAgent {
 
         let gate_result = harness::scoring::calculate_score(&har_violations);
 
-        let config = state.review_config.lock().unwrap().clone();
+        let config = state.review_config.lock_guard().clone();
         let pass_threshold = 80;
 
         let (llm_review, llm_review_str) = match config.mode {
@@ -130,8 +130,8 @@ impl ReviewAgent {
 
     /// Get promotion statistics from the rules database.
     pub fn get_promotion_stats(state: &AppState) -> PromotionStats {
-        let db = state.rules_db.lock().unwrap();
-        let lang = state.detected_language.lock().unwrap().clone();
+        let db = state.rules_db.lock_guard();
+        let lang = state.detected_language.lock_guard().clone();
         let group = db.load_for_language(&lang);
 
         let all: Vec<_> = group.all_rules();
@@ -153,8 +153,8 @@ impl ReviewAgent {
 
     /// Demote stale rules that haven't been triggered in many sessions.
     pub fn demote_stale_rules(state: &AppState) -> usize {
-        let mut db = state.rules_db.lock().unwrap();
-        let lang = state.detected_language.lock().unwrap().clone();
+        let mut db = state.rules_db.lock_guard();
+        let lang = state.detected_language.lock_guard().clone();
         db.demote_stale_rules(&lang)
     }
 }

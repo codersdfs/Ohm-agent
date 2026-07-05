@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::AppState;
+use crate::{AppState, MutexExt};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryStoreRequest {
@@ -28,7 +28,7 @@ pub async fn memory_store(
     log::info!("memory_store: key={}, layer={}", request.key, request.layer);
 
     let layer = memory::MemoryLayer::from_str(&request.layer);
-    let store = state.memory_store.lock().unwrap();
+    let store = state.memory_store.lock_guard();
     store.store(layer, &request.key, &request.value)
 }
 
@@ -38,7 +38,7 @@ pub async fn memory_search(
 ) -> Result<MemorySearchResponse, String> {
     log::info!("memory_search: query={}", request.query);
 
-    let store = state.memory_store.lock().unwrap();
+    let store = state.memory_store.lock_guard();
     let result = store.search(&request.query, request.layer.as_deref(), request.limit.unwrap_or(10))?;
 
     Ok(MemorySearchResponse {
@@ -54,7 +54,7 @@ pub async fn memory_remember(
 ) -> Result<Option<String>, String> {
     log::info!("memory_remember: key={}", key);
 
-    let store = state.memory_store.lock().unwrap();
+    let store = state.memory_store.lock_guard();
     store.remember(&key, layer.as_deref())
 }
 
@@ -62,7 +62,7 @@ pub async fn memory_count(
     state: &AppState,
     layer: Option<String>,
 ) -> Result<usize, String> {
-    let store = state.memory_store.lock().unwrap();
+    let store = state.memory_store.lock_guard();
     store.count(layer.as_deref())
 }
 
@@ -70,7 +70,7 @@ pub async fn memory_delete(
     state: &AppState,
     id: String,
 ) -> Result<(), String> {
-    let store = state.memory_store.lock().unwrap();
+    let store = state.memory_store.lock_guard();
     store.delete(&id)
 }
 
@@ -78,6 +78,6 @@ pub async fn memory_clear(
     state: &AppState,
     layer: Option<String>,
 ) -> Result<usize, String> {
-    let store = state.memory_store.lock().unwrap();
+    let store = state.memory_store.lock_guard();
     store.clear(layer.as_deref())
 }

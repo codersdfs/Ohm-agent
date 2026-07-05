@@ -1,7 +1,6 @@
 pub mod openai;
 pub mod anthropic;
 pub mod google;
-pub mod mistral;
 pub mod local;
 
 use serde::{Deserialize, Serialize};
@@ -253,7 +252,7 @@ pub fn create_provider(config: &ProviderConfig) -> Result<Box<dyn LlmProvider>, 
         ProviderKind::OpenAI | ProviderKind::XAI | ProviderKind::Cerebras
         | ProviderKind::Groq | ProviderKind::Kimi | ProviderKind::MiniMax
         | ProviderKind::OpenRouter | ProviderKind::Azure | ProviderKind::Bedrock
-        | ProviderKind::HuggingFace => {
+        | ProviderKind::HuggingFace | ProviderKind::Mistral => {
             let url = base_url.clone().unwrap_or_else(|| match config.kind {
                 ProviderKind::OpenAI => "https://api.openai.com/v1".into(),
                 ProviderKind::XAI => "https://api.x.ai/v1".into(),
@@ -265,6 +264,7 @@ pub fn create_provider(config: &ProviderConfig) -> Result<Box<dyn LlmProvider>, 
                 ProviderKind::Azure => "https://YOUR_RESOURCE.openai.azure.com/v1".into(),
                 ProviderKind::Bedrock => "https://bedrock-runtime.YOUR_REGION.amazonaws.com".into(),
                 ProviderKind::HuggingFace => "https://api-inference.huggingface.co/v1".into(),
+                ProviderKind::Mistral => "https://api.mistral.ai/v1".into(),
                 _ => unreachable!(),
             });
             Ok(Box::new(openai::OpenAIProvider::new(api_key, url)))
@@ -274,9 +274,6 @@ pub fn create_provider(config: &ProviderConfig) -> Result<Box<dyn LlmProvider>, 
         }
         ProviderKind::Google => {
             Ok(Box::new(google::GoogleProvider::new(api_key, base_url)))
-        }
-        ProviderKind::Mistral => {
-            Ok(Box::new(mistral::MistralProvider::new(api_key, base_url)))
         }
         ProviderKind::Local => {
             let mut url = base_url.unwrap_or_else(|| "http://127.0.0.1:11434".into());

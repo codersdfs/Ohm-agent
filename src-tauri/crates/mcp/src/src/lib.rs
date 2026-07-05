@@ -329,67 +329,65 @@ impl MemoryStore {
 mod tests {
     use super::*;
 
-    fn test_store() -> Result<MemoryStore, String> {
-        MemoryStore::new(":memory:")
+    fn test_store() -> MemoryStore {
+        MemoryStore::new(":memory:").unwrap()
     }
 
     #[test]
-    fn test_store_and_remember() -> Result<(), String> {
-        let store = test_store()?;
-        let id = store.store(MemoryLayer::Session, "test_key", "hello world")?;
+    fn test_store_and_remember() {
+        let store = test_store();
+        let id = store.store(MemoryLayer::Session, "test_key", "hello world").unwrap();
         assert!(!id.is_empty());
-        let result = store.remember("test_key", Some("session"))?;
+
+        let result = store.remember("test_key", Some("session")).unwrap();
         assert_eq!(result, Some("hello world".to_string()));
-        Ok(())
     }
 
     #[test]
-    fn test_search_returns_results() -> Result<(), String> {
-        let store = test_store()?;
-        store.store(MemoryLayer::Project, "api_key", "sk-abc123")?;
-        store.store(MemoryLayer::Project, "db_url", "postgres://localhost")?;
-        let results = store.search("api", Some("project"), 10)?;
+    fn test_search_returns_results() {
+        let store = test_store();
+        store.store(MemoryLayer::Project, "api_key", "sk-abc123").unwrap();
+        store.store(MemoryLayer::Project, "db_url", "postgres://localhost").unwrap();
+
+        let results = store.search("api", Some("project"), 10).unwrap();
         assert!(!results.entries.is_empty(), "Should find at least one result");
-        Ok(())
     }
 
     #[test]
-    fn test_count() -> Result<(), String> {
-        let store = test_store()?;
-        store.store(MemoryLayer::Session, "a", "1")?;
-        store.store(MemoryLayer::Project, "b", "2")?;
-        store.store(MemoryLayer::User, "c", "3")?;
-        assert_eq!(store.count(None)?, 3);
-        assert_eq!(store.count(Some("session"))?, 1);
-        Ok(())
+    fn test_count() {
+        let store = test_store();
+        store.store(MemoryLayer::Session, "a", "1").unwrap();
+        store.store(MemoryLayer::Project, "b", "2").unwrap();
+        store.store(MemoryLayer::User, "c", "3").unwrap();
+
+        assert_eq!(store.count(None).unwrap(), 3);
+        assert_eq!(store.count(Some("session")).unwrap(), 1);
     }
 
     #[test]
-    fn test_delete() -> Result<(), String> {
-        let store = test_store()?;
-        let id = store.store(MemoryLayer::Session, "x", "y")?;
-        store.delete(&id)?;
-        assert_eq!(store.count(None)?, 0);
-        Ok(())
+    fn test_delete() {
+        let store = test_store();
+        let id = store.store(MemoryLayer::Session, "x", "y").unwrap();
+        store.delete(&id).unwrap();
+        assert_eq!(store.count(None).unwrap(), 0);
     }
 
     #[test]
-    fn test_clear_layer() -> Result<(), String> {
-        let store = test_store()?;
-        store.store(MemoryLayer::Session, "a", "1")?;
-        store.store(MemoryLayer::Project, "b", "2")?;
-        store.clear(Some("session"))?;
-        assert_eq!(store.count(None)?, 1);
-        Ok(())
+    fn test_clear_layer() {
+        let store = test_store();
+        store.store(MemoryLayer::Session, "a", "1").unwrap();
+        store.store(MemoryLayer::Project, "b", "2").unwrap();
+        store.clear(Some("session")).unwrap();
+        assert_eq!(store.count(None).unwrap(), 1);
     }
 
     #[test]
-    fn test_search_across_layers() -> Result<(), String> {
-        let store = test_store()?;
-        store.store(MemoryLayer::Session, "config", "dark_mode")?;
-        store.store(MemoryLayer::User, "config", "light_mode")?;
-        let all = store.search("config", None, 10)?;
+    fn test_search_across_layers() {
+        let store = test_store();
+        store.store(MemoryLayer::Session, "config", "dark_mode").unwrap();
+        store.store(MemoryLayer::User, "config", "light_mode").unwrap();
+
+        let all = store.search("config", None, 10).unwrap();
         assert_eq!(all.entries.len(), 2);
-        Ok(())
     }
 }

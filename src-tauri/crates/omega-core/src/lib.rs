@@ -4,7 +4,25 @@ pub mod tui;
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
+
+// ─── Poison-safe Mutex extension ─────────────────────────────────────────────
+
+pub trait MutexExt<T> {
+    fn lock_guard(&self) -> MutexGuard<T>;
+}
+
+impl<T> MutexExt<T> for Mutex<T> {
+    fn lock_guard(&self) -> MutexGuard<T> {
+        match self.lock() {
+            Ok(g) => g,
+            Err(poisoned) => {
+                log::error!("Mutex poisoned — recovering");
+                poisoned.into_inner()
+            }
+        }
+    }
+}
 
 // ─── ChatEmitter Trait ────────────────────────────────────────────────────────
 
@@ -16,34 +34,29 @@ pub trait ChatEmitter: Send + Sync {
     fn emit_error(&self, error: &str) -> Result<(), String>;
 }
 
-/// CLI emitter — buffers tokens and renders markdown on completion.
-pub struct TerminalPrinter {
-    buffer: Mutex<String>,
-}
+/// CLI emitter — streams tokens live, ensures a final newline on done.
+pub struct TerminalPrinter;
 
 impl TerminalPrinter {
     pub fn new() -> Self {
-        Self {
-            buffer: Mutex::new(String::new()),
-        }
+        Self
     }
 }
 
 impl ChatEmitter for TerminalPrinter {
     fn emit_token(&self, token: &str) -> Result<(), String> {
-        self.buffer.lock().map_err(|e| e.to_string())?.push_str(token);
-        Ok(())
-    }
-    fn emit_done(&self, _full: &str) -> Result<(), String> {
-        let text = self.buffer.lock().map_err(|e| e.to_string())?.clone();
-        self.buffer.lock().map_err(|e| e.to_string())?.clear();
-        let rendered = tui::markdown::render_markdown(&text);
-        print!("{}", rendered);
         use std::io::Write;
+        print!("{}", token);
         std::io::stdout().flush().map_err(|e| e.to_string())
     }
+    fn emit_done(&self, full: &str) -> Result<(), String> {
+        // Already printed token-by-token; just ensure a final newline
+        if !full.ends_with('\n') {
+            println!();
+        }
+        Ok(())
+    }
     fn emit_error(&self, error: &str) -> Result<(), String> {
-        self.buffer.lock().map_err(|e| e.to_string())?.clear();
         eprintln!("{}", error);
         Ok(())
     }

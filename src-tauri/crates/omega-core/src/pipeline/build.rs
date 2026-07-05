@@ -1,7 +1,7 @@
 use crate::AppState;
 use crate::commands::tools::{ToolRequest, ToolResult, GateViolationInfo};
 use crate::pipeline::plan::StructuredPlan;
-use crate::PermissionEvent;
+use crate::{PermissionEvent, MutexExt};
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
@@ -73,16 +73,26 @@ impl BuildAgent {
 
             let needs_permission = matches!(step.action.as_str(), "create" | "modify" | "delete");
             if needs_permission {
+                let (tool_name, perm_args) = match step.action.as_str() {
+                    "delete" => (
+                        "bash",
+                        serde_json::json!({
+                            "command": format!("Remove-Item -LiteralPath \"{}\"", step.file_path.as_deref().unwrap_or("")),
+                            "description": step.description,
+                        }),
+                    ),
+                    _ => (
+                        "write",
+                        serde_json::json!({
+                            "filePath": step.file_path,
+                            "description": step.description,
+                        }),
+                    ),
+                };
                 let perm_req = PermissionRequest {
                     id: uuid::Uuid::new_v4().to_string(),
-                    tool: match step.action.as_str() {
-                        "delete" => "bash".into(),
-                        _ => "write".into(),
-                    },
-                    args: serde_json::json!({
-                        "filePath": step.file_path,
-                        "description": step.description,
-                    }),
+                    tool: tool_name.into(),
+                    args: perm_args,
                     reason: format!("Step #{}: {} — {}", step.id, step.action, step.description),
                     step_id: step.id,
                     step_description: step.description.clone(),
@@ -143,7 +153,7 @@ impl BuildAgent {
             p.build_output = Some(format!("Completed {} steps", session.len()));
         }
         {
-            let mut log = state.session_log.lock().unwrap();
+            let mut log = state.session_log.lock_guard();
             *log = session.clone();
         }
 
@@ -184,15 +194,15 @@ impl BuildAgent {
                         }
                         continue;
                     }
-                    return ToolResult { success: false, output: String::new(), error: Some(e), gate_result: None };
+                    return ToolResult::err(e);
                 }
             };
 
             match result {
                 ToolResult { success: true, gate_result: Some(ref g), .. } if g.passed => {
                     for v in &g.violations {
-                        let mut db = state.rules_db.lock().unwrap();
-                        let lang = state.detected_language.lock().unwrap().clone();
+                        let mut db = state.rules_db.lock_guard();
+                        let lang = state.detected_language.lock_guard().clone();
                         if let Some(pattern) = v.message.rsplit(": ").next() {
                             db.promote_or_increment(&lang, &v.category.to_lowercase(), pattern, &v.message, "error");
                         }
@@ -220,12 +230,7 @@ impl BuildAgent {
             }
         }
 
-        ToolResult {
-            success: true,
-            output: format!("Written with Gate violations after {} retries", max_retries),
-            error: Some("Gate retry limit reached".into()),
-            gate_result: None,
-        }
+        ToolResult::err(format!("Gate retry limit reached after {} retries", max_retries))
     }
 
     async fn step_to_tool_request(_state: &AppState, step: &crate::pipeline::plan::PlanStep) -> ToolRequest {
@@ -256,7 +261,7 @@ impl BuildAgent {
     /// the Tauri command wrapper and forwarded to the frontend). The frontend
     /// calls respond_permission, which writes to state.permission_results.
     async fn wait_for_permission(state: &AppState, perm_req: &PermissionRequest) -> bool {
-        if state.build_config.lock().unwrap().auto_approve {
+        if state.build_config.lock_guard().auto_approve {
             return true;
         }
 
@@ -274,9 +279,9 @@ impl BuildAgent {
         // Poll for a response written by respond_permission
         loop {
             tokio::time::sleep(Duration::from_millis(100)).await;
-            let mut results = state.permission_results.lock().unwrap();
+            let mut results = state.permission_results.lock_guard();
             if let Some(result) = results.remove(&perm_req.id) {
-                state.pending_permissions.lock().unwrap().remove(&perm_req.id);
+                state.pending_permissions.lock_guard().remove(&perm_req.id);
                 return result;
             }
         }

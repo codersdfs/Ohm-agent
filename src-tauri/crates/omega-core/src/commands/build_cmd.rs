@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::AppState;
+use crate::{AppState, MutexExt};
 use crate::pipeline::build::{BuildAgent, BuildSessionEntry};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -34,8 +34,8 @@ pub async fn respond_permission(
 ) -> Result<String, String> {
     log::info!("respond_permission: id={}, approved={}", request_id, approved);
 
-    state.permission_results.lock().unwrap().insert(request_id.clone(), approved);
-    state.pending_permissions.lock().unwrap().remove(&request_id);
+    state.permission_results.lock_guard().insert(request_id.clone(), approved);
+    state.pending_permissions.lock_guard().remove(&request_id);
 
     Ok(if approved { "Approved" } else { "Denied" }.to_string())
 }
@@ -43,14 +43,14 @@ pub async fn respond_permission(
 pub async fn get_build_session(
     state: &AppState,
 ) -> Result<Vec<BuildSessionEntry>, String> {
-    let log = state.session_log.lock().unwrap();
+    let log = state.session_log.lock_guard();
     Ok(log.clone())
 }
 
 pub async fn get_build_config(
     state: &AppState,
 ) -> Result<BuildConfigResponse, String> {
-    let config = state.build_config.lock().unwrap();
+    let config = state.build_config.lock_guard();
     Ok(BuildConfigResponse { auto_approve: config.auto_approve })
 }
 
@@ -58,7 +58,7 @@ pub async fn set_build_config(
     state: &AppState,
     auto_approve: bool,
 ) -> Result<String, String> {
-    let mut config = state.build_config.lock().unwrap();
+    let mut config = state.build_config.lock_guard();
     config.auto_approve = auto_approve;
     Ok(format!("Build config updated: auto_approve={}", auto_approve))
 }

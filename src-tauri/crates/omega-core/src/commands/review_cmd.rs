@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::AppState;
+use crate::{AppState, MutexExt};
 use crate::pipeline::review::{ReviewAgent, CombinedReviewOutput};
 use crate::pipeline::review_score::{ScoreBreakdown, PromotionStats};
 
@@ -32,8 +32,8 @@ pub async fn run_review(
     let output = ReviewAgent::combined_review(state, &request.code, &request.context).await;
 
     if !output.gate_violations.is_empty() {
-        let mut db = state.rules_db.lock().unwrap();
-        let lang = state.detected_language.lock().unwrap().clone();
+        let mut db = state.rules_db.lock_guard();
+        let lang = state.detected_language.lock_guard().clone();
         for v in &output.gate_violations {
             let cat = v.category.to_lowercase();
             if let Some(pattern) = v.message.rsplit(": ").next() {

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::AppState;
+use crate::{AppState, MutexExt};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanStep {
@@ -86,7 +86,7 @@ impl PlanAgent {
     ) -> Result<(StructuredPlan, String), String> {
         log::info!("PlanAgent: generating plan for task");
 
-        let config = state.provider_config.lock().unwrap().clone();
+        let config = state.provider_config.lock_guard().clone();
         let provider = providers::create_provider(&config)?;
 
         let messages = vec![
@@ -102,7 +102,7 @@ impl PlanAgent {
                 content: format!(
                     "Task: {}\n\nProject files detected: {:?}",
                     task,
-                    state.detected_language.lock().unwrap().label()
+                    state.detected_language.lock_guard().label()
                 ),
                 tool_calls: None,
                 tool_call_id: None,
@@ -141,7 +141,7 @@ impl PlanAgent {
     ) -> Result<(StructuredPlan, String), String> {
         log::info!("PlanAgent: generating streaming plan");
 
-        let config = state.provider_config.lock().unwrap().clone();
+        let config = state.provider_config.lock_guard().clone();
         let provider = providers::create_provider(&config)?;
 
         let messages = vec![
@@ -157,7 +157,7 @@ impl PlanAgent {
                 content: format!(
                     "Task: {}\n\nProject language: {}",
                     task,
-                    state.detected_language.lock().unwrap().label()
+                    state.detected_language.lock_guard().label()
                 ),
                 tool_calls: None,
                 tool_call_id: None,

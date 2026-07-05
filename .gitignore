@@ -25,13 +25,13 @@ dist-ssr
 AGENTS.md
 
 # Rust build artifacts
-src-tauri/target/
+target/
 
 # Environment
 .env
 todo.md
 .codegraph/
-.vite/
-src-tauri/crates/omega-cli/target/
-omega-cli/target/debug/omega-cli.exe
-target/
+plans/
+plan/
+graphify-out/
+hyperframes-demo/

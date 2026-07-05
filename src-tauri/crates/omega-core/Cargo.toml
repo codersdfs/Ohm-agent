@@ -27,3 +27,4 @@ harness = { path = "../harness" }
 memory = { path = "../memory" }
 mcp = { path = "../mcp" }
 omega-table = { path = "../omega-table" }
+tool-harness = { path = "../tool-harness" }

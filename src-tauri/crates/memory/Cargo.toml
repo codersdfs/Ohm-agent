@@ -3,10 +3,15 @@ name = "memory"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+onnx-embed = ["ort"]
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
 uuid = { version = "1", features = ["v4"] }
 chrono = "0.4"
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.31", features = ["bundled", "vtab"] }
+ort = { version = "2", optional = true }

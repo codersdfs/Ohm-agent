@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::AppState;
+use crate::{AppState, MutexExt};
 use crate::commands::tools::GateCheckResult;
 use crate::commands::tools::GateViolationInfo;
 
@@ -25,11 +25,11 @@ pub async fn check_gate(
 ) -> Result<GateCheckResult, String> {
     log::info!("check_gate: content_len={}, context={:?}", request.content.len(), request.context.chars().take(50).collect::<String>());
 
-    let db = state.rules_db.lock().unwrap();
+    let db = state.rules_db.lock_guard();
     let lang = if let Some(l) = &request.language {
         harness::Language::Other(l.clone())
     } else {
-        state.detected_language.lock().unwrap().clone()
+        state.detected_language.lock_guard().clone()
     };
 
     let violations = db.check_content(&request.content, &lang);
@@ -55,8 +55,8 @@ pub async fn check_gate(
 pub async fn get_rules(
     state: &AppState,
 ) -> Result<Vec<String>, String> {
-    let db = state.rules_db.lock().unwrap();
-    let lang = state.detected_language.lock().unwrap().clone();
+    let db = state.rules_db.lock_guard();
+    let lang = state.detected_language.lock_guard().clone();
     let group = db.load_for_language(&lang);
     let mut entries = vec![];
     for (rule, _cat) in group.all_rules() {
@@ -73,7 +73,7 @@ pub async fn get_rules(
 pub async fn reset_rules(
     state: &AppState,
 ) -> Result<String, String> {
-    let mut db = state.rules_db.lock().unwrap();
+    let mut db = state.rules_db.lock_guard();
     *db = harness::rules::RulesDatabase::new();
     Ok("Rules database reset to defaults".into())
 }
@@ -82,7 +82,7 @@ pub async fn set_review_mode(
     state: &AppState,
     mode: String,
 ) -> Result<String, String> {
-    let mut config = state.review_config.lock().unwrap();
+    let mut config = state.review_config.lock_guard();
     config.mode = match mode.as_str() {
         "off" => crate::pipeline::ReviewMode::Off,
         "summary" => crate::pipeline::ReviewMode::Summary,
