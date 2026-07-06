@@ -219,7 +219,7 @@ impl App {
                 &mut self.provider_panel_state, key,
             );
             match action {
-                omega_core::tui::provider_panel::PanelAction::Close => {
+                omega_core::tui::provider_panel::PanelAction::Apply => {
                     let new_config = self.provider_panel_state.to_config(&self.config);
                     self.config = new_config.clone();
                     self.header = omega_core::tui::header::HeaderState::new(
@@ -233,7 +233,9 @@ impl App {
                     });
                     self.show_provider_panel = false;
                 }
-                omega_core::tui::provider_panel::PanelAction::Apply(_) => {}
+                omega_core::tui::provider_panel::PanelAction::Close => {
+                    self.show_provider_panel = false;
+                }
                 omega_core::tui::provider_panel::PanelAction::None => {}
             }
             return;

@@ -8,10 +8,13 @@ use super::theme;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 /// Actions the panel can return to the caller.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PanelAction {
+    /// Close without saving (Esc).
     Close,
-    Apply(providers::ProviderConfig),
+    /// Apply config from state and close (Enter on Apply button).
+    Apply,
+    /// No action.
     None,
 }
 
@@ -199,11 +202,13 @@ pub fn handle_key(state: &mut ProviderPanelState, key: KeyEvent) -> PanelAction 
             _ => {}
         },
         KeyCode::Enter => {
+            // Ctrl+Enter always applies, regardless of focus
+            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                return PanelAction::Apply;
+            }
             match state.focus {
                 PanelFocus::ApplyButton => {
-                    // Apply + close — return needs original config from caller
-                    // The caller will call state.to_config(original) after receiving this action
-                    return PanelAction::Close; // signal to caller to handle apply
+                    return PanelAction::Apply;
                 }
                 _ => {
                     // Advance focus (Enter acts like Tab for most fields)
@@ -322,12 +327,13 @@ pub fn render(
     state: &ProviderPanelState,
     config: &providers::ProviderConfig,
 ) {
-    if area.width < 52 || area.height < 18 {
+    // Need at least 54x20 for the compact panel to fit
+    if area.width < 54 || area.height < 22 {
         return;
     }
 
-    let popup_width = area.width.min(60);
-    let popup_height = 18u16;
+    let popup_width = area.width.min(58);
+    let popup_height = 20u16; // compact: 18 content + 2 border
     let x = area.x + (area.width.saturating_sub(popup_width)) / 2;
     let y = area.y + (area.height.saturating_sub(popup_height)) / 2;
     let popup_area = Rect::new(x, y, popup_width, popup_height);
@@ -341,221 +347,167 @@ pub fn render(
         }
     }
 
-    // -- Build content lines --
+    let inner_w = popup_width.saturating_sub(4) as usize; // 2 border + 2 indent
+    let border_w = inner_w + 2; // width of the ┌───┐ box
+
+    // ── Build content lines ──────────────────────────────────────────────
     let mut lines: Vec<Line<'static>> = Vec::new();
-
-    // Provider grid (3 columns)
-    lines.push(Line::from(""));
     let all_providers = providers::ProviderKind::all();
-    let vis_start = state.provider_scroll;
-    let vis_end = (state.provider_scroll + 6).min(all_providers.len());
-    lines.push(Line::from(vec![
-        Span::styled(" Provider", Style::default().fg(theme::FG).add_modifier(Modifier::BOLD)),
-    ]));
+    let col_w = 17usize; // per-provider column width
 
-    // Show providers in rows of 3
-    for chunk in all_providers[vis_start..vis_end].chunks(3) {
+    // Compact provider grid (no section header, just radio buttons)
+    lines.push(Line::from(""));
+    for chunk in all_providers.chunks(3) {
         let mut spans = Vec::new();
         spans.push(Span::raw("  "));
         for (ci, kind) in chunk.iter().enumerate() {
-            let idx = all_providers.iter().position(|k| std::mem::discriminant(k) == std::mem::discriminant(kind)).unwrap();
-            let is_selected = idx == state.selected_provider;
-            let is_focused = state.focus == PanelFocus::ProviderGrid && is_selected;
-            let radio = if is_selected { "◉" } else { "○" };
-            let label = format!("{} {}", radio, kind);
-            let style = if is_focused {
+            let idx = all_providers.iter()
+                .position(|k| std::mem::discriminant(k) == std::mem::discriminant(kind))
+                .unwrap();
+            let is_sel = idx == state.selected_provider;
+            let is_foc = state.focus == PanelFocus::ProviderGrid && is_sel;
+            let style = if is_foc {
                 Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD)
-            } else if is_selected {
+            } else if is_sel {
                 Style::default().fg(theme::ACCENT)
             } else {
                 theme::style_dim()
             };
+            let label = format!("{} {}", if is_sel { "◉" } else { "○" }, kind);
             spans.push(Span::styled(label, style));
             if ci < 2 {
-                // Pad to column width (~18 chars)
-                let pad = 18usize.saturating_sub(format!("{}", kind).len() + 2);
+                let pad = col_w.saturating_sub(format!("{}", kind).len() + 2);
                 spans.push(Span::raw(" ".repeat(pad)));
             }
         }
         lines.push(Line::from(spans));
     }
 
-    // Model field
+    // ── Inline Model field ───────────────────────────────────────────────
     lines.push(Line::from(""));
-    lines.push(Line::from(vec![
-        Span::styled(" Model", Style::default().fg(theme::FG).add_modifier(Modifier::BOLD)),
-    ]));
-    let model_border = if state.focus == PanelFocus::ModelField {
+    let m_border = if state.focus == PanelFocus::ModelField {
         Style::default().fg(theme::ACCENT)
     } else {
         theme::style_dim()
     };
-    let model_content = if state.model_buffer.is_empty() {
-        Span::styled("enter model name…", theme::style_dim())
-    } else {
-        Span::styled(state.model_buffer.clone(), Style::default().fg(theme::FG))
-    };
-    // Render model field inline
-    let model_line = Line::from(vec![
-        Span::raw("  "),
-        Span::styled("┌", model_border),
-        Span::raw("─".repeat(popup_width.saturating_sub(6).saturating_sub(2) as usize)),
-        Span::styled("┐", model_border),
-    ]);
     let model_text = if state.model_buffer.is_empty() {
-        String::from("enter model name…")
+        "enter model name…".to_string()
     } else {
         state.model_buffer.clone()
     };
-    let model_content_line = Line::from(vec![
-        Span::raw("  "),
+    let model_fill = inner_w.saturating_sub(model_text.len());
+    lines.push(Line::from(vec![
+        Span::styled("  Model  ", theme::style_dim()),
+        Span::styled("┌", m_border),
+        Span::raw("─".repeat(border_w.saturating_sub(8))),
+        Span::styled("┐", m_border),
+    ]));
+    lines.push(Line::from(vec![
+        Span::raw("          "),
         Span::styled("│ ", Style::default().fg(theme::DIM)),
         Span::styled(model_text, Style::default().fg(theme::FG)),
-        Span::raw(" ".repeat(popup_width.saturating_sub(6).saturating_sub(2).saturating_sub(state.model_buffer.len() as u16) as usize)),
-        Span::styled(" │", Style::default().fg(theme::DIM)),
-    ]);
-    let model_bottom = Line::from(vec![
-        Span::raw("  "),
-        Span::styled("└", model_border),
-        Span::raw("─".repeat(popup_width.saturating_sub(6).saturating_sub(2) as usize)),
-        Span::styled("┘", model_border),
-    ]);
-    lines.push(model_line);
-    lines.push(model_content_line);
-    lines.push(model_bottom);
-
-    // Base URL field
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![
-        Span::styled(" Base URL", Style::default().fg(theme::FG).add_modifier(Modifier::BOLD)),
+        Span::raw(" ".repeat(model_fill.saturating_sub(2).min(60))),
+        Span::styled("  │", Style::default().fg(theme::DIM)),
     ]));
-    let url_border = if state.focus == PanelFocus::BaseUrlField {
+    lines.push(Line::from(vec![
+        Span::raw("          "),
+        Span::styled("└", m_border),
+        Span::raw("─".repeat(border_w.saturating_sub(8))),
+        Span::styled("┘", m_border),
+    ]));
+
+    // ── Inline Base URL field ────────────────────────────────────────────
+    lines.push(Line::from(""));
+    let u_border = if state.focus == PanelFocus::BaseUrlField {
         Style::default().fg(theme::ACCENT)
     } else {
         theme::style_dim()
     };
     let url_text = if state.url_buffer.is_empty() {
-        String::from("enter base URL…")
+        "enter base URL…".to_string()
     } else {
-        state.url_buffer.clone()
-    };
-    let url_display: String = if url_text.len() > (popup_width.saturating_sub(8) as usize) {
-        format!("…{}", &url_text[url_text.len().saturating_sub(popup_width.saturating_sub(9) as usize)..])
-    } else {
-        url_text.clone()
-    };
-    let url_line = Line::from(vec![
-        Span::raw("  "),
-        Span::styled("┌", url_border),
-        Span::raw("─".repeat(popup_width.saturating_sub(6).saturating_sub(2) as usize)),
-        Span::styled("┐", url_border),
-    ]);
-    let url_content_line = Line::from(vec![
-        Span::raw("  "),
-        Span::styled("│ ", Style::default().fg(theme::DIM)),
-        Span::styled(url_display, Style::default().fg(theme::FG)),
-        Span::raw(" ".repeat(popup_width.saturating_sub(6).saturating_sub(2).saturating_sub(state.url_buffer.len() as u16) as usize)),
-        Span::styled(" │", Style::default().fg(theme::DIM)),
-    ]);
-    let url_bottom = Line::from(vec![
-        Span::raw("  "),
-        Span::styled("└", url_border),
-        Span::raw("─".repeat(popup_width.saturating_sub(6).saturating_sub(2) as usize)),
-        Span::styled("┘", url_border),
-    ]);
-    lines.push(url_line);
-    lines.push(url_content_line);
-    lines.push(url_bottom);
-
-    // API key status
-    lines.push(Line::from(""));
-    let key_status = if config.api_key.as_deref().filter(|k| !k.is_empty()).is_some() {
-        Line::from(vec![
-            Span::styled(" API Key  ", theme::style_dim()),
-            Span::styled("●●●●●●●●●●", Style::default().fg(theme::FG)),
-            Span::raw("  "),
-            Span::styled("✓ set", Style::default().fg(theme::SUCCESS)),
-        ])
-    } else {
-        Line::from(vec![
-            Span::styled(" API Key  ", theme::style_dim()),
-            Span::styled("—", Style::default().fg(theme::DIM)),
-            Span::raw("  "),
-            Span::styled("✗ not set", Style::default().fg(theme::ERROR)),
-        ])
-    };
-    lines.push(key_status);
-
-    // Max tokens & Temperature (inline)
-    lines.push(Line::from(""));
-    let tokens_focused = state.focus == PanelFocus::MaxTokens;
-    let temp_focused = state.focus == PanelFocus::Temperature;
-    let tokens_style = if tokens_focused {
-        Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD)
-    } else {
-        theme::style_dim()
-    };
-    let temp_style = if temp_focused {
-        Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD)
-    } else {
-        theme::style_dim()
-    };
-    let tokens_val_style = if tokens_focused {
-        Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme::FG)
-    };
-    let temp_val_style = if temp_focused {
-        Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme::FG)
-    };
-    lines.push(Line::from(vec![
-        Span::styled(" Max tokens  ", tokens_style),
-        Span::styled(format!("{}", state.max_tokens), tokens_val_style),
-        Span::raw("   "),
-        Span::styled("Temperature  ", temp_style),
-        Span::styled(format!("{:.1}", state.temperature), temp_val_style),
-        Span::raw("  "),
-        if tokens_focused {
-            Span::styled("(←/↓ -512  ↑/→ +512)", theme::style_dim())
-        } else if temp_focused {
-            Span::styled("(←/↓ -0.1  ↑/→ +0.1)", theme::style_dim())
+        let max_chars = inner_w.saturating_sub(4);
+        if state.url_buffer.len() > max_chars {
+            format!("…{}", &state.url_buffer[state.url_buffer.len().saturating_sub(max_chars - 1)..])
         } else {
-            Span::raw("")
-        },
+            state.url_buffer.clone()
+        }
+    };
+    let url_fill = inner_w.saturating_sub(url_text.len());
+    lines.push(Line::from(vec![
+        Span::styled("  URL  ", theme::style_dim()),
+        Span::styled("┌", u_border),
+        Span::raw("─".repeat(border_w.saturating_sub(6))),
+        Span::styled("┐", u_border),
+    ]));
+    lines.push(Line::from(vec![
+        Span::raw("        "),
+        Span::styled("│ ", Style::default().fg(theme::DIM)),
+        Span::styled(url_text, Style::default().fg(theme::FG)),
+        Span::raw(" ".repeat(url_fill.saturating_sub(2).min(60))),
+        Span::styled("  │", Style::default().fg(theme::DIM)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::raw("        "),
+        Span::styled("└", u_border),
+        Span::raw("─".repeat(border_w.saturating_sub(6))),
+        Span::styled("┘", u_border),
     ]));
 
-    // Apply button
+    // ── API key + numeric fields (one line each, no blanks) ─────────────
     lines.push(Line::from(""));
-    let apply_focused = state.focus == PanelFocus::ApplyButton;
-    let btn_style = if apply_focused {
+    let (key_label, key_icon, key_style) = if config.api_key.as_deref().filter(|k| !k.is_empty()).is_some() {
+        (" Key", "●●●●●●●●●●", Style::default().fg(theme::SUCCESS))
+    } else {
+        (" Key", "— not set —", Style::default().fg(theme::ERROR))
+    };
+    let tkn_foc = state.focus == PanelFocus::MaxTokens;
+    let tmp_foc = state.focus == PanelFocus::Temperature;
+    lines.push(Line::from(vec![
+        Span::styled(format!(" {}", key_label), theme::style_dim()),
+        Span::raw(" "),
+        Span::styled(key_icon, key_style),
+        Span::raw("   "),
+        Span::styled("Max tokens", if tkn_foc {
+            Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD)
+        } else { theme::style_dim() }),
+        Span::raw(":"),
+        Span::styled(format!("{}", state.max_tokens), if tkn_foc {
+            Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD)
+        } else { Style::default().fg(theme::FG) }),
+        Span::raw("  "),
+        Span::styled("Temp", if tmp_foc {
+            Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD)
+        } else { theme::style_dim() }),
+        Span::raw(":"),
+        Span::styled(format!("{:.1}", state.temperature), if tmp_foc {
+            Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD)
+        } else { Style::default().fg(theme::FG) }),
+    ]));
+
+    // ── Apply button + hints (compact one line) ──────────────────────────
+    lines.push(Line::from(""));
+    let btn_foc = state.focus == PanelFocus::ApplyButton;
+    let btn_style = if btn_foc {
         Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD)
     } else {
         theme::style_dim()
     };
-    let btn_text = if apply_focused {
-        "  ▶ Apply & Close (Ctrl+Enter)  "
-    } else {
-        "    Apply & Close (Ctrl+Enter)    "
-    };
     lines.push(Line::from(vec![
         Span::raw("  "),
-        Span::styled(btn_text, btn_style),
+        Span::styled("▶ Apply (Ctrl+Enter)", btn_style),
+        Span::raw("   "),
+        Span::styled("Tab/↑↓ · Esc cancel", theme::style_dim()),
     ]));
 
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![
-        Span::styled("  Tab/↑↓ navigate · Esc to cancel ", theme::style_dim()),
-    ]));
-
+    // ── Render the popup ─────────────────────────────────────────────────
     let text = Text::from(lines);
     let para = Paragraph::new(text)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(theme::ACCENT))
-                .title(" Provider Configuration ")
+                .title(" Provider ")
                 .title_style(Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD))
                 .style(Style::default().bg(theme::BG)),
         )
