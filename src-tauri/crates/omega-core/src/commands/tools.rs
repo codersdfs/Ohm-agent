@@ -139,20 +139,45 @@ pub fn list_tools() -> Result<Vec<String>, String> {
     Ok(registry.list())
 }
 
-pub const CHAT_SYSTEM_PROMPT: &str = r#"You are Omega Agent, an AI coding assistant. You have access to tools for reading, writing, editing, and searching files on the user's system.
+pub const CHAT_SYSTEM_PROMPT: &str = r#"You are Omega Agent, an AI coding agent with FULL filesystem access. You CAN read, write, edit, and search files. You CAN run shell commands. You are NOT a standard chatbot — you are a tool-using agent.
 
-When the user asks you to do something that requires using tools, call them directly. Do not describe what you would do — just do it.
-
-Tool usage tips:
-- Use `read` to inspect files before editing
-- Use `edit` for targeted changes, `write` for new files or full rewrites
-- Use `grep` to search code and `glob` to find files
-- Use `bash` for system commands, builds, tests, and git operations
-- Always prefer calling tools over generating code snippets for the user to copy-paste
+When the user asks you to do something, call the right function immediately. You NEVER refuse file access. Respond with ONLY a JSON function call.
 "#;
 
+fn format_tool_help(def: &providers::ToolDefinition) -> String {
+    let params: Vec<String> = def.function.parameters
+        .get("properties")
+        .and_then(|p| p.as_object())
+        .map(|props| {
+            props.iter().map(|(name, info)| {
+                let ptype = info.get("type").and_then(|v| v.as_str()).unwrap_or("any");
+                format!("{}: {}", name, ptype)
+            }).collect()
+        })
+        .unwrap_or_default();
+    if params.is_empty() {
+        format!("- {}: {}", def.function.name, def.function.description)
+    } else {
+        format!("- {}({}): {}", def.function.name, params.join(", "), def.function.description)
+    }
+}
+
 pub fn default_system_prompt() -> String {
-    CHAT_SYSTEM_PROMPT.to_string()
+    let mut prompt = CHAT_SYSTEM_PROMPT.to_string();
+    let tools = tool_definitions();
+    if !tools.is_empty() {
+        prompt.push_str("\n\n=== TOOL DEFINITIONS ===\n");
+        for t in &tools {
+            prompt.push_str(&format_tool_help(t));
+            prompt.push('\n');
+        }
+        prompt.push_str("\n=== INSTRUCTIONS ===\n");
+        prompt.push_str("To call a tool, respond with EXACTLY this JSON format, no extra text:\n");
+        prompt.push_str("{\"name\": \"tool_name\", \"arguments\": {\"param1\": \"value1\"}}\n");
+        prompt.push_str("\nExample: to list files in the current directory respond with:\n");
+        prompt.push_str("{\"name\": \"glob\", \"arguments\": {\"pattern\": \"*\"}}\n");
+    }
+    prompt
 }
 
 pub fn tool_definitions() -> Vec<providers::ToolDefinition> {
@@ -160,4 +185,19 @@ pub fn tool_definitions() -> Vec<providers::ToolDefinition> {
     let mut defs = registry.tool_definitions();
     defs.extend(crate::commands::mcp::tool_definitions());
     defs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_system_prompt_includes_tools() {
+        let prompt = default_system_prompt();
+        assert!(prompt.contains("read"), "prompt should include read tool");
+        assert!(prompt.contains("TOOL DEFINITIONS"), "prompt should list tools");
+        assert!(prompt.contains("bash"), "prompt should include bash tool");
+        assert!(prompt.contains("\"name\""), "prompt should show JSON format");
+        assert!(prompt.contains("\"arguments\""), "prompt should show JSON arguments");
+    }
 }
