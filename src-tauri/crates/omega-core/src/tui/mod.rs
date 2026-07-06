@@ -1,4 +1,5 @@
 pub mod markdown;
+pub mod provider_panel;
 pub mod theme;
 pub mod header;
 pub mod transcript;

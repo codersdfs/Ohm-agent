@@ -103,6 +103,10 @@ struct App {
     // Help overlay
     show_help: bool,
 
+    // Provider panel
+    show_provider_panel: bool,
+    provider_panel_state: omega_core::tui::provider_panel::ProviderPanelState,
+
     // Should quit
     should_quit: bool,
 }
@@ -116,6 +120,7 @@ impl App {
         let editor = EditorState::new();
         let status = StatusState::new();
 
+        let cfg_for_panel = config.clone();
         let mut app = Self {
             state,
             config,
@@ -141,6 +146,8 @@ impl App {
             session_messages: 0,
 
             show_help: false,
+            show_provider_panel: false,
+            provider_panel_state: omega_core::tui::provider_panel::ProviderPanelState::from_config(&cfg_for_panel),
 
             should_quit: false,
         };
@@ -203,6 +210,32 @@ impl App {
 
         if self.is_streaming {
             // Only allow Ctrl-C during streaming
+            return;
+        }
+
+        // Provider panel takes over all key handling
+        if self.show_provider_panel {
+            let action = omega_core::tui::provider_panel::handle_key(
+                &mut self.provider_panel_state, key,
+            );
+            match action {
+                omega_core::tui::provider_panel::PanelAction::Close => {
+                    let new_config = self.provider_panel_state.to_config(&self.config);
+                    self.config = new_config.clone();
+                    self.header = omega_core::tui::header::HeaderState::new(
+                        self.config.model.clone(),
+                        format!("{}", self.config.kind),
+                    );
+                    save_config(&self.config);
+                    self.entries.push(TranscriptEntry::Notice {
+                        text: format!("Provider set to {} ({})", self.config.model, self.config.kind),
+                        is_error: false,
+                    });
+                    self.show_provider_panel = false;
+                }
+                omega_core::tui::provider_panel::PanelAction::Apply(_) => {}
+                omega_core::tui::provider_panel::PanelAction::None => {}
+            }
             return;
         }
 
@@ -413,11 +446,16 @@ impl App {
                     }
                 }
             }
-            "/model" => {
-                self.entries.push(TranscriptEntry::Notice {
-                    text: format!("Current model: {}", self.config.model),
-                    is_error: false,
-                });
+            "/model" | "/provider" | "/providers" | "/p" => {
+                if self.is_streaming {
+                    self.entries.push(TranscriptEntry::Notice {
+                        text: "Can't open provider panel while streaming.".into(),
+                        is_error: true,
+                    });
+                } else {
+                    self.provider_panel_state = omega_core::tui::provider_panel::ProviderPanelState::from_config(&self.config);
+                    self.show_provider_panel = true;
+                }
             }
             "/cost" => {
                 self.entries.push(TranscriptEntry::Notice {
@@ -711,6 +749,16 @@ impl App {
         }
         omega_core::tui::status::render(status_area, frame.buffer_mut(), &self.status);
 
+        // Provider panel overlay (drawn on top, before help)
+        if self.show_provider_panel && !self.show_help {
+            omega_core::tui::provider_panel::render(
+                area,
+                frame.buffer_mut(),
+                &self.provider_panel_state,
+                &self.config,
+            );
+        }
+
         // Help overlay (drawn last, on top of everything)
         if self.show_help {
             omega_core::tui::help::render(area, frame.buffer_mut());
@@ -724,6 +772,7 @@ impl App {
             "/clear".to_string(),
             "/tools".to_string(),
             "/model".to_string(),
+            "/provider".to_string(),
             "/cost".to_string(),
             "/exit".to_string(),
         ];
@@ -759,6 +808,18 @@ fn load_config() -> CliConfig {
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or(CliConfig { provider: None, model: None, base_url: None })
+}
+
+fn save_config(config: &providers::ProviderConfig) {
+    let cli = CliConfig {
+        provider: Some(config.kind.to_string()),
+        model: Some(config.model.clone()),
+        base_url: config.base_url.clone(),
+    };
+    let path = config_dir().join("config.json");
+    if let Ok(json) = serde_json::to_string_pretty(&cli) {
+        let _ = std::fs::write(&path, json);
+    }
 }
 
 fn load_provider_config(
