@@ -1,0 +1,218 @@
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::{Style, Modifier};
+use ratatui::text::{Line, Span, Text};
+use ratatui::widgets::{Block, Borders, Paragraph, Widget};
+
+use super::theme;
+
+/// Editor UI state — the text being edited and input mode.
+#[derive(Clone)]
+pub struct EditorState {
+    pub buffer: String,
+    pub cursor: usize,       // Byte offset into buffer
+    pub state: EditorMode,
+    /// Slash-command suggestions (popup above editor)
+    pub suggestions: Vec<String>,
+    pub selected_suggestion: usize,
+}
+
+/// What the editor is currently doing — determines border color.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum EditorMode {
+    Idle,
+    Thinking,
+    Streaming,
+    Error,
+    Confirm,
+}
+
+impl EditorState {
+    pub fn new() -> Self {
+        Self {
+            buffer: String::new(),
+            cursor: 0,
+            state: EditorMode::Idle,
+            suggestions: Vec::new(),
+            selected_suggestion: 0,
+        }
+    }
+
+    pub fn border_color(&self) -> ratatui::style::Color {
+        match self.state {
+            EditorMode::Idle => theme::EDITOR_IDLE,
+            EditorMode::Thinking => theme::EDITOR_THINKING,
+            EditorMode::Streaming => theme::EDITOR_STREAMING,
+            EditorMode::Error => theme::EDITOR_ERROR,
+            EditorMode::Confirm => theme::EDITOR_CONFIRM,
+        }
+    }
+
+    /// Insert a character at the cursor position.
+    pub fn insert_char(&mut self, c: char) {
+        if self.cursor <= self.buffer.len() {
+            self.buffer.insert(self.cursor, c);
+            self.cursor += c.len_utf8();
+        }
+    }
+
+    /// Delete the character before the cursor.
+    pub fn backspace(&mut self) {
+        if self.cursor > 0 {
+            let prev = self.buffer[..self.cursor].char_indices().last();
+            if let Some((idx, _)) = prev {
+                self.buffer.drain(idx..self.cursor);
+                self.cursor = idx;
+            }
+        }
+    }
+
+    /// Delete the character at the cursor.
+    pub fn delete(&mut self) {
+        if self.cursor < self.buffer.len() {
+            let next = self.buffer[self.cursor..].char_indices().nth(1);
+            let end = next.map(|(i, _)| self.cursor + i).unwrap_or(self.buffer.len());
+            self.buffer.drain(self.cursor..end);
+        }
+    }
+
+    /// Move cursor left by one character.
+    pub fn cursor_left(&mut self) {
+        if self.cursor > 0 {
+            let prev = self.buffer[..self.cursor].char_indices().last();
+            if let Some((idx, _)) = prev {
+                self.cursor = idx;
+            }
+        }
+    }
+
+    /// Move cursor right by one character.
+    pub fn cursor_right(&mut self) {
+        if self.cursor < self.buffer.len() {
+            let next = self.buffer[self.cursor..].char_indices().nth(1);
+            if let Some((i, _)) = next {
+                self.cursor += i;
+            } else {
+                self.cursor = self.buffer.len();
+            }
+        }
+    }
+
+    /// Move cursor to start of line.
+    pub fn cursor_home(&mut self) {
+        self.cursor = 0;
+    }
+
+    /// Move cursor to end of line.
+    pub fn cursor_end(&mut self) {
+        self.cursor = self.buffer.len();
+    }
+
+    /// Insert newline at cursor.
+    pub fn newline(&mut self) {
+        self.buffer.insert(self.cursor, '\n');
+        self.cursor += 1;
+    }
+
+    /// Take the current buffer for sending.
+    pub fn take_buffer(&mut self) -> String {
+        let content = self.buffer.clone();
+        self.buffer.clear();
+        self.cursor = 0;
+        content
+    }
+}
+
+/// Render the input editor with a state-colored border.
+pub fn render(
+    area: Rect,
+    buf: &mut Buffer,
+    editor: &EditorState,
+) {
+    if area.height < 1 || area.width < 4 {
+        return;
+    }
+
+    let border_color = editor.border_color();
+    let border_style = Style::default().fg(border_color);
+
+    // Label reflects current mode
+    let label = match editor.state {
+        EditorMode::Idle => " type a message… ",
+        EditorMode::Thinking => " thinking… ",
+        EditorMode::Streaming => " streaming… ",
+        EditorMode::Error => " error ",
+        EditorMode::Confirm => " confirm? ",
+    };
+
+    let block = Block::default()
+        .borders(Borders::TOP)
+        .border_style(border_style)
+        .title(Line::from(Span::styled(label, Style::default().fg(border_color).add_modifier(Modifier::DIM))));
+
+    // Build the text from buffer — show visible portion
+    let text = if editor.buffer.is_empty() {
+        Text::from(Line::from(Span::styled(
+            "",
+            theme::style_dim(),
+        )))
+    } else {
+        let lines: Vec<Line> = editor
+            .buffer
+            .split('\n')
+            .map(|l| Line::from(Span::raw(l.to_string())))
+            .collect();
+        Text::from(lines)
+    };
+
+    let para = Paragraph::new(text)
+        .block(block)
+        .style(Style::default().bg(theme::BG));
+
+    para.render(area, buf);
+}
+
+/// Render slash-command suggestion popup above the editor.
+pub fn render_suggestions(
+    area: Rect,
+    buf: &mut Buffer,
+    suggestions: &[String],
+    selected: usize,
+) {
+    if suggestions.is_empty() || area.height < 1 {
+        return;
+    }
+
+    let max_height = suggestions.len().min(5) as u16;
+    let popup_height = max_height + 2; // border
+    let popup_y = area.y.saturating_sub(popup_height);
+
+    let popup_area = Rect::new(
+        area.x,
+        popup_y,
+        area.width.min(40),
+        popup_height,
+    );
+
+    let mut lines = Vec::new();
+    for (i, s) in suggestions.iter().enumerate().take(max_height as usize) {
+        let style = if i == selected {
+            Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::DIM)
+        };
+        lines.push(Line::from(Span::styled(s.clone(), style)));
+    }
+
+    let popup = Paragraph::new(Text::from(lines))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme::DIM))
+                .title(" commands ")
+                .title_style(Style::default().fg(theme::DIM)),
+        )
+        .style(Style::default().bg(theme::BG));
+
+    popup.render(popup_area, buf);
+}

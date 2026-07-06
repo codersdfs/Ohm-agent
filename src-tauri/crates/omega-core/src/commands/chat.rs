@@ -28,6 +28,14 @@ fn record_cost(input: u32, output: u32) {
     COST_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
+/// Read the current session's cumulative token counts.
+pub fn session_token_counts() -> (u64, u64) {
+    (
+        COST_INPUT.load(Ordering::Relaxed),
+        COST_OUTPUT.load(Ordering::Relaxed),
+    )
+}
+
 enum Permission {
     Allow,
     Deny,

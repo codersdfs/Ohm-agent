@@ -35,3 +35,7 @@ plans/
 plan/
 graphify-out/
 hyperframes-demo/
+plan.md
+
+# Subagent artifacts
+.pi-subagents/
