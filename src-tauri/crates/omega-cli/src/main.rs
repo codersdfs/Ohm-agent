@@ -639,7 +639,12 @@ impl App {
         // ── Render widgets ──────────────────────────────────────────────────
         omega_core::tui::header::render(header_area, frame.buffer_mut(), &self.header);
 
-        // Big Omega mark when no conversation has started yet
+        // Render transcript first (so startup messages show at top)
+        let is_scrolled_up = self.scroll.offset > 0;
+        transcript::render(transcript_area, frame.buffer_mut(), &mut self.entries, &mut self.scroll);
+
+        // Big Omega mark OVERLAY on empty transcript area (rendered after transcript
+        // so it overwrites the empty space below any startup notices)
         let has_conversation = self.entries.iter().any(|e| matches!(e, TranscriptEntry::User { .. } | TranscriptEntry::Assistant { .. }));
         if !has_conversation && !self.show_help {
             let agent_state = if self.is_streaming {
@@ -655,10 +660,6 @@ impl App {
             };
             omega_mark::render(transcript_area, frame.buffer_mut(), &phase);
         }
-
-        // Scroll indicator — show when user has scrolled up
-        let is_scrolled_up = self.scroll.offset > 0;
-        transcript::render(transcript_area, frame.buffer_mut(), &mut self.entries, &mut self.scroll);
 
         // Draw a scroll-up indicator as an overlay at the bottom of transcript
         if is_scrolled_up && !self.show_help && !self.is_streaming {

@@ -39,15 +39,21 @@ pub fn render(area: Rect, buf: &mut Buffer, phase: &AnimationPhase) {
         compact_omega(phase)
     };
 
-    // Compute centering
+    // Compute centering — use max char count for width
     let glyph_height = glyph.len() as u16;
-    let glyph_width = glyph.iter().map(|l| l.len() as u16).max().unwrap_or(0);
+    let glyph_width = glyph.iter().map(|l| l.chars().count() as u16).max().unwrap_or(0);
     let start_y = area.top().saturating_add(
         area.height.saturating_sub(glyph_height).saturating_sub(2) / 2,
     );
     let start_x = area.left().saturating_add(
         area.width.saturating_sub(glyph_width) / 2,
     );
+
+    // Pad each line to glyph_width for consistent alignment
+    let padded: Vec<String> = glyph
+        .iter()
+        .map(|line| format!("{:^width$}", line, width = glyph_width as usize))
+        .collect();
 
     // ── Draw the glyph ──────────────────────────────────────────────────
     let accent = if let Some(modif) = accent_mod {
@@ -57,7 +63,7 @@ pub fn render(area: Rect, buf: &mut Buffer, phase: &AnimationPhase) {
     };
     let dim_style = theme::style_dim();
 
-    for (row, line_str) in glyph.iter().enumerate() {
+    for (row, line_str) in padded.iter().enumerate() {
         let y = start_y + row as u16;
         if y >= area.bottom() {
             break;
@@ -83,7 +89,7 @@ pub fn render(area: Rect, buf: &mut Buffer, phase: &AnimationPhase) {
 
     // ── Draw orbiting dots ──────────────────────────────────────────────
     for (dx, dy, dot_char) in dots {
-        let x = (start_x as i32 + dx as i32 + glyph_width as i32 / 2 - 4).max(0) as u16;
+        let x = (start_x as i32 + dx as i32 + glyph_width as i32 / 2).max(0) as u16;
         let y = (start_y as i32 + dy as i32 + glyph_height as i32 / 2).max(0) as u16;
         if y < area.bottom() && x < area.right() && x >= area.left() {
             if let Some(cell) = buf.cell_mut((x, y)) {
@@ -99,15 +105,15 @@ pub fn render(area: Rect, buf: &mut Buffer, phase: &AnimationPhase) {
 /// Build the full-size Omega glyph (≈21×9) and dot positions.
 fn full_omega(phase: &AnimationPhase) -> (Vec<&'static str>, Vec<(i16, i16, char)>, Option<Modifier>) {
     let glyph = vec![
-        "       ▓▓▓▓▓▓▓▓▓▓▓▓▓       ",
-        "     ▓▓▒▒▒▒▒▒▒▒▒▒▒▒▒▒▓▓     ",
-        "    ▓▓▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▓▓    ",
-        "   ▓▓▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▓▓   ",
-        "   ▓▓▒▒▒▒▒▒▒▒▒Ω▒▒▒▒▒▒▒▒▓▓   ",
-        "   ▓▓▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▓▓   ",
-        "    ▓▓▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▓▓    ",
-        "     ▓▓▒▒▒▒▒▒▒▒▒▒▒▒▒▒▓▓     ",
-        "       ▓▓▓▓▓▓▓▓▓▓▓▓▓       ",
+        "▓▓▓▓▓▓▓▓▓▓▓▓▓",
+        "▓▓▒▒▒▒▒▒▒▒▒▒▒▒▒▒▓▓",
+        "▓▓▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▓▓",
+        "▓▓▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▓▓",
+        "▓▓▒▒▒▒▒▒▒▒▒Ω▒▒▒▒▒▒▒▒▓▓",
+        "▓▓▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▓▓",
+        "▓▓▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▓▓",
+        "▓▓▒▒▒▒▒▒▒▒▒▒▒▒▒▒▓▓",
+        "▓▓▓▓▓▓▓▓▓▓▓▓▓",
     ];
 
     // Braille dots orbiting at six positions, rotating with tick
@@ -179,19 +185,19 @@ fn compact_omega(phase: &AnimationPhase) -> (Vec<&'static str>, Vec<(i16, i16, c
 
     let glyph = if frame == 0 {
         vec![
-            " █████ ",
-            "██▒▒██",
-            "██ Ω █",
-            "██▒▒██",
-            " █████ ",
+            "  █████ ",
+            " ██▒▒▒██",
+            " ██ Ω ██",
+            " ██▒▒▒██",
+            "  █████ ",
         ]
     } else {
         vec![
-            " ░░██░░ ",
-            "██░░██",
-            "██ Ω █",
-            "██░░██",
-            " ░░██░░ ",
+            "  ░░░░░ ",
+            " ░░███░░",
+            " ░░ Ω ░░",
+            " ░░███░░",
+            "  ░░░░░ ",
         ]
     };
 
