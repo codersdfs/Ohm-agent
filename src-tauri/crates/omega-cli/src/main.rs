@@ -144,9 +144,18 @@ impl App {
 
         // Welcome notice
         app.entries.push(TranscriptEntry::Notice {
-            text: format!("Omega Agent v{} — {}. Type a message to start.", env!("CARGO_PKG_VERSION"), app.config.model),
+            text: format!("Ω v{} — {} ({}). Type a message to start.", env!("CARGO_PKG_VERSION"), app.config.model, app.config.kind),
             is_error: false,
         });
+
+        // Show setup hint when API key is needed for cloud providers
+        let is_local = matches!(app.config.kind, providers::ProviderKind::Local);
+        if app.config.api_key.is_none() && !is_local {
+            app.entries.push(TranscriptEntry::Notice {
+                text: "No API key found. Set OMEGA_API_KEY or run: omega -p local".into(),
+                is_error: true,
+            });
+        }
 
         // Load MCP skills
         let (mcp_loaded, mcp_errors) = commands::mcp::load_skills();
@@ -715,24 +724,66 @@ fn load_config() -> CliConfig {
         .unwrap_or(CliConfig { provider: None, model: None, base_url: None })
 }
 
-fn load_provider_config(override_provider: Option<String>) -> providers::ProviderConfig {
+fn load_provider_config(
+    override_provider: Option<String>,
+    override_model: Option<String>,
+    override_base_url: Option<String>,
+) -> providers::ProviderConfig {
     let mut cli_cfg = load_config();
+
+    // Apply CLI overrides on top of config file
     if let Some(p) = override_provider {
         cli_cfg.provider = Some(p);
     }
+    if let Some(m) = override_model {
+        cli_cfg.model = Some(m);
+    }
+    if let Some(b) = override_base_url {
+        cli_cfg.base_url = Some(b);
+    }
+
+    // Resolve provider kind
     let kind = cli_cfg
         .provider
         .as_deref()
         .map(providers::ProviderKind::from_str)
-        .unwrap_or(providers::ProviderKind::OpenAI);
+        .unwrap_or_else(|| {
+            // Auto-detect: if API key is set, use OpenAI; otherwise Local (Ollama)
+            let has_api_key = std::env::var("OMEGA_API_KEY").is_ok()
+                || config_dir().join(".env").exists();
+            if has_api_key {
+                providers::ProviderKind::OpenAI
+            } else {
+                providers::ProviderKind::Local
+            }
+        });
+
+    // Resolve model
+    let model = cli_cfg.model
+        .or_else(|| std::env::var("OMEGA_MODEL").ok())
+        .unwrap_or_else(|| match kind {
+            providers::ProviderKind::OpenAI => "gpt-4o-mini".into(),
+            providers::ProviderKind::Anthropic => "claude-sonnet-4-20250514".into(),
+            providers::ProviderKind::Google => "gemini-2.0-flash".into(),
+            providers::ProviderKind::Local => "llama3.1:8b".into(),
+            _ => "gpt-4o-mini".into(),
+        });
+
+    // Resolve base URL
+    let base_url = cli_cfg.base_url
+        .or_else(|| std::env::var("OMEGA_BASE_URL").ok());
+
+    // Resolve API key
+    let api_key = std::env::var("OMEGA_API_KEY").ok().or_else(|| {
+        let p = config_dir().join(".env");
+        std::fs::read_to_string(&p).ok().map(|s| s.trim().to_string())
+    });
+
     providers::ProviderConfig {
         kind,
-        api_key: std::env::var("OMEGA_API_KEY").ok().or_else(|| {
-            let p = config_dir().join(".env");
-            std::fs::read_to_string(&p).ok().map(|s| s.trim().to_string())
-        }),
-        base_url: cli_cfg.base_url,
-        model: cli_cfg.model.unwrap_or_else(|| "llama3.1:8b".into()),
+        api_key,
+        base_url,
+        model,
         max_tokens: 4096,
         temperature: 0.7,
     }
@@ -743,15 +794,21 @@ fn load_provider_config(override_provider: Option<String>) -> providers::Provide
 #[derive(Parser)]
 #[command(name = "omega", version, about = "Omega Agent TUI — AI coding assistant")]
 struct Cli {
-    #[arg(short = 'p', long, help = "Override provider")]
+    #[arg(short = 'p', long, help = "Provider (openai, anthropic, google, local, ollama, groq, etc.)")]
     provider: Option<String>,
+
+    #[arg(short = 'm', long, help = "Model name (e.g. gpt-4o-mini, llama3.1:8b, claude-sonnet-4)")]
+    model: Option<String>,
+
+    #[arg(short = 'b', long, help = "Base URL for the provider API")]
+    base_url: Option<String>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let cli = Cli::parse();
-    let config = load_provider_config(cli.provider);
+    let config = load_provider_config(cli.provider, cli.model, cli.base_url);
 
     // ── Setup ratatui ──────────────────────────────────────────────────────
     let mut stdout = std::io::stdout();
