@@ -4,4 +4,5 @@ pub mod header;
 pub mod transcript;
 pub mod editor;
 pub mod help;
+pub mod omega_mark;
 pub mod status;

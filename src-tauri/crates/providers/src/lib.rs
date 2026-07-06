@@ -123,6 +123,18 @@ impl ProviderKind {
             | Self::Kimi | Self::MiniMax | Self::OpenRouter | Self::Azure
             | Self::Bedrock | Self::HuggingFace | Self::Mistral | Self::Local)
     }
+
+    /// Default context window size (input + output) for this provider's models.
+    /// Used for the context-length indicator.
+    pub fn context_window(&self) -> u64 {
+        match self {
+            Self::OpenAI | Self::XAI | Self::Cerebras | Self::Groq
+            | Self::Kimi | Self::MiniMax | Self::OpenRouter | Self::Azure
+            | Self::Bedrock | Self::HuggingFace | Self::Mistral | Self::Local => 128_000,
+            Self::Anthropic => 200_000,
+            Self::Google => 1_048_576,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

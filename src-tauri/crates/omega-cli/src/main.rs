@@ -20,6 +20,7 @@ use ratatui::Terminal;
 use omega_core::tui::editor::{EditorMode, EditorState};
 use omega_core::tui::header::HeaderState;
 use omega_core::tui::status::StatusState;
+use omega_core::tui::omega_mark::{self, AgentState, AnimationPhase};
 use omega_core::tui::theme;
 use omega_core::tui::transcript::{self, TranscriptEntry, ScrollState};
 use omega_core::{commands, AppState, ChatEmitter, default_db_path};
@@ -85,8 +86,9 @@ struct App {
     streaming_fragment: String,
     cancel_flag: Arc<AtomicBool>,
 
-    // Spinner
+    // Spinner / animation
     spinner_idx: usize,
+    anim_tick: u64,
     last_tick: Instant,
 
     // Input history
@@ -128,6 +130,7 @@ impl App {
             streaming_fragment: String::new(),
             cancel_flag: Arc::new(AtomicBool::new(false)),
             spinner_idx: 0,
+            anim_tick: 0,
             last_tick: Instant::now(),
 
             history: Vec::new(),
@@ -623,8 +626,35 @@ impl App {
         let editor_area = chunks[2];
         let status_area = chunks[3];
 
+        // ── Compute context fill ───────────────────────────────────────────
+        let (tok_in, tok_out) = omega_core::commands::chat::session_token_counts();
+        let ctx_window = self.config.kind.context_window();
+        let total_tokens = tok_in + tok_out;
+        self.header.ctx_pct = if ctx_window > 0 && total_tokens > 0 {
+            Some(((total_tokens * 100) / ctx_window) as u8)
+        } else {
+            None
+        };
+
         // ── Render widgets ──────────────────────────────────────────────────
         omega_core::tui::header::render(header_area, frame.buffer_mut(), &self.header);
+
+        // Big Omega mark when no conversation has started yet
+        let has_conversation = self.entries.iter().any(|e| matches!(e, TranscriptEntry::User { .. } | TranscriptEntry::Assistant { .. }));
+        if !has_conversation && !self.show_help {
+            let agent_state = if self.is_streaming {
+                AgentState::Streaming
+            } else if self.editor.state == omega_core::tui::editor::EditorMode::Thinking {
+                AgentState::Thinking
+            } else {
+                AgentState::Idle
+            };
+            let phase = AnimationPhase {
+                tick: self.anim_tick,
+                agent: agent_state,
+            };
+            omega_mark::render(transcript_area, frame.buffer_mut(), &phase);
+        }
 
         // Scroll indicator — show when user has scrolled up
         let is_scrolled_up = self.scroll.offset > 0;
@@ -668,10 +698,16 @@ impl App {
             self.status.hint_text = None;
         }
 
-        // Status
+        // Status — read tokens from globals, estimate streaming live
+        let (tokens_in, tokens_out) = omega_core::commands::chat::session_token_counts();
+        self.status.tokens_in = tokens_in;
+        self.status.tokens_out = tokens_out;
         self.status.messages_count = self.session_messages;
-        self.status.tokens_in = self.session_tokens_in;
-        self.status.tokens_out = self.session_tokens_out;
+        if self.is_streaming {
+            self.status.streaming_estimate = (self.streaming_fragment.len() / 4) as u64;
+        } else {
+            self.status.streaming_estimate = 0;
+        }
         omega_core::tui::status::render(status_area, frame.buffer_mut(), &self.status);
 
         // Help overlay (drawn last, on top of everything)
@@ -830,12 +866,13 @@ async fn main() -> Result<()> {
         // Draw
         terminal.draw(|frame| app.render(frame))?;
 
-        // Tick-based spinner advancement
+        // Tick-based spinner advancement + animation tick
         let now = Instant::now();
         if now.duration_since(app.last_tick) >= tick_rate {
             if app.is_streaming {
                 app.tick_spinner();
             }
+            app.anim_tick = app.anim_tick.wrapping_add(1);
             app.last_tick = now;
         }
 
