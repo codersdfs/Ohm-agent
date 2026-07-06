@@ -21,6 +21,8 @@ syntect = "5"
 similar = "2"
 indicatif = "0.17"
 anyhow = "1"
+ratatui = "0.29"
+crossterm = "0.28"
 
 providers = { path = "../providers" }
 harness = { path = "../harness" }
