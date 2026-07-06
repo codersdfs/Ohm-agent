@@ -6,6 +6,7 @@ use ratatui::style::{Color, Modifier, Style};
 // ── Core palette ─────────────────────────────────────────────────────────────
 
 pub const BG: Color = Color::Reset;
+pub const FG: Color = Color::White;
 pub const TEXT: Color = Color::White;
 pub const DIM: Color = Color::DarkGray;
 pub const ACCENT: Color = Color::Cyan;

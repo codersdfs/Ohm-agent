@@ -11,6 +11,7 @@ pub struct StatusState {
     pub mode: String,
     pub spinner: Option<String>,
     pub action_text: String,
+    pub hint_text: Option<String>,
     pub tokens_in: u64,
     pub tokens_out: u64,
     pub messages_count: u64,
@@ -22,6 +23,7 @@ impl Default for StatusState {
             mode: "chat".into(),
             spinner: None,
             action_text: String::new(),
+            hint_text: None,
             tokens_in: 0,
             tokens_out: 0,
             messages_count: 0,
@@ -61,12 +63,19 @@ pub fn render(area: Rect, buf: &mut Buffer, state: &StatusState) {
         ));
     }
 
+    // Show keybinding hints when idle
     if spans.is_empty() {
-        // Show a subtle prompt affordance
-        spans.push(Span::styled(
-            " · ",
-            Style::default().fg(theme::DIM),
-        ));
+        if let Some(ref hint) = state.hint_text {
+            spans.push(Span::styled(
+                format!(" {} ", hint),
+                Style::default().fg(theme::DIM),
+            ));
+        } else {
+            spans.push(Span::styled(
+                " · ",
+                Style::default().fg(theme::DIM),
+            ));
+        }
     }
 
     // Right side: tokens and message count

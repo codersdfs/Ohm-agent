@@ -1,6 +1,7 @@
 // ── Omega Agent TUI ───────────────────────────────────────────────────────────
 // Ratatui-based full-screen terminal UI with minimal, conversation-first design.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -10,12 +11,16 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifier
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::ExecutableCommand;
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use ratatui::style::Style;
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Paragraph, Widget};
 use ratatui::Terminal;
 
 use omega_core::tui::editor::{EditorMode, EditorState};
 use omega_core::tui::header::HeaderState;
 use omega_core::tui::status::StatusState;
+use omega_core::tui::theme;
 use omega_core::tui::transcript::{self, TranscriptEntry, ScrollState};
 use omega_core::{commands, AppState, ChatEmitter, default_db_path};
 
@@ -78,15 +83,23 @@ struct App {
     is_streaming: bool,
     stream_event_rx: Option<tokio::sync::mpsc::UnboundedReceiver<UiStreamEvent>>,
     streaming_fragment: String,
+    cancel_flag: Arc<AtomicBool>,
 
     // Spinner
     spinner_idx: usize,
     last_tick: Instant,
 
+    // Input history
+    history: Vec<String>,
+    history_index: Option<usize>,
+
     // Cost tracking
     session_tokens_in: u64,
     session_tokens_out: u64,
     session_messages: u64,
+
+    // Help overlay
+    show_help: bool,
 
     // Should quit
     should_quit: bool,
@@ -113,12 +126,19 @@ impl App {
             is_streaming: false,
             stream_event_rx: None,
             streaming_fragment: String::new(),
+            cancel_flag: Arc::new(AtomicBool::new(false)),
             spinner_idx: 0,
             last_tick: Instant::now(),
+
+            history: Vec::new(),
+            history_index: None,
 
             session_tokens_in: 0,
             session_tokens_out: 0,
             session_messages: 0,
+
+            show_help: false,
+
             should_quit: false,
         };
 
@@ -156,7 +176,7 @@ impl App {
         match key.code {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if self.is_streaming {
-                    // TODO: cancel streaming
+                    self.cancel_streaming();
                 } else {
                     self.should_quit = true;
                 }
@@ -171,6 +191,13 @@ impl App {
 
         if self.is_streaming {
             // Only allow Ctrl-C during streaming
+            return;
+        }
+
+        // Toggle help overlay
+        if key.code == KeyCode::Char('?') && !key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.show_help = !self.show_help;
+            self.editor.suggestions.clear();
             return;
         }
 
@@ -216,12 +243,11 @@ impl App {
                 }
             }
             KeyCode::Up => {
-                if self.editor.buffer.is_empty() && self.entries.len() > 1 {
-                    // Recall last input: walk up history (not implemented yet)
-                }
+                self.recall_history_up();
                 transcript::scroll_up(&mut self.scroll, 3);
             }
             KeyCode::Down => {
+                self.recall_history_down();
                 transcript::scroll_down(&mut self.scroll, self.entries.len(), 3);
             }
             KeyCode::PageUp => {
@@ -231,6 +257,75 @@ impl App {
                 transcript::scroll_down(&mut self.scroll, self.entries.len(), 10);
             }
             _ => {}
+        }
+    }
+
+    /// Cancel the current streaming request.
+    fn cancel_streaming(&mut self) {
+        self.cancel_flag.store(true, Ordering::SeqCst);
+
+        // Drop the receiver so the streaming task's tx.send() fails
+        self.stream_event_rx = None;
+
+        self.is_streaming = false;
+        self.editor.state = EditorMode::Idle;
+        self.status.spinner = None;
+        self.status.action_text = String::new();
+
+        // Mark the pending assistant entry as stopped
+        for entry in self.entries.iter_mut().rev() {
+            if let TranscriptEntry::Assistant { ref mut is_streaming, .. } = entry {
+                *is_streaming = false;
+                break;
+            }
+        }
+
+        // Show cancel notice
+        self.entries.push(TranscriptEntry::Notice {
+            text: "Stream cancelled".into(),
+            is_error: false,
+        });
+
+        self.scroll.auto_scroll = true;
+        self.streaming_fragment.clear();
+    }
+
+    /// Navigate input history: move to older entry.
+    fn recall_history_up(&mut self) {
+        if self.history.is_empty() {
+            return;
+        }
+        match self.history_index {
+            None => {
+                // Enter history: save current buffer
+                self.history_index = Some(self.history.len() - 1);
+            }
+            Some(i) if i > 0 => {
+                self.history_index = Some(i - 1);
+            }
+            _ => return,
+        }
+        let idx = self.history_index.unwrap();
+        self.editor.buffer = self.history[idx].clone();
+        self.editor.cursor = self.editor.buffer.len();
+    }
+
+    /// Navigate input history: move to newer entry.
+    fn recall_history_down(&mut self) {
+        match self.history_index {
+            Some(i) if i + 1 < self.history.len() => {
+                self.history_index = Some(i + 1);
+                let idx = self.history_index.unwrap();
+                self.editor.buffer = self.history[idx].clone();
+                self.editor.cursor = self.editor.buffer.len();
+            }
+            Some(_) => {
+                // Exited history back to empty buffer
+                self.history_index = None;
+                self.editor.buffer.clear();
+                self.editor.cursor = 0;
+            }
+            None => {}
         }
     }
 
@@ -253,6 +348,12 @@ impl App {
         if content.trim().is_empty() {
             return;
         }
+
+        // Save to input history (deduplicate against last entry)
+        if self.history.last().map(|s| s.as_str()) != Some(content.as_str()) {
+            self.history.push(content.clone());
+        }
+        self.history_index = None;
 
         // Handle slash commands
         if content.starts_with('/') {
@@ -330,6 +431,7 @@ impl App {
     /// Start streaming a response from the LLM.
     fn start_streaming(&mut self, content: String) {
         self.is_streaming = true;
+        self.cancel_flag.store(false, Ordering::SeqCst);
         self.editor.state = EditorMode::Thinking;
         self.status.action_text = "thinking…".into();
         self.status.spinner = Some("⠋".into());
@@ -353,11 +455,17 @@ impl App {
 
         // Shared message list for the task to modify
         let messages = Arc::new(tokio::sync::Mutex::new(self.messages.clone()));
+        let cancel_flag = self.cancel_flag.clone();
 
         let event_tx = tx.clone();
 
         // Spawn the streaming task
         tokio::spawn(async move {
+            // Check cancellation before starting
+            if cancel_flag.load(Ordering::SeqCst) {
+                return;
+            }
+
             let emitter = ChannelEmitter::new(event_tx.clone());
 
             let request = commands::chat::StreamMessageRequest {
@@ -368,8 +476,6 @@ impl App {
                 permission_mode,
             };
 
-            // Run stream_message_with_history — but first, temporarily suppress stderr
-            // so eprintln! calls from handle_tool_calls don't corrupt the TUI.
             let result = {
                 let mut msgs = messages.lock().await;
                 commands::chat::stream_message_with_history(
@@ -381,16 +487,19 @@ impl App {
                 .await
             };
 
+            // Check cancellation (don't send events if cancelled)
+            if cancel_flag.load(Ordering::SeqCst) {
+                return;
+            }
+
             // Send done event with result
             match result {
                 Ok(full) => {
                     let _ = event_tx.send(UiStreamEvent::Done {
                         full,
-                        tokens_in: 0, // populated from usage
+                        tokens_in: 0,
                         tokens_out: 0,
                     });
-                    // Read the final usage from the cost tracking atomics
-                    // (these are set inside stream_message_with_history)
                 }
                 Err(e) => {
                     let _ = event_tx.send(UiStreamEvent::Error(e));
@@ -507,7 +616,28 @@ impl App {
 
         // ── Render widgets ──────────────────────────────────────────────────
         omega_core::tui::header::render(header_area, frame.buffer_mut(), &self.header);
+
+        // Scroll indicator — show when user has scrolled up
+        let is_scrolled_up = self.scroll.offset > 0;
         transcript::render(transcript_area, frame.buffer_mut(), &mut self.entries, &mut self.scroll);
+
+        // Draw a scroll-up indicator as an overlay at the bottom of transcript
+        if is_scrolled_up && !self.show_help && !self.is_streaming {
+            let indicator_text = format!(" ↑ {} more ", self.scroll.offset);
+            let indicator = Paragraph::new(Line::from(Span::styled(
+                indicator_text,
+                theme::style_dim(),
+            )))
+            .style(Style::default())
+            .alignment(Alignment::Right);
+            let indicator_area = Rect::new(
+                transcript_area.right().saturating_sub(16),
+                transcript_area.bottom().saturating_sub(1),
+                16,
+                1,
+            );
+            indicator.render(indicator_area, frame.buffer_mut());
+        }
 
         // Editor — show suggestions if typing a slash command
         if self.editor.buffer.starts_with('/') && !self.is_streaming {
@@ -522,11 +652,23 @@ impl App {
 
         omega_core::tui::editor::render(editor_area, frame.buffer_mut(), &self.editor);
 
+        // Set keybinding hints when idle
+        if !self.is_streaming && !self.show_help {
+            self.status.hint_text = Some("Ctrl+Q quit · ? help".into());
+        } else if !self.show_help {
+            self.status.hint_text = None;
+        }
+
         // Status
         self.status.messages_count = self.session_messages;
         self.status.tokens_in = self.session_tokens_in;
         self.status.tokens_out = self.session_tokens_out;
         omega_core::tui::status::render(status_area, frame.buffer_mut(), &self.status);
+
+        // Help overlay (drawn last, on top of everything)
+        if self.show_help {
+            omega_core::tui::help::render(area, frame.buffer_mut());
+        }
     }
 
     fn get_slash_suggestions(&self) -> Vec<String> {
