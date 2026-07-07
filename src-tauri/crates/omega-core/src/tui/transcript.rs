@@ -18,6 +18,13 @@ pub enum TranscriptEntry {
         rendered: Option<Text<'static>>,
         is_streaming: bool,
     },
+    /// Thinking/reasoning block (collapsible)
+    Thinking {
+        content: String,
+        rendered: Option<Text<'static>>,
+        is_expanded: bool,
+        is_streaming: bool,
+    },
     /// Tool call — name + summarized args
     ToolCall {
         tool_name: String,
@@ -62,6 +69,47 @@ impl TranscriptEntry {
                 let t = Text::from(all);
                 *rendered = Some(t.clone());
                 t
+            }
+            TranscriptEntry::Thinking { content, rendered, is_expanded, is_streaming } => {
+                if *is_expanded || content.is_empty() {
+                    // Show full thinking content
+                    let mut lines = markdown::render_markdown(content).lines;
+                    let header = Line::from(vec![
+                        Span::styled(" ┈ ", Style::default().fg(theme::DIM)),
+                        Span::styled("reasoning", Style::default().fg(theme::DIM).add_modifier(ratatui::style::Modifier::BOLD)),
+                        Span::styled(format!(" ({} chars)", content.len()), Style::default().fg(theme::DIM)),
+                    ]);
+                    let mut all = vec![header];
+                    for line in lines.iter_mut() {
+                        // Dim each line of thinking
+                        let new_spans: Vec<Span> = line.spans.iter().map(|s| {
+                            Span::styled(s.content.clone(), theme::style_dim())
+                        }).collect();
+                        all.push(Line::from(new_spans));
+                    }
+                    all.push(Line::from(Span::styled(
+                        " ┈",
+                        Style::default().fg(theme::DIM),
+                    )));
+                    if *is_streaming {
+                        all.push(Line::from(Span::styled(
+                            " ⠋",
+                            Style::default().fg(theme::ACCENT),
+                        )));
+                    }
+                    let t = Text::from(all);
+                    *rendered = Some(t.clone());
+                    t
+                } else {
+                    // Collapsed: show just "reasoning (N chars)"
+                    let t = Text::from(Line::from(vec![
+                        Span::styled(" ┈ ", Style::default().fg(theme::DIM)),
+                        Span::styled("reasoning", Style::default().fg(theme::DIM).add_modifier(ratatui::style::Modifier::BOLD)),
+                        Span::styled(format!(" ({} chars) ──", content.len()), Style::default().fg(theme::DIM)),
+                    ]));
+                    *rendered = Some(t.clone());
+                    t
+                }
             }
             TranscriptEntry::ToolCall { tool_name, args, result } => {
                 let mut lines = Vec::new();
@@ -111,7 +159,8 @@ impl TranscriptEntry {
     /// Get the rendered text, rendering if needed.
     pub fn get_rendered(&mut self) -> Text<'static> {
         match self {
-            TranscriptEntry::Assistant { rendered, .. } => {
+            TranscriptEntry::Assistant { rendered, .. }
+            | TranscriptEntry::Thinking { rendered, .. } => {
                 if let Some(r) = rendered.take() {
                     return r;
                 }

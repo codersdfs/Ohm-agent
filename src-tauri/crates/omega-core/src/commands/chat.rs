@@ -209,11 +209,12 @@ pub async fn send_message(
     }
 }
 
-async fn handle_tool_calls(
+async fn handle_tool_calls<E: ChatEmitter>(
     state: &AppState,
     tool_calls: &[providers::ToolCall],
     messages: &mut Vec<providers::ChatMessage>,
     permission_mode: &str,
+    emitter: &E,
 ) -> Result<(), String> {
     messages.push(providers::ChatMessage {
         role: "assistant".into(),
@@ -223,7 +224,7 @@ async fn handle_tool_calls(
         name: None,
     });
     for tc in tool_calls {
-        eprintln!("  {} {} {}", "\u{25b6}", tc.function.name.bold(), tc.function.arguments.dimmed());
+        emitter.emit_tool_call(&tc.function.name, &tc.function.arguments)?;
         let args = match serde_json::from_str(&tc.function.arguments) {
             Ok(v) => v,
             Err(e) => {
@@ -269,9 +270,11 @@ async fn handle_tool_calls(
             let new = std::fs::read_to_string(path).unwrap_or_default();
             show_diff(path, &old, &new);
         }
+        let output = if result.success { &result.output } else { result.error.as_deref().unwrap_or("") };
+        emitter.emit_tool_result(&tc.function.name, result.success, output)?;
         messages.push(providers::ChatMessage {
             role: "tool".into(),
-            content: if result.success { result.output } else { result.error.unwrap_or_default() },
+            content: output.to_string(),
             tool_calls: None,
             tool_call_id: Some(tc.id.clone()),
             name: Some(tc.function.name.clone()),
@@ -364,6 +367,11 @@ pub async fn stream_message_with_history<E: ChatEmitter>(
             let mut last_usage: Option<providers::Usage> = None;
 
             while let Some(chunk) = rx.recv().await {
+                // Emit thinking/reasoning tokens (model-internal reasoning)
+                if !chunk.thinking.is_empty() {
+                    emitter.emit_thinking(&chunk.thinking)?;
+                }
+
                 if !chunk.content.is_empty() {
                     if !streaming_text {
                         streaming_text = true;
@@ -429,7 +437,7 @@ pub async fn stream_message_with_history<E: ChatEmitter>(
                     }
                 }).collect();
 
-                handle_tool_calls(state, &tool_calls, messages, &request.permission_mode).await?;
+                handle_tool_calls(state, &tool_calls, messages, &request.permission_mode, emitter).await?;
                 continue;
             }
 
@@ -463,7 +471,7 @@ pub async fn stream_message_with_history<E: ChatEmitter>(
             spinner.finish_and_clear();
 
             if let Some(tool_calls) = response.tool_calls {
-                handle_tool_calls(state, &tool_calls, messages, &request.permission_mode).await?;
+                handle_tool_calls(state, &tool_calls, messages, &request.permission_mode, emitter).await?;
                 continue;
             }
 

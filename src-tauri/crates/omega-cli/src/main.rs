@@ -31,6 +31,10 @@ use omega_core::{commands, AppState, ChatEmitter, default_db_path};
 #[derive(Debug, Clone)]
 enum UiStreamEvent {
     Token(String),
+    Thinking(String),
+    ThinkingDone,
+    ToolCall { name: String, args: String },
+    ToolResult { name: String, success: bool, output: String },
     Done { full: String, tokens_in: u32, tokens_out: u32 },
     Error(String),
 }
@@ -51,8 +55,30 @@ impl ChatEmitter for ChannelEmitter {
         let _ = self.tx.send(UiStreamEvent::Token(token.to_string()));
         Ok(())
     }
+    fn emit_thinking(&self, token: &str) -> std::result::Result<(), String> {
+        let _ = self.tx.send(UiStreamEvent::Thinking(token.to_string()));
+        Ok(())
+    }
+    fn emit_thinking_done(&self, _full: &str) -> std::result::Result<(), String> {
+        let _ = self.tx.send(UiStreamEvent::ThinkingDone);
+        Ok(())
+    }
+    fn emit_tool_call(&self, name: &str, args: &str) -> std::result::Result<(), String> {
+        let _ = self.tx.send(UiStreamEvent::ToolCall {
+            name: name.to_string(),
+            args: args.to_string(),
+        });
+        Ok(())
+    }
+    fn emit_tool_result(&self, name: &str, success: bool, output: &str) -> std::result::Result<(), String> {
+        let _ = self.tx.send(UiStreamEvent::ToolResult {
+            name: name.to_string(),
+            success,
+            output: output.to_string(),
+        });
+        Ok(())
+    }
     fn emit_done(&self, _full: &str) -> std::result::Result<(), String> {
-        // Done is sent after the full response is collected in the task
         Ok(())
     }
     fn emit_error(&self, error: &str) -> std::result::Result<(), String> {
@@ -576,12 +602,77 @@ impl App {
                     self.status.action_text = "streaming…".into();
                     self.status.spinner = Some("⠙".into());
 
-                    // Update the last assistant entry with content
                     if let Some(last) = self.entries.last_mut() {
                         if let TranscriptEntry::Assistant { content, rendered, is_streaming } = last {
                             content.push_str(&t);
-                            *rendered = None; // invalidate cache
+                            *rendered = None;
                             *is_streaming = true;
+                        }
+                    }
+                }
+
+                UiStreamEvent::Thinking(t) => {
+                    self.editor.state = EditorMode::Thinking;
+                    self.status.action_text = "reasoning…".into();
+                    self.status.spinner = Some("⠉".into());
+
+                    // Find or create a Thinking entry
+                    let found = self.entries.iter_mut().rev().any(|e| {
+                        if let TranscriptEntry::Thinking { content, rendered, is_streaming, .. } = e {
+                            content.push_str(&t);
+                            *rendered = None;
+                            *is_streaming = true;
+                            true
+                        } else {
+                            false
+                        }
+                    });
+                    if !found {
+                        self.entries.push(TranscriptEntry::Thinking {
+                            content: t,
+                            rendered: None,
+                            is_expanded: false,
+                            is_streaming: true,
+                        });
+                    }
+                }
+
+                UiStreamEvent::ThinkingDone => {
+                    for entry in self.entries.iter_mut().rev() {
+                        if let TranscriptEntry::Thinking { ref mut is_streaming, ref mut rendered, .. } = entry {
+                            *is_streaming = false;
+                            *rendered = None;
+                            break;
+                        }
+                    }
+                }
+
+                UiStreamEvent::ToolCall { name, args } => {
+                    let args_preview: String = if args.len() > 120 {
+                        format!("{}…", &args[..117])
+                    } else {
+                        args.clone()
+                    };
+                    self.entries.push(TranscriptEntry::ToolCall {
+                        tool_name: name,
+                        args: args_preview,
+                        result: None,
+                    });
+                    self.status.action_text = format!("running {}…", "tool");
+                    self.status.spinner = Some("⠹".into());
+                }
+
+                UiStreamEvent::ToolResult { name: _name, success, output } => {
+                    // Update the last ToolCall entry with the result
+                    let preview: String = if output.len() > 200 {
+                        format!("{}…", &output[..197])
+                    } else {
+                        output.clone()
+                    };
+                    for entry in self.entries.iter_mut().rev() {
+                        if let TranscriptEntry::ToolCall { result, .. } = entry {
+                            *result = Some(if success { preview } else { format!("ERROR: {}", preview) });
+                            break;
                         }
                     }
                 }

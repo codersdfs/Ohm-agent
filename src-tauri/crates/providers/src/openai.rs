@@ -76,6 +76,9 @@ struct OpenAIUsage {
 #[derive(serde::Deserialize)]
 struct StreamDelta {
     content: Option<String>,
+    /// Reasoning/thinking content emitted by o1/o3 and compatible models.
+    #[serde(default)]
+    reasoning_content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_calls: Option<Vec<StreamDeltaToolCall>>,
 }
@@ -271,6 +274,7 @@ impl LlmProvider for OpenAIProvider {
                 if line == "data: [DONE]" {
                     let _ = tx.send(StreamChunk {
                         content: String::new(),
+                        thinking: String::new(),
                         done: true,
                         model: None,
                         usage: None,
@@ -283,6 +287,7 @@ impl LlmProvider for OpenAIProvider {
                     if let Ok(event) = serde_json::from_str::<StreamEvent>(data) {
                         if let Some(choice) = event.choices.into_iter().next() {
                             let content = choice.delta.content.unwrap_or_default();
+                            let thinking = choice.delta.reasoning_content.unwrap_or_default();
                             let is_done = choice.finish_reason.is_some();
 
                             let delta_tool_calls = choice.delta.tool_calls.map(|calls| {
@@ -303,6 +308,7 @@ impl LlmProvider for OpenAIProvider {
                             });
                             let _ = tx.send(StreamChunk {
                                 content,
+                                thinking,
                                 done: is_done,
                                 model: event.model.clone(),
                                 usage,
