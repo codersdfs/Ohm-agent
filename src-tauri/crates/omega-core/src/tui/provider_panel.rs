@@ -36,6 +36,13 @@ pub struct ProviderPanelState {
     pub max_tokens: u32,
     pub temperature: f32,
     pub provider_scroll: usize,
+    pub needs_fetch: bool,
+    pub models_loading: bool,
+    pub models: Vec<String>,
+    pub models_error: Option<String>,
+    pub show_dropdown: bool,
+    pub selected_model: usize,
+    pub models_rx: Option<tokio::sync::oneshot::Receiver<Result<Vec<String>, String>>>,
 }
 
 impl ProviderPanelState {
@@ -56,6 +63,13 @@ impl ProviderPanelState {
             max_tokens: config.max_tokens,
             temperature: config.temperature,
             provider_scroll: 0,
+            needs_fetch: true,
+            models_loading: false,
+            models: Vec::new(),
+            models_error: None,
+            show_dropdown: false,
+            selected_model: 0,
+            models_rx: None,
         }
     }
 
@@ -77,6 +91,35 @@ impl ProviderPanelState {
 
 pub fn handle_key(state: &mut ProviderPanelState, key: KeyEvent) -> PanelAction {
     if key.kind != KeyEventKind::Press {
+        return PanelAction::None;
+    }
+
+    // Dropdown mode: keys navigate the model list
+    if state.show_dropdown && state.focus == PanelFocus::ModelField {
+        match key.code {
+            KeyCode::Esc | KeyCode::Tab => {
+                state.show_dropdown = false;
+            }
+            KeyCode::Up => {
+                if state.selected_model > 0 {
+                    state.selected_model -= 1;
+                }
+            }
+            KeyCode::Down => {
+                let max = state.models.len().saturating_sub(1);
+                if state.selected_model < max {
+                    state.selected_model += 1;
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(model) = state.models.get(state.selected_model) {
+                    state.model_buffer = model.clone();
+                    state.model_cursor = model.len();
+                    state.show_dropdown = false;
+                }
+            }
+            _ => {}
+        }
         return PanelAction::None;
     }
 
@@ -105,6 +148,7 @@ pub fn handle_key(state: &mut ProviderPanelState, key: KeyEvent) -> PanelAction 
         KeyCode::Up => match state.focus {
             PanelFocus::ProviderGrid if state.selected_provider > 0 => {
                 state.selected_provider -= 1;
+                state.needs_fetch = true;
                 if state.selected_provider < state.provider_scroll {
                     state.provider_scroll = state.provider_scroll.saturating_sub(1);
                 }
@@ -118,6 +162,7 @@ pub fn handle_key(state: &mut ProviderPanelState, key: KeyEvent) -> PanelAction 
                 let max = providers::ProviderKind::all().len() - 1;
                 if state.selected_provider < max {
                     state.selected_provider += 1;
+                    state.needs_fetch = true;
                 }
                 if state.selected_provider >= state.provider_scroll + 5 {
                     state.provider_scroll = state.provider_scroll.saturating_add(1).min(max.saturating_sub(4));
@@ -130,6 +175,7 @@ pub fn handle_key(state: &mut ProviderPanelState, key: KeyEvent) -> PanelAction 
         KeyCode::Left => match state.focus {
             PanelFocus::ProviderGrid if state.selected_provider > 2 => {
                 state.selected_provider -= 3;
+                state.needs_fetch = true;
             }
             PanelFocus::ModelField | PanelFocus::BaseUrlField => {
                 let cursor = state.current_cursor();
@@ -147,6 +193,7 @@ pub fn handle_key(state: &mut ProviderPanelState, key: KeyEvent) -> PanelAction 
                 let max = providers::ProviderKind::all().len() - 1;
                 if state.selected_provider + 3 <= max {
                     state.selected_provider += 3;
+                    state.needs_fetch = true;
                 }
             }
             PanelFocus::ModelField | PanelFocus::BaseUrlField => {
@@ -171,6 +218,16 @@ pub fn handle_key(state: &mut ProviderPanelState, key: KeyEvent) -> PanelAction 
             }
             match state.focus {
                 PanelFocus::ApplyButton => return PanelAction::Apply,
+                PanelFocus::ModelField if !state.models.is_empty() => {
+                    state.show_dropdown = !state.show_dropdown;
+                    if !state.show_dropdown {
+                        // Press Enter again to apply selected
+                        if let Some(m) = state.models.get(state.selected_model) {
+                            state.model_buffer = m.clone();
+                            state.model_cursor = m.len();
+                        }
+                    }
+                }
                 _ => {
                     state.focus = match state.focus {
                         PanelFocus::ProviderGrid => PanelFocus::ModelField,
@@ -353,10 +410,25 @@ pub fn render(
     } else {
         Span::styled(m_trunc, theme::style_dim())
     };
-    lines.push(Line::from(vec![
-        Span::styled(m_label, m_style),
-        m_span,
-    ]));
+    // Model count indicator
+    let count_span = if state.models_loading {
+        Some(Span::styled(" ⟳", theme::style_dim()))
+    } else if !state.models.is_empty() {
+        Some(Span::styled(
+            format!(" ({})", state.models.len()),
+            theme::style_dim(),
+        ))
+    } else if let Some(ref err) = state.models_error {
+        let short = if err.len() > 20 { &err[..20] } else { err.as_str() };
+        Some(Span::styled(format!(" ⚠{}", short), Style::default().fg(theme::ERROR)))
+    } else {
+        None
+    };
+    let mut ml = vec![Span::styled(m_label, m_style), m_span];
+    if let Some(c) = count_span {
+        ml.push(c);
+    }
+    lines.push(Line::from(ml));
 
     // URL field
     let u_foc = state.focus == PanelFocus::BaseUrlField;
@@ -425,7 +497,7 @@ pub fn render(
         Span::styled("  Tab/↑↓ cycle · Esc cancel", theme::style_dim()),
     ]));
 
-    // ── Render ──────────────────────────────────────────────────────────
+    // ── Render main popup ──────────────────────────────────────────────
     let text = Text::from(lines);
     let para = Paragraph::new(text)
         .block(
@@ -439,4 +511,46 @@ pub fn render(
         .alignment(Alignment::Left)
         .wrap(Wrap { trim: false });
     para.render(Rect::new(x, y, pw, ph), buf);
+
+    // ── Model dropdown overlay ──────────────────────────────────────────
+    if state.show_dropdown && state.focus == PanelFocus::ModelField && !state.models.is_empty() {
+        let dd_top = y + 4 + 5 + 1 + 1; // top border + blank + 5 providers + blank + model label
+        let dd_height = state.models.len().min(6) as u16 + 2; // +2 for border
+        let dd_area = Rect::new(
+            x + 2,
+            dd_top,
+            pw.saturating_sub(4).min(40),
+            dd_height,
+        );
+        if dd_area.bottom() <= area.bottom() {
+            let mut dd_lines: Vec<Line<'static>> = Vec::new();
+            let visible = state.models.iter().take(6);
+            for (i, model) in visible.enumerate() {
+                let style = if i == state.selected_model {
+                    Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD)
+                } else {
+                    theme::style_dim()
+                };
+                let prefix = if i == state.selected_model { "▸ " } else { "  " };
+                dd_lines.push(Line::from(Span::styled(
+                    format!("{}{}", prefix, model),
+                    style,
+                )));
+            }
+            if state.models.len() > 6 {
+                dd_lines.push(Line::from(Span::styled(
+                    format!("  … {} more", state.models.len() - 6),
+                    theme::style_dim(),
+                )));
+            }
+            let dd = Paragraph::new(Text::from(dd_lines))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(theme::ACCENT))
+                        .style(Style::default().bg(theme::BG)),
+                );
+            dd.render(dd_area, buf);
+        }
+    }
 }

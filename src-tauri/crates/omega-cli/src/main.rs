@@ -927,6 +927,70 @@ async fn main() -> Result<()> {
         // Process streaming events without blocking
         app.process_stream_events();
 
+        // ── Model fetch for provider panel ────────────────────────────────
+        // Check if fetch result is ready
+        if let Some(rx) = &mut app.provider_panel_state.models_rx {
+            match rx.try_recv() {
+                Ok(Ok(models)) => {
+                    app.provider_panel_state.models = models;
+                    app.provider_panel_state.models_loading = false;
+                    app.provider_panel_state.models_rx = None;
+                }
+                Ok(Err(e)) => {
+                    app.provider_panel_state.models.clear();
+                    app.provider_panel_state.models_error = Some(e);
+                    app.provider_panel_state.models_loading = false;
+                    app.provider_panel_state.models_rx = None;
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+                Err(_) => {
+                    app.provider_panel_state.models_loading = false;
+                    app.provider_panel_state.models_rx = None;
+                }
+            }
+        }
+
+        // Trigger new fetch if needed
+        if app.show_provider_panel
+            && app.provider_panel_state.needs_fetch
+            && app.provider_panel_state.models_rx.is_none()
+        {
+            app.provider_panel_state.needs_fetch = false;
+            app.provider_panel_state.models_loading = true;
+            app.provider_panel_state.models.clear();
+            app.provider_panel_state.models_error = None;
+            app.provider_panel_state.show_dropdown = false;
+
+            let all = providers::ProviderKind::all();
+            let sel = app.provider_panel_state.selected_provider;
+            let kind = all.get(sel).cloned().unwrap_or(app.config.kind.clone());
+            let fetch_config = providers::ProviderConfig {
+                kind,
+                api_key: app.config.api_key.clone(),
+                base_url: Some(app.provider_panel_state.url_buffer.clone())
+                    .filter(|s| !s.is_empty()),
+                model: app.config.model.clone(),
+                max_tokens: app.config.max_tokens,
+                temperature: app.config.temperature,
+            };
+
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            app.provider_panel_state.models_rx = Some(rx);
+
+            tokio::spawn(async move {
+                let result = providers::fetch_models(&fetch_config).await;
+                match result {
+                    Ok(list) => {
+                        let names: Vec<String> = list.into_iter().map(|m| m.id).collect();
+                        let _ = tx.send(Ok(names));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Err(e));
+                    }
+                }
+            });
+        }
+
         // Draw
         terminal.draw(|frame| app.render(frame))?;
 
