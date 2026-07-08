@@ -291,7 +291,13 @@ pub struct StreamMessageRequest {
     pub system_prompt: Option<String>,
     #[serde(default)]
     pub permission_mode: String,
+    /// If true, show an indicatif progress spinner (CLI mode).
+    /// Set to false in TUI mode where the spinner is in the status bar.
+    #[serde(default = "default_true")]
+    pub show_progress: bool,
 }
+
+fn default_true() -> bool { true }
 
 pub async fn stream_message_with_history<E: ChatEmitter>(
     state: &AppState,
@@ -352,15 +358,20 @@ pub async fn stream_message_with_history<E: ChatEmitter>(
                 let _ = provider.chat_stream(chat_request, tx).await;
             });
 
-            let spinner = indicatif::ProgressBar::new_spinner();
-            spinner.set_style(
-                indicatif::ProgressStyle::default_spinner()
-                    .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
-                    .template("{spinner} {msg}")
-                    .unwrap(),
-            );
-            spinner.set_message("Thinking...");
-            spinner.enable_steady_tick(std::time::Duration::from_millis(80));
+            let spinner = if request.show_progress {
+                let s = indicatif::ProgressBar::new_spinner();
+                s.set_style(
+                    indicatif::ProgressStyle::default_spinner()
+                        .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
+                        .template("{spinner} {msg}")
+                        .unwrap(),
+                );
+                s.set_message("Thinking...");
+                s.enable_steady_tick(std::time::Duration::from_millis(80));
+                Some(s)
+            } else {
+                None
+            };
 
             let mut streaming_text = false;
             let mut tool_call_deltas: Vec<(usize, String, String, String)> = vec![];
@@ -375,10 +386,12 @@ pub async fn stream_message_with_history<E: ChatEmitter>(
                 if !chunk.content.is_empty() {
                     if !streaming_text {
                         streaming_text = true;
-                        spinner.finish_and_clear();
+                        if let Some(ref s) = spinner {
+                            s.finish_and_clear();
+                        }
                     }
-                    emitter.emit_token(&chunk.content)?;
-                    full_response.push_str(&chunk.content);
+                        emitter.emit_token(&chunk.content)?;
+                        full_response.push_str(&chunk.content);
                 }
 
                 if let Some(ref deltas) = chunk.delta_tool_calls {
@@ -422,7 +435,9 @@ pub async fn stream_message_with_history<E: ChatEmitter>(
                 }
             }
 
-            spinner.finish_and_clear();
+            if let Some(ref s) = spinner {
+                s.finish_and_clear();
+            }
 
             if !tool_call_deltas.is_empty() {
                 log::debug!("executing {} accumulated tool calls", tool_call_deltas.len());
@@ -450,15 +465,20 @@ pub async fn stream_message_with_history<E: ChatEmitter>(
         } else {
             let provider = providers::create_provider(&config)?;
 
-            let spinner = indicatif::ProgressBar::new_spinner();
-            spinner.set_style(
-                indicatif::ProgressStyle::default_spinner()
-                    .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
-                    .template("{spinner} {msg}")
-                    .unwrap(),
-            );
-            spinner.set_message("Thinking...");
-            spinner.enable_steady_tick(std::time::Duration::from_millis(80));
+            let spinner = if request.show_progress {
+                let s = indicatif::ProgressBar::new_spinner();
+                s.set_style(
+                    indicatif::ProgressStyle::default_spinner()
+                        .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
+                        .template("{spinner} {msg}")
+                        .unwrap(),
+                );
+                s.set_message("Thinking...");
+                s.enable_steady_tick(std::time::Duration::from_millis(80));
+                Some(s)
+            } else {
+                None
+            };
 
             let chat_request = providers::ChatRequest {
                 messages: messages.clone(),
@@ -468,7 +488,9 @@ pub async fn stream_message_with_history<E: ChatEmitter>(
             };
 
             let response = provider.chat(chat_request).await?;
-            spinner.finish_and_clear();
+            if let Some(ref s) = spinner {
+                s.finish_and_clear();
+            }
 
             if let Some(tool_calls) = response.tool_calls {
                 handle_tool_calls(state, &tool_calls, messages, &request.permission_mode, emitter).await?;

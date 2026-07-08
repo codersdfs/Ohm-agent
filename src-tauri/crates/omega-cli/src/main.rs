@@ -552,6 +552,7 @@ impl App {
                 provider: Some(config.clone()),
                 system_prompt: Some(system_prompt),
                 permission_mode,
+                show_progress: false,
             };
 
             let result = {
