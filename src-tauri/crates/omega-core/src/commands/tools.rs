@@ -1,6 +1,7 @@
 // Thin shim: re-exports from tool-harness with omega-core-specific gate logic
 
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 use crate::{AppState, MutexExt};
 
 // Re-export core types from tool-harness
@@ -80,9 +81,11 @@ pub async fn execute_tool_inner(
 
     let tool_input = request.clone().into_input();
 
-    let registry = tool_harness::tools::default_tool_registry();
-    let pipeline = tool_harness::ExecutionPipeline::new()
-        .with_registry(registry);
+    let pipeline = state.tool_pipeline.get_or_init(|| {
+        let registry = tool_harness::tools::default_tool_registry();
+        tool_harness::ExecutionPipeline::new()
+            .with_registry(registry)
+    });
 
     let ctx = tool_harness::ToolUseContext::new("omega-core");
 
@@ -134,9 +137,13 @@ pub async fn execute_tool(
     execute_tool_inner(state, request).await
 }
 
+static CACHED_TOOL_LIST: OnceLock<Vec<String>> = OnceLock::new();
+
 pub fn list_tools() -> Result<Vec<String>, String> {
-    let registry = tool_harness::tools::default_tool_registry();
-    Ok(registry.list())
+    Ok(CACHED_TOOL_LIST.get_or_init(|| {
+        let registry = tool_harness::tools::default_tool_registry();
+        registry.list()
+    }).clone())
 }
 
 pub const CHAT_SYSTEM_PROMPT: &str = r#"You are Omega Agent, an AI coding assistant. You have access to tools for reading, writing, editing, and searching files on the user's system.
@@ -155,9 +162,13 @@ pub fn default_system_prompt() -> String {
     CHAT_SYSTEM_PROMPT.to_string()
 }
 
+static CACHED_TOOL_DEFINITIONS: OnceLock<Vec<providers::ToolDefinition>> = OnceLock::new();
+
 pub fn tool_definitions() -> Vec<providers::ToolDefinition> {
-    let registry = tool_harness::tools::default_tool_registry();
-    let mut defs = registry.tool_definitions();
-    defs.extend(crate::commands::mcp::tool_definitions());
-    defs
+    CACHED_TOOL_DEFINITIONS.get_or_init(|| {
+        let registry = tool_harness::tools::default_tool_registry();
+        let mut defs = registry.tool_definitions();
+        defs.extend(crate::commands::mcp::tool_definitions());
+        defs
+    }).clone()
 }

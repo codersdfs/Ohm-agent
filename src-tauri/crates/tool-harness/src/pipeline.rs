@@ -83,8 +83,8 @@ impl ExecutionPipeline {
         // Step 7: PreToolUse hooks
         self.hooks.run_pre_hooks(tool_name, &input).await;
 
-        // Step 8: Permission resolution
-        let perm_result = self.permission_resolver.resolve(tool_name, &input, ctx).await;
+        // Step 8: Permission resolution — includes tool.check_permissions()
+        let perm_result = self.permission_resolver.resolve(tool_name, &input, ctx, Some(tool)).await;
 
         // Step 9: If denied → return denied result
         match perm_result {
@@ -117,19 +117,11 @@ impl ExecutionPipeline {
                 e
             })?;
 
-        // Step 11: Result budgeting
-        let budget_check = self.budget.truncate(&result.output).await.1;
-        let (truncated, persisted_path) = if budget_check.truncated {
-            let persisted = budget_check.persisted_path.clone();
-            let mut output = String::new();
-            if let Some(ref p) = persisted {
-                output.push_str(&format!("<persisted-output path=\"{}\" />", p.display()));
-            }
-            result.output = output;
-            (true, persisted)
-        } else {
-            (false, None)
-        };
+        // Step 11: Result budgeting — use the truncated string from truncate()
+        let (truncated_output, budget_check) = self.budget.truncate(&result.output).await;
+        result.output = truncated_output;
+        let truncated = budget_check.truncated;
+        let persisted_path = budget_check.persisted_path.clone();
 
         // Step 12: PostToolUse hooks
         self.hooks.run_post_hooks(tool_name, &result).await;

@@ -1,7 +1,7 @@
 // Permission system for tool execution
 
 use serde::{Deserialize, Serialize};
-use crate::{ToolInput, ToolUseContext, PermissionResult};
+use crate::{ToolInput, ToolUseContext, PermissionResult, Tool};
 
 /// Permission mode enum
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
@@ -91,8 +91,9 @@ impl PermissionResolver {
     pub async fn resolve(
         &self,
         tool_name: &str,
-        _input: &ToolInput,
-        _ctx: &ToolUseContext,
+        input: &ToolInput,
+        ctx: &ToolUseContext,
+        tool: Option<&dyn Tool>,
     ) -> PermissionResult {
         // Check rule-based permissions first
         for rule in &self.rules {
@@ -102,6 +103,15 @@ impl PermissionResolver {
                     PermissionBehavior::Deny => PermissionResult::Deny,
                     PermissionBehavior::Prompt => PermissionResult::Prompt(format!("Allow {}?", tool_name)),
                 };
+            }
+        }
+
+        // Check tool-specific permissions (tool.check_permissions)
+        if let Some(t) = tool {
+            let tool_result = t.check_permissions(input, ctx);
+            match tool_result {
+                PermissionResult::Allow => { /* continue to mode defaults */ }
+                other => return other,
             }
         }
 
@@ -166,7 +176,7 @@ mod tests {
         };
         let ctx = ToolUseContext::new("test");
 
-        let result = resolver.resolve("read", &input, &ctx).await;
+        let result = resolver.resolve("read", &input, &ctx, None).await;
         assert!(matches!(result, PermissionResult::Allow));
     }
 }

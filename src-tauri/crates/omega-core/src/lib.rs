@@ -4,7 +4,7 @@ pub mod tui;
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 // ─── Poison-safe Mutex extension ─────────────────────────────────────────────
 
@@ -99,6 +99,9 @@ pub struct AppState {
     pub memory_store: Mutex<memory::MemoryStore>,
     /// Broadcast channel for permission requests (Tauri forwards to frontend).
     pub permission_tx: tokio::sync::broadcast::Sender<PermissionEvent>,
+
+    /// Shared tool-execution pipeline, initialized once.
+    pub tool_pipeline: OnceLock<tool_harness::ExecutionPipeline>,
 }
 
 impl AppState {
@@ -123,6 +126,7 @@ impl AppState {
             build_config: Mutex::new(pipeline::BuildConfig::default()),
             pending_permissions: Mutex::new(HashSet::new()),
             permission_results: Mutex::new(HashMap::new()),
+            tool_pipeline: OnceLock::new(),
             session_log: Mutex::new(vec![]),
             memory_store: Mutex::new(memory_store),
             permission_tx,

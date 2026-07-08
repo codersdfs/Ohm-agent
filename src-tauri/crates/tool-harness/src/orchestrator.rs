@@ -209,7 +209,17 @@ impl ToolOrchestrator {
                 for tc in &tool_calls {
                     let tool_request = match ToolRequest::from_call(tc.clone()) {
                         Ok(r) => r,
-                        Err(_) => continue,
+                        Err(e) => {
+                            messages.push(ChatMessage {
+                                role: "tool".into(),
+                                content: format!("Error parsing arguments for `{}`: {}.\nArguments received: {}",
+                                    tc.function.name, e, tc.function.arguments),
+                                tool_calls: None,
+                                tool_call_id: Some(tc.id.clone()),
+                                name: Some(tc.function.name.clone()),
+                            });
+                            continue;
+                        }
                     };
 
                     let ctx = ToolUseContext::new("orchestrator");

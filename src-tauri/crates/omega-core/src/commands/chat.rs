@@ -36,6 +36,15 @@ pub fn session_token_counts() -> (u64, u64) {
     )
 }
 
+/// A no-op ChatEmitter used by send_message (non-interactive API call).
+pub struct NoopEmitter;
+
+impl ChatEmitter for NoopEmitter {
+    fn emit_token(&self, _token: &str) -> Result<(), String> { Ok(()) }
+    fn emit_done(&self, _full: &str) -> Result<(), String> { Ok(()) }
+    fn emit_error(&self, _error: &str) -> Result<(), String> { Ok(()) }
+}
+
 enum Permission {
     Allow,
     Deny,
@@ -161,44 +170,9 @@ pub async fn send_message(
         let response = provider.chat(chat_request).await?;
 
         if let Some(tool_calls) = response.tool_calls {
-            messages.push(providers::ChatMessage {
-                role: "assistant".into(),
-                content: String::new(),
-                tool_calls: Some(tool_calls.clone()),
-                tool_call_id: None,
-                name: None,
-            });
-
-            for tc in &tool_calls {
-                let args = match serde_json::from_str(&tc.function.arguments) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        messages.push(providers::ChatMessage {
-                            role: "tool".into(),
-                            content: format!("Error parsing arguments for `{}`: {}.\nArguments received: {}", tc.function.name, e, tc.function.arguments),
-                            tool_calls: None,
-                            tool_call_id: Some(tc.id.clone()),
-                            name: Some(tc.function.name.clone()),
-                        });
-                        continue;
-                    }
-                };
-                let tool_request = crate::commands::tools::ToolRequest {
-                    tool: tc.function.name.clone(),
-                    args,
-                };
-                let result = match crate::commands::tools::execute_tool_inner(state, tool_request).await {
-                    Ok(r) => r,
-                    Err(e) => crate::commands::tools::ToolResult::err(e),
-                };
-                messages.push(providers::ChatMessage {
-                    role: "tool".into(),
-                    content: if result.success { result.output } else { result.error.unwrap_or_default() },
-                    tool_calls: None,
-                    tool_call_id: Some(tc.id.clone()),
-                    name: Some(tc.function.name.clone()),
-                });
-            }
+            // Use the shared handle_tool_calls which handles permission checking,
+            // diff display, and emitter hooks — the inline loop was a partial duplicate.
+            handle_tool_calls(state, &tool_calls, &mut messages, "off", &NoopEmitter).await?;
         } else {
             return Ok(SendMessageResponse {
                 message_id: uuid::Uuid::new_v4().to_string(),
@@ -242,12 +216,7 @@ async fn handle_tool_calls<E: ChatEmitter>(
             tool: tc.function.name.clone(),
             args,
         };
-        let diff_path = if matches!(tc.function.name.as_str(), "write" | "edit") {
-            tool_request.args.get("filePath").and_then(|v| v.as_str()).map(|p| p.to_string())
-        } else {
-            None
-        };
-        let old = diff_path.as_ref().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
+        // Check permission FIRST — before any file I/O
         match check_permission(permission_mode, &tc.function.name, &tc.function.arguments).await {
             Permission::Allow => {}
             Permission::Deny => {
@@ -262,10 +231,21 @@ async fn handle_tool_calls<E: ChatEmitter>(
             }
             Permission::Abort => return Err("Message aborted by user".into()),
         }
+
+        // Read old file content for diff (permission already granted)
+        let diff_path = if matches!(tc.function.name.as_str(), "write" | "edit") {
+            tool_request.args.get("filePath").and_then(|v| v.as_str()).map(|p| p.to_string())
+        } else {
+            None
+        };
+        let old = diff_path.as_ref().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
+
         let result = match crate::commands::tools::execute_tool_inner(state, tool_request).await {
             Ok(r) => r,
             Err(e) => crate::commands::tools::ToolResult::err(e),
         };
+
+        // Show diff after execution
         if let Some(ref path) = diff_path {
             let new = std::fs::read_to_string(path).unwrap_or_default();
             show_diff(path, &old, &new);
@@ -333,6 +313,7 @@ pub async fn stream_message_with_history<E: ChatEmitter>(
         name: None,
     });
 
+    let provider = std::sync::Arc::new(providers::create_provider(&config)?);
     let mut full_response = String::new();
     let mut max_loops: u32 = 10;
 
@@ -344,7 +325,6 @@ pub async fn stream_message_with_history<E: ChatEmitter>(
 
         if config.kind.supports_streaming() {
             log::debug!("streaming: provider={:?} tools={}", config.kind, tools.len());
-            let provider = providers::create_provider(&config)?;
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
             let chat_request = providers::ChatRequest {
@@ -354,8 +334,9 @@ pub async fn stream_message_with_history<E: ChatEmitter>(
                 tools: Some(tools.clone()),
             };
 
+            let p = provider.clone();
             tokio::spawn(async move {
-                let _ = provider.chat_stream(chat_request, tx).await;
+                let _ = p.chat_stream(chat_request, tx).await;
             });
 
             let spinner = if request.show_progress {
@@ -463,8 +444,6 @@ pub async fn stream_message_with_history<E: ChatEmitter>(
             }
             return Ok(full_response);
         } else {
-            let provider = providers::create_provider(&config)?;
-
             let spinner = if request.show_progress {
                 let s = indicatif::ProgressBar::new_spinner();
                 s.set_style(
