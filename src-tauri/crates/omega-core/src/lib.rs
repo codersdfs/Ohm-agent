@@ -9,11 +9,11 @@ use std::sync::{Arc, Mutex, MutexGuard};
 // ─── Poison-safe Mutex extension ─────────────────────────────────────────────
 
 pub trait MutexExt<T> {
-    fn lock_guard(&self) -> MutexGuard<T>;
+    fn lock_guard(&self) -> MutexGuard<'_, T>;
 }
 
 impl<T> MutexExt<T> for Mutex<T> {
-    fn lock_guard(&self) -> MutexGuard<T> {
+    fn lock_guard(&self) -> MutexGuard<'_, T> {
         match self.lock() {
             Ok(g) => g,
             Err(poisoned) => {
@@ -32,6 +32,7 @@ pub trait ChatEmitter: Send + Sync {
     fn emit_token(&self, token: &str) -> Result<(), String>;
     fn emit_done(&self, full: &str) -> Result<(), String>;
     fn emit_error(&self, error: &str) -> Result<(), String>;
+    fn emit_tool_call(&self, name: &str, args: &str, result: &str) -> Result<(), String>;
 }
 
 /// CLI emitter — streams tokens live, ensures a final newline on done.
@@ -58,6 +59,10 @@ impl ChatEmitter for TerminalPrinter {
     }
     fn emit_error(&self, error: &str) -> Result<(), String> {
         eprintln!("{}", error);
+        Ok(())
+    }
+    fn emit_tool_call(&self, name: &str, args: &str, result: &str) -> Result<(), String> {
+        eprintln!("  ▶ {} {} → {}", name, args, result);
         Ok(())
     }
 }

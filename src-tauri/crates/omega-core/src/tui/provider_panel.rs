@@ -49,14 +49,15 @@ impl ProviderPanelState {
         let all = providers::ProviderKind::all();
         let selected = all.iter().position(|k| std::mem::discriminant(k) == std::mem::discriminant(&config.kind))
             .unwrap_or(0);
+        let default_url = config.base_url.clone().unwrap_or_else(|| config.kind.default_base_url());
         Self {
             visible: true,
             focus: PanelFocus::ProviderGrid,
             selected_provider: selected,
             model_buffer: config.model.clone(),
             model_cursor: config.model.len(),
-            url_buffer: config.base_url.clone().unwrap_or_else(|| config.kind.default_base_url()),
-            url_cursor: config.base_url.as_deref().unwrap_or("").len(),
+            url_buffer: default_url.clone(),
+            url_cursor: default_url.len(),
             max_tokens: config.max_tokens,
             temperature: config.temperature,
             provider_scroll: 0,
@@ -249,9 +250,10 @@ pub fn handle_key(state: &mut ProviderPanelState, key: KeyEvent) -> PanelAction 
             }
         }
         KeyCode::Char(c) => {
-            // Check for Ctrl+Enter to apply
+            // Ctrl+Enter always applies (handled via KeyCode::Enter for most terminals;
+            // catch crossterm variants that send Char('\n'))
             if c == '\n' && key.modifiers.contains(KeyModifiers::CONTROL) {
-                return PanelAction::Close;
+                return PanelAction::Apply;
             }
 
             match state.focus {
@@ -333,7 +335,7 @@ pub fn render(
     }
 
     let popup_width = area.width.min(58);
-    let popup_height = 20u16; // compact: 18 content + 2 border
+    let popup_height = 20u16;
     let x = area.x + (area.width.saturating_sub(popup_width)) / 2;
     let y = area.y + (area.height.saturating_sub(popup_height)) / 2;
     let popup_area = Rect::new(x, y, popup_width, popup_height);
@@ -347,15 +349,65 @@ pub fn render(
         }
     }
 
-    let inner_w = popup_width.saturating_sub(4) as usize; // 2 border + 2 indent
-    let border_w = inner_w + 2; // width of the ┌───┐ box
+    // Available content width inside the block borders (1 left + 1 right)
+    let content_w = (popup_width.saturating_sub(2)) as usize;
+
+    // ── Helper: render a labelled inline box (Model / URL) ─────────────
+    // The label sits outside the box, the box fills the remaining width.
+    let inline_box = |label: &str, buffer: &str, focused: bool, placeholder: &str|
+        -> Vec<Line<'static>>
+    {
+        let border_style = if focused {
+            Style::default().fg(theme::ACCENT)
+        } else {
+            theme::style_dim()
+        };
+        let box_w = content_w.saturating_sub(label.len());
+        let text = if buffer.is_empty() {
+            placeholder.to_string()
+        } else {
+            // Truncate if wider than box interior
+            let interior = box_w.saturating_sub(3); // 2 for "│ " opening, 1 for "│" closing
+            if buffer.len() > interior {
+                format!("…{}", &buffer[buffer.len().saturating_sub(interior - 1)..])
+            } else {
+                buffer.to_string()
+            }
+        };
+        let fill = box_w.saturating_sub(3).saturating_sub(text.len());
+
+        vec![
+            // ── top border ──
+            Line::from(vec![
+                Span::styled(label.to_string(), theme::style_dim()),
+                Span::styled("┌", border_style),
+                Span::raw("─".repeat(box_w.saturating_sub(2))),
+                Span::styled("┐", border_style),
+            ]),
+            // ── content line ──
+            Line::from(vec![
+                Span::raw(" ".repeat(label.len())),
+                Span::styled("│ ", Style::default().fg(theme::DIM)),
+                Span::styled(text, Style::default().fg(theme::FG)),
+                Span::raw(" ".repeat(fill)),
+                Span::styled("│", Style::default().fg(theme::DIM)),
+            ]),
+            // ── bottom border ──
+            Line::from(vec![
+                Span::styled(label.to_string(), theme::style_dim()),
+                Span::styled("└", border_style),
+                Span::raw("─".repeat(box_w.saturating_sub(2))),
+                Span::styled("┘", border_style),
+            ]),
+        ]
+    };
 
     // ── Build content lines ──────────────────────────────────────────────
     let mut lines: Vec<Line<'static>> = Vec::new();
     let all_providers = providers::ProviderKind::all();
-    let col_w = 17usize; // per-provider column width
+    let col_w = 17usize;
 
-    // Compact provider grid (no section header, just radio buttons)
+    // Compact provider grid
     lines.push(Line::from(""));
     for chunk in all_providers.chunks(3) {
         let mut spans = Vec::new();
@@ -385,86 +437,33 @@ pub fn render(
 
     // ── Inline Model field ───────────────────────────────────────────────
     lines.push(Line::from(""));
-    let m_border = if state.focus == PanelFocus::ModelField {
-        Style::default().fg(theme::ACCENT)
-    } else {
-        theme::style_dim()
-    };
-    let model_text = if state.model_buffer.is_empty() {
-        "enter model name…".to_string()
-    } else {
-        state.model_buffer.clone()
-    };
-    let model_fill = inner_w.saturating_sub(model_text.len());
-    lines.push(Line::from(vec![
-        Span::styled("  Model  ", theme::style_dim()),
-        Span::styled("┌", m_border),
-        Span::raw("─".repeat(border_w.saturating_sub(8))),
-        Span::styled("┐", m_border),
-    ]));
-    lines.push(Line::from(vec![
-        Span::raw("          "),
-        Span::styled("│ ", Style::default().fg(theme::DIM)),
-        Span::styled(model_text, Style::default().fg(theme::FG)),
-        Span::raw(" ".repeat(model_fill.saturating_sub(2).min(60))),
-        Span::styled("  │", Style::default().fg(theme::DIM)),
-    ]));
-    lines.push(Line::from(vec![
-        Span::raw("          "),
-        Span::styled("└", m_border),
-        Span::raw("─".repeat(border_w.saturating_sub(8))),
-        Span::styled("┘", m_border),
-    ]));
+    lines.extend(inline_box(
+        "  Model  ",
+        &state.model_buffer,
+        state.focus == PanelFocus::ModelField,
+        "enter model name…",
+    ));
 
     // ── Inline Base URL field ────────────────────────────────────────────
     lines.push(Line::from(""));
-    let u_border = if state.focus == PanelFocus::BaseUrlField {
-        Style::default().fg(theme::ACCENT)
-    } else {
-        theme::style_dim()
-    };
-    let url_text = if state.url_buffer.is_empty() {
-        "enter base URL…".to_string()
-    } else {
-        let max_chars = inner_w.saturating_sub(4);
-        if state.url_buffer.len() > max_chars {
-            format!("…{}", &state.url_buffer[state.url_buffer.len().saturating_sub(max_chars - 1)..])
-        } else {
-            state.url_buffer.clone()
-        }
-    };
-    let url_fill = inner_w.saturating_sub(url_text.len());
-    lines.push(Line::from(vec![
-        Span::styled("  URL  ", theme::style_dim()),
-        Span::styled("┌", u_border),
-        Span::raw("─".repeat(border_w.saturating_sub(6))),
-        Span::styled("┐", u_border),
-    ]));
-    lines.push(Line::from(vec![
-        Span::raw("        "),
-        Span::styled("│ ", Style::default().fg(theme::DIM)),
-        Span::styled(url_text, Style::default().fg(theme::FG)),
-        Span::raw(" ".repeat(url_fill.saturating_sub(2).min(60))),
-        Span::styled("  │", Style::default().fg(theme::DIM)),
-    ]));
-    lines.push(Line::from(vec![
-        Span::raw("        "),
-        Span::styled("└", u_border),
-        Span::raw("─".repeat(border_w.saturating_sub(6))),
-        Span::styled("┘", u_border),
-    ]));
+    lines.extend(inline_box(
+        "  URL  ",
+        &state.url_buffer,
+        state.focus == PanelFocus::BaseUrlField,
+        "enter base URL…",
+    ));
 
     // ── API key + numeric fields (one line each, no blanks) ─────────────
     lines.push(Line::from(""));
     let (key_label, key_icon, key_style) = if config.api_key.as_deref().filter(|k| !k.is_empty()).is_some() {
-        (" Key", "●●●●●●●●●●", Style::default().fg(theme::SUCCESS))
+        ("Key", "●●●●●●●●●●", Style::default().fg(theme::SUCCESS))
     } else {
-        (" Key", "— not set —", Style::default().fg(theme::ERROR))
+        ("Key", "— not set —", Style::default().fg(theme::ERROR))
     };
     let tkn_foc = state.focus == PanelFocus::MaxTokens;
     let tmp_foc = state.focus == PanelFocus::Temperature;
     lines.push(Line::from(vec![
-        Span::styled(format!(" {}", key_label), theme::style_dim()),
+        Span::styled(format!(" {} ", key_label), theme::style_dim()),
         Span::raw(" "),
         Span::styled(key_icon, key_style),
         Span::raw("   "),

@@ -209,11 +209,12 @@ pub async fn send_message(
     }
 }
 
-async fn handle_tool_calls(
+async fn handle_tool_calls<E: ChatEmitter>(
     state: &AppState,
     tool_calls: &[providers::ToolCall],
     messages: &mut Vec<providers::ChatMessage>,
     permission_mode: &str,
+    emitter: &E,
 ) -> Result<(), String> {
     messages.push(providers::ChatMessage {
         role: "assistant".into(),
@@ -222,14 +223,17 @@ async fn handle_tool_calls(
         tool_call_id: None,
         name: None,
     });
+    // ponytail: emit_tool_call not emitted for Allow-only (no actual execution yet)
     for tc in tool_calls {
         eprintln!("  {} {} {}", "\u{25b6}", tc.function.name.bold(), tc.function.arguments.dimmed());
         let args = match serde_json::from_str(&tc.function.arguments) {
             Ok(v) => v,
             Err(e) => {
+                let err_msg = format!("Error parsing arguments for `{}`: {}.\nArguments received: {}", tc.function.name, e, tc.function.arguments);
+                let _ = emitter.emit_tool_call(&tc.function.name, &tc.function.arguments, &err_msg);
                 messages.push(providers::ChatMessage {
                     role: "tool".into(),
-                    content: format!("Error parsing arguments for `{}`: {}.\nArguments received: {}", tc.function.name, e, tc.function.arguments),
+                    content: err_msg,
                     tool_calls: None,
                     tool_call_id: Some(tc.id.clone()),
                     name: Some(tc.function.name.clone()),
@@ -250,6 +254,7 @@ async fn handle_tool_calls(
         match check_permission(permission_mode, &tc.function.name, &tc.function.arguments).await {
             Permission::Allow => {}
             Permission::Deny => {
+                let _ = emitter.emit_tool_call(&tc.function.name, &tc.function.arguments, "denied");
                 messages.push(providers::ChatMessage {
                     role: "tool".into(),
                     content: format!("Tool `{}` was denied by permission mode", tc.function.name),
@@ -269,9 +274,11 @@ async fn handle_tool_calls(
             let new = std::fs::read_to_string(path).unwrap_or_default();
             show_diff(path, &old, &new);
         }
+        let tool_output = if result.success { result.output } else { result.error.unwrap_or_default() };
+        let _ = emitter.emit_tool_call(&tc.function.name, &tc.function.arguments, &tool_output);
         messages.push(providers::ChatMessage {
             role: "tool".into(),
-            content: if result.success { result.output } else { result.error.unwrap_or_default() },
+            content: tool_output,
             tool_calls: None,
             tool_call_id: Some(tc.id.clone()),
             name: Some(tc.function.name.clone()),
@@ -429,7 +436,7 @@ pub async fn stream_message_with_history<E: ChatEmitter>(
                     }
                 }).collect();
 
-                handle_tool_calls(state, &tool_calls, messages, &request.permission_mode).await?;
+                handle_tool_calls(state, &tool_calls, messages, &request.permission_mode, emitter).await?;
                 continue;
             }
 
@@ -463,7 +470,7 @@ pub async fn stream_message_with_history<E: ChatEmitter>(
             spinner.finish_and_clear();
 
             if let Some(tool_calls) = response.tool_calls {
-                handle_tool_calls(state, &tool_calls, messages, &request.permission_mode).await?;
+                handle_tool_calls(state, &tool_calls, messages, &request.permission_mode, emitter).await?;
                 continue;
             }
 
@@ -530,6 +537,7 @@ mod tests {
         fn emit_token(&self, _token: &str) -> Result<(), String> { Ok(()) }
         fn emit_done(&self, _full: &str) -> Result<(), String> { Ok(()) }
         fn emit_error(&self, _error: &str) -> Result<(), String> { Ok(()) }
+        fn emit_tool_call(&self, _name: &str, _args: &str, _result: &str) -> Result<(), String> { Ok(()) }
     }
 
     fn sse_line(value: &serde_json::Value) -> String {

@@ -31,7 +31,8 @@ use omega_core::{commands, AppState, ChatEmitter, default_db_path};
 #[derive(Debug, Clone)]
 enum UiStreamEvent {
     Token(String),
-    Done { full: String, tokens_in: u32, tokens_out: u32 },
+    ToolCall { name: String, args: String, result: String },
+    Done { full: String, tokens_in: u32, tokens_out: u32, messages: Vec<providers::ChatMessage> },
     Error(String),
 }
 
@@ -57,6 +58,14 @@ impl ChatEmitter for ChannelEmitter {
     }
     fn emit_error(&self, error: &str) -> std::result::Result<(), String> {
         let _ = self.tx.send(UiStreamEvent::Error(error.to_string()));
+        Ok(())
+    }
+    fn emit_tool_call(&self, name: &str, args: &str, result: &str) -> std::result::Result<(), String> {
+        let _ = self.tx.send(UiStreamEvent::ToolCall {
+            name: name.to_string(),
+            args: args.to_string(),
+            result: result.to_string(),
+        });
         Ok(())
     }
 }
@@ -528,15 +537,17 @@ impl App {
                 permission_mode,
             };
 
-            let result = {
+            let (result, saved_msgs) = {
                 let mut msgs = messages.lock().await;
-                commands::chat::stream_message_with_history(
+                let r = commands::chat::stream_message_with_history(
                     &state,
                     request,
                     &emitter,
                     &mut msgs,
                 )
-                .await
+                .await;
+                // Capture the updated conversation history before releasing the lock
+                (r, msgs.clone())
             };
 
             // Check cancellation (don't send events if cancelled)
@@ -551,6 +562,7 @@ impl App {
                         full,
                         tokens_in: 0,
                         tokens_out: 0,
+                        messages: saved_msgs,
                     });
                 }
                 Err(e) => {
@@ -586,10 +598,13 @@ impl App {
                     }
                 }
 
-                UiStreamEvent::Done { full: _full, tokens_in, tokens_out } => {
+                UiStreamEvent::Done { full: _full, tokens_in, tokens_out, messages } => {
                     self.session_tokens_in += tokens_in as u64;
                     self.session_tokens_out += tokens_out as u64;
                     self.session_messages += 1;
+
+                    // Preserve conversation history across turns
+                    self.messages = messages;
 
                     // Update assistant entry: mark not streaming
                     for entry in self.entries.iter_mut().rev() {
@@ -602,6 +617,16 @@ impl App {
 
                     done = true;
                 }
+                UiStreamEvent::ToolCall { name, args, result } => {
+                    self.entries.push(TranscriptEntry::ToolCall {
+                        tool_name: name,
+                        args,
+                        result: Some(result),
+                    });
+                    self.status.action_text = "running tool…".into();
+                    self.scroll.auto_scroll = true;
+                }
+
                 UiStreamEvent::Error(e) => {
                     self.entries.push(TranscriptEntry::Notice {
                         text: e,
