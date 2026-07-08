@@ -523,6 +523,7 @@ impl App {
             content: String::new(),
             rendered: None,
             is_streaming: true,
+            thinking: String::new(),
         });
 
         // Get references for the async task
@@ -604,7 +605,7 @@ impl App {
                     self.status.spinner = Some("⠙".into());
 
                     if let Some(last) = self.entries.last_mut() {
-                        if let TranscriptEntry::Assistant { content, rendered, is_streaming } = last {
+                        if let TranscriptEntry::Assistant { content, rendered, is_streaming, .. } = last {
                             content.push_str(&t);
                             *rendered = None;
                             *is_streaming = true;
@@ -617,30 +618,20 @@ impl App {
                     self.status.action_text = "reasoning…".into();
                     self.status.spinner = Some("⠉".into());
 
-                    // Find or create a Thinking entry
-                    let found = self.entries.iter_mut().rev().any(|e| {
-                        if let TranscriptEntry::Thinking { content, rendered, is_streaming, .. } = e {
-                            content.push_str(&t);
+                    // Append thinking text to the last assistant entry
+                    for entry in self.entries.iter_mut().rev() {
+                        if let TranscriptEntry::Assistant { ref mut thinking, ref mut rendered, is_streaming, .. } = entry {
+                            thinking.push_str(&t);
                             *rendered = None;
                             *is_streaming = true;
-                            true
-                        } else {
-                            false
+                            break;
                         }
-                    });
-                    if !found {
-                        self.entries.push(TranscriptEntry::Thinking {
-                            content: t,
-                            rendered: None,
-                            is_expanded: false,
-                            is_streaming: true,
-                        });
                     }
                 }
 
                 UiStreamEvent::ThinkingDone => {
                     for entry in self.entries.iter_mut().rev() {
-                        if let TranscriptEntry::Thinking { ref mut is_streaming, ref mut rendered, .. } = entry {
+                        if let TranscriptEntry::Assistant { ref mut is_streaming, ref mut rendered, .. } = entry {
                             *is_streaming = false;
                             *rendered = None;
                             break;
@@ -704,10 +695,10 @@ impl App {
                     // Remove the failed assistant entry if it has no content
                     if let Some(last) = self.entries.last() {
                         if let TranscriptEntry::Assistant { content, .. } = last {
-                            if content.is_empty() {
-                                self.entries.pop();
-                            }
+                        if content.is_empty() {
+                            self.entries.pop();
                         }
+                    }
                     }
                 }
             }
