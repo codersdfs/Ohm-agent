@@ -31,7 +31,10 @@ use omega_core::{commands, AppState, ChatEmitter, default_db_path};
 #[derive(Debug, Clone)]
 enum UiStreamEvent {
     Token(String),
-    ToolCall { name: String, args: String, result: String },
+    Thinking(String),
+    ThinkingDone,
+    ToolCall { name: String, args: String },
+    ToolResult { name: String, success: bool, output: String },
     Done { full: String, tokens_in: u32, tokens_out: u32, messages: Vec<providers::ChatMessage> },
     Error(String),
 }
@@ -52,20 +55,34 @@ impl ChatEmitter for ChannelEmitter {
         let _ = self.tx.send(UiStreamEvent::Token(token.to_string()));
         Ok(())
     }
+    fn emit_thinking(&self, token: &str) -> std::result::Result<(), String> {
+        let _ = self.tx.send(UiStreamEvent::Thinking(token.to_string()));
+        Ok(())
+    }
+    fn emit_thinking_done(&self, _full: &str) -> std::result::Result<(), String> {
+        let _ = self.tx.send(UiStreamEvent::ThinkingDone);
+        Ok(())
+    }
+    fn emit_tool_call(&self, name: &str, args: &str) -> std::result::Result<(), String> {
+        let _ = self.tx.send(UiStreamEvent::ToolCall {
+            name: name.to_string(),
+            args: args.to_string(),
+        });
+        Ok(())
+    }
+    fn emit_tool_result(&self, name: &str, success: bool, output: &str) -> std::result::Result<(), String> {
+        let _ = self.tx.send(UiStreamEvent::ToolResult {
+            name: name.to_string(),
+            success,
+            output: output.to_string(),
+        });
+        Ok(())
+    }
     fn emit_done(&self, _full: &str) -> std::result::Result<(), String> {
-        // Done is sent after the full response is collected in the task
         Ok(())
     }
     fn emit_error(&self, error: &str) -> std::result::Result<(), String> {
         let _ = self.tx.send(UiStreamEvent::Error(error.to_string()));
-        Ok(())
-    }
-    fn emit_tool_call(&self, name: &str, args: &str, result: &str) -> std::result::Result<(), String> {
-        let _ = self.tx.send(UiStreamEvent::ToolCall {
-            name: name.to_string(),
-            args: args.to_string(),
-            result: result.to_string(),
-        });
         Ok(())
     }
 }
@@ -506,6 +523,7 @@ impl App {
             content: String::new(),
             rendered: None,
             is_streaming: true,
+            thinking: String::new(),
         });
 
         // Get references for the async task
@@ -535,6 +553,7 @@ impl App {
                 provider: Some(config.clone()),
                 system_prompt: Some(system_prompt),
                 permission_mode,
+                show_progress: false,
             };
 
             let (result, saved_msgs) = {
@@ -588,12 +607,67 @@ impl App {
                     self.status.action_text = "streaming…".into();
                     self.status.spinner = Some("⠙".into());
 
-                    // Update the last assistant entry with content
                     if let Some(last) = self.entries.last_mut() {
-                        if let TranscriptEntry::Assistant { content, rendered, is_streaming } = last {
+                        if let TranscriptEntry::Assistant { content, rendered, is_streaming, .. } = last {
                             content.push_str(&t);
-                            *rendered = None; // invalidate cache
+                            *rendered = None;
                             *is_streaming = true;
+                        }
+                    }
+                }
+
+                UiStreamEvent::Thinking(t) => {
+                    self.editor.state = EditorMode::Thinking;
+                    self.status.action_text = "reasoning…".into();
+                    self.status.spinner = Some("⠉".into());
+
+                    // Append thinking text to the last assistant entry
+                    for entry in self.entries.iter_mut().rev() {
+                        if let TranscriptEntry::Assistant { ref mut thinking, ref mut rendered, is_streaming, .. } = entry {
+                            thinking.push_str(&t);
+                            *rendered = None;
+                            *is_streaming = true;
+                            break;
+                        }
+                    }
+                }
+
+                UiStreamEvent::ThinkingDone => {
+                    for entry in self.entries.iter_mut().rev() {
+                        if let TranscriptEntry::Assistant { ref mut is_streaming, ref mut rendered, .. } = entry {
+                            *is_streaming = false;
+                            *rendered = None;
+                            break;
+                        }
+                    }
+                }
+
+                UiStreamEvent::ToolCall { name, args } => {
+                    let args_preview: String = if args.len() > 120 {
+                        format!("{}…", &args[..117])
+                    } else {
+                        args.clone()
+                    };
+                    self.entries.push(TranscriptEntry::ToolCall {
+                        tool_name: name,
+                        args: args_preview,
+                        result: None,
+                    });
+                    self.status.action_text = format!("running {}…", "tool");
+                    self.status.spinner = Some("⠹".into());
+                }
+
+                UiStreamEvent::ToolResult { name: _name, success, output } => {
+                    // Update the last ToolCall entry with the result
+                    let preview: String = if output.len() > 200 {
+                        format!("{}…", &output[..197])
+                    } else {
+                        output.clone()
+                    };
+                    for entry in self.entries.iter_mut().rev() {
+                        if let TranscriptEntry::ToolCall { result, .. } = entry {
+                            *result = Some(if success { preview } else { format!("ERROR: {}", preview) });
+                            break;
                         }
                     }
                 }
@@ -617,16 +691,6 @@ impl App {
 
                     done = true;
                 }
-                UiStreamEvent::ToolCall { name, args, result } => {
-                    self.entries.push(TranscriptEntry::ToolCall {
-                        tool_name: name,
-                        args,
-                        result: Some(result),
-                    });
-                    self.status.action_text = "running tool…".into();
-                    self.scroll.auto_scroll = true;
-                }
-
                 UiStreamEvent::Error(e) => {
                     self.entries.push(TranscriptEntry::Notice {
                         text: e,
@@ -637,10 +701,10 @@ impl App {
                     // Remove the failed assistant entry if it has no content
                     if let Some(last) = self.entries.last() {
                         if let TranscriptEntry::Assistant { content, .. } = last {
-                            if content.is_empty() {
-                                self.entries.pop();
-                            }
+                        if content.is_empty() {
+                            self.entries.pop();
                         }
+                    }
                     }
                 }
             }
@@ -952,6 +1016,70 @@ async fn main() -> Result<()> {
     loop {
         // Process streaming events without blocking
         app.process_stream_events();
+
+        // ── Model fetch for provider panel ────────────────────────────────
+        // Check if fetch result is ready
+        if let Some(rx) = &mut app.provider_panel_state.models_rx {
+            match rx.try_recv() {
+                Ok(Ok(models)) => {
+                    app.provider_panel_state.models = models;
+                    app.provider_panel_state.models_loading = false;
+                    app.provider_panel_state.models_rx = None;
+                }
+                Ok(Err(e)) => {
+                    app.provider_panel_state.models.clear();
+                    app.provider_panel_state.models_error = Some(e);
+                    app.provider_panel_state.models_loading = false;
+                    app.provider_panel_state.models_rx = None;
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+                Err(_) => {
+                    app.provider_panel_state.models_loading = false;
+                    app.provider_panel_state.models_rx = None;
+                }
+            }
+        }
+
+        // Trigger new fetch if needed
+        if app.show_provider_panel
+            && app.provider_panel_state.needs_fetch
+            && app.provider_panel_state.models_rx.is_none()
+        {
+            app.provider_panel_state.needs_fetch = false;
+            app.provider_panel_state.models_loading = true;
+            app.provider_panel_state.models.clear();
+            app.provider_panel_state.models_error = None;
+            app.provider_panel_state.show_dropdown = false;
+
+            let all = providers::ProviderKind::all();
+            let sel = app.provider_panel_state.selected_provider;
+            let kind = all.get(sel).cloned().unwrap_or(app.config.kind.clone());
+            let fetch_config = providers::ProviderConfig {
+                kind,
+                api_key: app.config.api_key.clone(),
+                base_url: Some(app.provider_panel_state.url_buffer.clone())
+                    .filter(|s| !s.is_empty()),
+                model: app.config.model.clone(),
+                max_tokens: app.config.max_tokens,
+                temperature: app.config.temperature,
+            };
+
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            app.provider_panel_state.models_rx = Some(rx);
+
+            tokio::spawn(async move {
+                let result = providers::fetch_models(&fetch_config).await;
+                match result {
+                    Ok(list) => {
+                        let names: Vec<String> = list.into_iter().map(|m| m.id).collect();
+                        let _ = tx.send(Ok(names));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Err(e));
+                    }
+                }
+            });
+        }
 
         // Draw
         terminal.draw(|frame| app.render(frame))?;

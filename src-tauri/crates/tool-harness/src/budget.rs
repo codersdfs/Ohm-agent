@@ -33,7 +33,8 @@ impl ResultBudget {
     /// Check and process result budgeting
     pub async fn check_and_process(&self, output: String, _tool_name: &str) -> crate::BudgetCheck {
         let trimmed = output.trim();
-        if trimmed.len() > self.max_chars {
+        // Consistent "max_chars" semantics -- use char count, not byte length
+        if trimmed.chars().count() > self.max_chars {
             // Persist to file
             let hash = format!("{:016x}", md5::compute(trimmed.as_bytes()));
             let file_path = self.persisted_dir.join(format!("{}.txt", hash));
@@ -70,8 +71,16 @@ impl ResultBudget {
     /// Truncate output and return with persistence tag if needed
     pub async fn truncate(&self, output: &str) -> (String, crate::BudgetCheck) {
         let trimmed = output.trim();
-        if trimmed.len() > self.max_chars {
-            let prefix = &trimmed[..self.max_chars];
+        // Use char count for consistent "max_chars" semantics
+        if trimmed.chars().count() > self.max_chars {
+            // Find safe byte boundary at the max_chars-th character boundary
+            let byte_boundary = trimmed
+                .char_indices()
+                .take(self.max_chars)
+                .last()
+                .map(|(i, c)| i + c.len_utf8())
+                .unwrap_or(0);
+            let prefix = &trimmed[..byte_boundary];
             let mut result = String::new();
             result.push_str(prefix);
             result.push_str("\n\n[Output truncated. Full result persisted to file.]");
@@ -143,5 +152,45 @@ mod tests {
         let large = "x".repeat(35_000);
         let (output, check) = budget.truncate(&large).await;
         assert!(check.truncated || output.len() < large.len());
+    }
+
+    #[tokio::test]
+    async fn test_truncate_utf8_boundary_safe() {
+        // A string with multi-byte UTF-8 characters where the byte boundary
+        // would previously panic (3-byte emoji right at the limit edge).
+        // Build content: ~29_999 ASCII chars then a multi-byte char right at the boundary
+        let prefix = "a".repeat(29_990);
+        // 3-byte UTF-8 character (€ = U+20AC = E2 82 AC in UTF-8)
+        let mut mixed = String::new();
+        mixed.push_str(&prefix);
+        // Fill the rest with multi-byte chars to hit exactly past the limit
+        for _ in 0..20 {
+            mixed.push('€'); // 3 bytes each
+        }
+
+        let budget = ResultBudget::new();
+        let (output, check) = budget.truncate(&mixed).await;
+
+        // Should NOT panic. Output should be truncated.
+        assert!(check.truncated || output.len() < mixed.len(),
+            "Truncation should have occurred");
+        // Output must be valid UTF-8 (no panic = it's safe)
+        assert!(std::str::from_utf8(output.as_bytes()).is_ok(),
+            "Output must be valid UTF-8");
+    }
+
+    #[tokio::test]
+    async fn test_truncate_all_utf8_characters() {
+        // Pure multi-byte content longer than max_chars (30K)
+        // Each '€' is 3 bytes but 1 char; 35_000 € chars = 105_000 bytes but 35_000 chars
+        let large: String = "€".repeat(35_000); // 35K chars, 105K bytes
+
+        let budget = ResultBudget::new();
+        let (output, check) = budget.truncate(&large).await;
+
+        // Should truncate (45K bytes > 30K limit for chars count)
+        assert!(check.truncated, "Should have been truncated");
+        assert!(std::str::from_utf8(output.as_bytes()).is_ok(),
+            "Output must be valid UTF-8");
     }
 }

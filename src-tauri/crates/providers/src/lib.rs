@@ -243,6 +243,9 @@ pub struct Usage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamChunk {
     pub content: String,
+    /// Thinking/reasoning content (model-internal reasoning, not visible output).
+    #[serde(default)]
+    pub thinking: String,
     pub done: bool,
     pub model: Option<String>,
     pub usage: Option<Usage>,

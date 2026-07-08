@@ -12,11 +12,13 @@ use super::theme;
 pub enum TranscriptEntry {
     /// User message (plain text or markdown)
     User { content: String },
-    /// Assistant message (markdown rendered)
+    /// Assistant message (markdown rendered, with optional thinking/reasoning prefix)
     Assistant {
         content: String,
         rendered: Option<Text<'static>>,
         is_streaming: bool,
+        /// Model-internal reasoning/thinking, shown dimmed before content
+        thinking: String,
     },
     /// Tool call — name + summarized args
     ToolCall {
@@ -45,14 +47,41 @@ impl TranscriptEntry {
                 all.append(&mut text.lines);
                 Text::from(all)
             }
-            TranscriptEntry::Assistant { content, rendered, is_streaming } => {
-                let mut text = markdown::render_markdown(content);
-                // Prepend agent marker
-                let marker = Line::from(vec![
+            TranscriptEntry::Assistant { content, rendered, is_streaming, thinking } => {
+                let mut all = Vec::new();
+
+                // Agent marker
+                all.push(Line::from(vec![
                     Span::styled("▸ ", Style::default().fg(theme::AGENT_MARKER)),
-                ]);
-                let mut all = vec![marker];
-                all.append(&mut text.lines);
+                ]));
+
+                // Thinking/reasoning block (dimmed, before actual content)
+                if !thinking.is_empty() || (*is_streaming && content.is_empty()) {
+                    let label = if thinking.is_empty() {
+                        "thinking…"
+                    } else {
+                        "reasoning"
+                    };
+                    all.push(Line::from(vec![
+                        Span::styled(format!("  {} ", label), theme::style_dim()),
+                    ]));
+                    if !thinking.is_empty() {
+                        let mut thinking_lines = markdown::render_markdown(thinking).lines;
+                        for line in thinking_lines.iter_mut() {
+                            let dimmed: Vec<Span> = line.spans.iter().map(|s| {
+                                Span::styled(s.content.clone(), theme::style_dim())
+                            }).collect();
+                            all.push(Line::from(dimmed));
+                        }
+                    }
+                }
+
+                // Actual response content
+                if !content.is_empty() {
+                    let mut text = markdown::render_markdown(content);
+                    all.append(&mut text.lines);
+                }
+
                 if *is_streaming {
                     all.push(Line::from(Span::styled(
                         " ⠋",

@@ -327,6 +327,7 @@ impl LlmProvider for AnthropicProvider {
                                         "text_delta" => {
                                             let _ = tx.send(StreamChunk {
                                                 content: delta.text.clone(),
+                                                thinking: String::new(),
                                                 done: false,
                                                 model: None,
                                                 usage: None,
@@ -370,6 +371,7 @@ impl LlmProvider for AnthropicProvider {
 
                                     let _ = tx.send(StreamChunk {
                                         content: String::new(),
+                                        thinking: String::new(),
                                         done: true,
                                         model: None,
                                         usage,
@@ -378,6 +380,7 @@ impl LlmProvider for AnthropicProvider {
                                 } else {
                                     let _ = tx.send(StreamChunk {
                                         content: String::new(),
+                                        thinking: String::new(),
                                         done: true,
                                         model: None,
                                         usage,
@@ -403,6 +406,7 @@ impl LlmProvider for AnthropicProvider {
         // Stream ended without message_delta
         let _ = tx.send(StreamChunk {
             content: String::new(),
+            thinking: String::new(),
             done: true,
             model: None,
             usage: None,

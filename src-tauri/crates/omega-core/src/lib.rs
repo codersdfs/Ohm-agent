@@ -4,7 +4,7 @@ pub mod tui;
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 // ─── Poison-safe Mutex extension ─────────────────────────────────────────────
 
@@ -32,7 +32,15 @@ pub trait ChatEmitter: Send + Sync {
     fn emit_token(&self, token: &str) -> Result<(), String>;
     fn emit_done(&self, full: &str) -> Result<(), String>;
     fn emit_error(&self, error: &str) -> Result<(), String>;
-    fn emit_tool_call(&self, name: &str, args: &str, result: &str) -> Result<(), String>;
+
+    /// Called when the model emits a thinking/reasoning token.
+    fn emit_thinking(&self, _token: &str) -> Result<(), String> { Ok(()) }
+    /// Called when thinking is complete. `full` is the entire thinking text.
+    fn emit_thinking_done(&self, _full: &str) -> Result<(), String> { Ok(()) }
+    /// Called when a tool call starts. `args` is the JSON arguments string.
+    fn emit_tool_call(&self, _name: &str, _args: &str) -> Result<(), String> { Ok(()) }
+    /// Called when a tool call completes. `success` and `output` describe the result.
+    fn emit_tool_result(&self, _name: &str, _success: bool, _output: &str) -> Result<(), String> { Ok(()) }
 }
 
 /// CLI emitter — streams tokens live, ensures a final newline on done.
@@ -61,8 +69,16 @@ impl ChatEmitter for TerminalPrinter {
         eprintln!("{}", error);
         Ok(())
     }
-    fn emit_tool_call(&self, name: &str, args: &str, result: &str) -> Result<(), String> {
-        eprintln!("  ▶ {} {} → {}", name, args, result);
+    fn emit_tool_call(&self, name: &str, args: &str) -> Result<(), String> {
+        eprintln!("  ▶ {} {}", name, args);
+        Ok(())
+    }
+    fn emit_tool_result(&self, name: &str, success: bool, output: &str) -> Result<(), String> {
+        if success {
+            eprintln!("  ✓ {} → {}", name, output);
+        } else {
+            eprintln!("  ✗ {} → {}", name, output);
+        }
         Ok(())
     }
 }
@@ -95,6 +111,9 @@ pub struct AppState {
     pub memory_store: Mutex<memory::MemoryStore>,
     /// Broadcast channel for permission requests (Tauri forwards to frontend).
     pub permission_tx: tokio::sync::broadcast::Sender<PermissionEvent>,
+
+    /// Shared tool-execution pipeline, initialized once.
+    pub tool_pipeline: OnceLock<tool_harness::ExecutionPipeline>,
 }
 
 impl AppState {
@@ -119,6 +138,7 @@ impl AppState {
             build_config: Mutex::new(pipeline::BuildConfig::default()),
             pending_permissions: Mutex::new(HashSet::new()),
             permission_results: Mutex::new(HashMap::new()),
+            tool_pipeline: OnceLock::new(),
             session_log: Mutex::new(vec![]),
             memory_store: Mutex::new(memory_store),
             permission_tx,

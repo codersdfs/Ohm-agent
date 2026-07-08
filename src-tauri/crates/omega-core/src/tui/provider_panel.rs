@@ -10,15 +10,11 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 /// Actions the panel can return to the caller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PanelAction {
-    /// Close without saving (Esc).
     Close,
-    /// Apply config from state and close (Enter on Apply button).
     Apply,
-    /// No action.
     None,
 }
 
-/// Which section of the panel has keyboard focus.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PanelFocus {
     ProviderGrid,
@@ -29,7 +25,6 @@ pub enum PanelFocus {
     ApplyButton,
 }
 
-/// Interactive state for the provider configuration panel.
 pub struct ProviderPanelState {
     pub visible: bool,
     pub focus: PanelFocus,
@@ -41,13 +36,21 @@ pub struct ProviderPanelState {
     pub max_tokens: u32,
     pub temperature: f32,
     pub provider_scroll: usize,
+    pub needs_fetch: bool,
+    pub models_loading: bool,
+    pub models: Vec<String>,
+    pub models_error: Option<String>,
+    pub show_dropdown: bool,
+    pub selected_model: usize,
+    pub models_rx: Option<tokio::sync::oneshot::Receiver<Result<Vec<String>, String>>>,
 }
 
 impl ProviderPanelState {
-    /// Initialize panel state from an existing provider config.
     pub fn from_config(config: &providers::ProviderConfig) -> Self {
         let all = providers::ProviderKind::all();
-        let selected = all.iter().position(|k| std::mem::discriminant(k) == std::mem::discriminant(&config.kind))
+        let selected = all
+            .iter()
+            .position(|k| std::mem::discriminant(k) == std::mem::discriminant(&config.kind))
             .unwrap_or(0);
         let default_url = config.base_url.clone().unwrap_or_else(|| config.kind.default_base_url());
         Self {
@@ -61,10 +64,16 @@ impl ProviderPanelState {
             max_tokens: config.max_tokens,
             temperature: config.temperature,
             provider_scroll: 0,
+            needs_fetch: true,
+            models_loading: false,
+            models: Vec::new(),
+            models_error: None,
+            show_dropdown: false,
+            selected_model: 0,
+            models_rx: None,
         }
     }
 
-    /// Build a ProviderConfig from the current panel state, using the original config for API key.
     pub fn to_config(&self, original: &providers::ProviderConfig) -> providers::ProviderConfig {
         let all = providers::ProviderKind::all();
         let kind = all.get(self.selected_provider).cloned().unwrap_or(original.kind.clone());
@@ -81,16 +90,42 @@ impl ProviderPanelState {
 
 // ── Key handler ─────────────────────────────────────────────────────────────
 
-/// Process a key event for the provider panel. Returns an action for the caller.
 pub fn handle_key(state: &mut ProviderPanelState, key: KeyEvent) -> PanelAction {
     if key.kind != KeyEventKind::Press {
         return PanelAction::None;
     }
 
-    match key.code {
-        KeyCode::Esc => {
-            return PanelAction::Close;
+    // Dropdown mode: keys navigate the model list
+    if state.show_dropdown && state.focus == PanelFocus::ModelField {
+        match key.code {
+            KeyCode::Esc | KeyCode::Tab => {
+                state.show_dropdown = false;
+            }
+            KeyCode::Up => {
+                if state.selected_model > 0 {
+                    state.selected_model -= 1;
+                }
+            }
+            KeyCode::Down => {
+                let max = state.models.len().saturating_sub(1);
+                if state.selected_model < max {
+                    state.selected_model += 1;
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(model) = state.models.get(state.selected_model) {
+                    state.model_buffer = model.clone();
+                    state.model_cursor = model.len();
+                    state.show_dropdown = false;
+                }
+            }
+            _ => {}
         }
+        return PanelAction::None;
+    }
+
+    match key.code {
+        KeyCode::Esc => return PanelAction::Close,
         KeyCode::Tab => {
             state.focus = match state.focus {
                 PanelFocus::ProviderGrid => PanelFocus::ModelField,
@@ -100,7 +135,6 @@ pub fn handle_key(state: &mut ProviderPanelState, key: KeyEvent) -> PanelAction 
                 PanelFocus::Temperature => PanelFocus::ApplyButton,
                 PanelFocus::ApplyButton => PanelFocus::ProviderGrid,
             };
-            return PanelAction::None;
         }
         KeyCode::BackTab => {
             state.focus = match state.focus {
@@ -111,24 +145,17 @@ pub fn handle_key(state: &mut ProviderPanelState, key: KeyEvent) -> PanelAction 
                 PanelFocus::Temperature => PanelFocus::MaxTokens,
                 PanelFocus::ApplyButton => PanelFocus::Temperature,
             };
-            return PanelAction::None;
         }
         KeyCode::Up => match state.focus {
-            PanelFocus::ProviderGrid => {
-                if state.selected_provider > 0 {
-                    state.selected_provider -= 1;
-                }
-                // Adjust scroll
+            PanelFocus::ProviderGrid if state.selected_provider > 0 => {
+                state.selected_provider -= 1;
+                state.needs_fetch = true;
                 if state.selected_provider < state.provider_scroll {
                     state.provider_scroll = state.provider_scroll.saturating_sub(1);
                 }
             }
-            PanelFocus::MaxTokens => {
-                state.max_tokens = state.max_tokens.saturating_add(512);
-            }
-            PanelFocus::Temperature => {
-                state.temperature = (state.temperature + 0.1).min(2.0);
-            }
+            PanelFocus::MaxTokens => state.max_tokens = state.max_tokens.saturating_add(512),
+            PanelFocus::Temperature => state.temperature = (state.temperature + 0.1).min(2.0),
             _ => {}
         },
         KeyCode::Down => match state.focus {
@@ -136,42 +163,30 @@ pub fn handle_key(state: &mut ProviderPanelState, key: KeyEvent) -> PanelAction 
                 let max = providers::ProviderKind::all().len() - 1;
                 if state.selected_provider < max {
                     state.selected_provider += 1;
+                    state.needs_fetch = true;
                 }
-                // Adjust scroll
                 if state.selected_provider >= state.provider_scroll + 5 {
                     state.provider_scroll = state.provider_scroll.saturating_add(1).min(max.saturating_sub(4));
                 }
             }
-            PanelFocus::MaxTokens => {
-                state.max_tokens = state.max_tokens.saturating_sub(512).max(1);
-            }
-            PanelFocus::Temperature => {
-                state.temperature = (state.temperature - 0.1).max(0.0);
-            }
+            PanelFocus::MaxTokens => state.max_tokens = state.max_tokens.saturating_sub(512).max(1),
+            PanelFocus::Temperature => state.temperature = (state.temperature - 0.1).max(0.0),
             _ => {}
         },
         KeyCode::Left => match state.focus {
-            PanelFocus::ProviderGrid => {
-                if state.selected_provider > 2 {
-                    state.selected_provider -= 3;
-                }
+            PanelFocus::ProviderGrid if state.selected_provider > 2 => {
+                state.selected_provider -= 3;
+                state.needs_fetch = true;
             }
             PanelFocus::ModelField | PanelFocus::BaseUrlField => {
-                // Move cursor left in text field
-                let buf = state.current_buffer();
-                if state.current_cursor() > 0 {
-                    let prev = buf[..state.current_cursor()].char_indices().last();
-                    if let Some((idx, _)) = prev {
-                        state.set_cursor(idx);
-                    }
+                let cursor = state.current_cursor();
+                if cursor > 0 {
+                    let prev = state.current_buffer()[..cursor].char_indices().last().map(|(i, _)| i).unwrap_or(0);
+                    state.set_cursor(prev);
                 }
             }
-            PanelFocus::MaxTokens => {
-                state.max_tokens = state.max_tokens.saturating_sub(512).max(1);
-            }
-            PanelFocus::Temperature => {
-                state.temperature = (state.temperature - 0.1).max(0.0);
-            }
+            PanelFocus::MaxTokens => state.max_tokens = state.max_tokens.saturating_sub(512).max(1),
+            PanelFocus::Temperature => state.temperature = (state.temperature - 0.1).max(0.0),
             _ => {}
         },
         KeyCode::Right => match state.focus {
@@ -179,10 +194,10 @@ pub fn handle_key(state: &mut ProviderPanelState, key: KeyEvent) -> PanelAction 
                 let max = providers::ProviderKind::all().len() - 1;
                 if state.selected_provider + 3 <= max {
                     state.selected_provider += 3;
+                    state.needs_fetch = true;
                 }
             }
             PanelFocus::ModelField | PanelFocus::BaseUrlField => {
-                // Move cursor right in text field
                 let buf = state.current_buffer().to_string();
                 let cursor = state.current_cursor();
                 if cursor < buf.len() {
@@ -194,25 +209,27 @@ pub fn handle_key(state: &mut ProviderPanelState, key: KeyEvent) -> PanelAction 
                     }
                 }
             }
-            PanelFocus::MaxTokens => {
-                state.max_tokens = state.max_tokens.saturating_add(512);
-            }
-            PanelFocus::Temperature => {
-                state.temperature = (state.temperature + 0.1).min(2.0);
-            }
+            PanelFocus::MaxTokens => state.max_tokens = state.max_tokens.saturating_add(512),
+            PanelFocus::Temperature => state.temperature = (state.temperature + 0.1).min(2.0),
             _ => {}
         },
         KeyCode::Enter => {
-            // Ctrl+Enter always applies, regardless of focus
             if key.modifiers.contains(KeyModifiers::CONTROL) {
                 return PanelAction::Apply;
             }
             match state.focus {
-                PanelFocus::ApplyButton => {
-                    return PanelAction::Apply;
+                PanelFocus::ApplyButton => return PanelAction::Apply,
+                PanelFocus::ModelField if !state.models.is_empty() => {
+                    state.show_dropdown = !state.show_dropdown;
+                    if !state.show_dropdown {
+                        // Press Enter again to apply selected
+                        if let Some(m) = state.models.get(state.selected_model) {
+                            state.model_buffer = m.clone();
+                            state.model_cursor = m.len();
+                        }
+                    }
                 }
                 _ => {
-                    // Advance focus (Enter acts like Tab for most fields)
                     state.focus = match state.focus {
                         PanelFocus::ProviderGrid => PanelFocus::ModelField,
                         PanelFocus::ModelField => PanelFocus::BaseUrlField,
@@ -239,32 +256,20 @@ pub fn handle_key(state: &mut ProviderPanelState, key: KeyEvent) -> PanelAction 
                 let cursor = state.current_cursor();
                 if cursor > 0 {
                     let prev = state.current_buffer()[..cursor].char_indices().last().map(|(i, _)| i).unwrap_or(0);
-                    let new_buf = {
-                        let mut s = state.current_buffer().to_string();
-                        s.drain(prev..cursor);
-                        s
-                    };
-                    state.set_buffer(new_buf);
+                    let mut s = state.current_buffer().to_string();
+                    s.drain(prev..cursor);
+                    state.set_buffer(s);
                     state.set_cursor(prev);
                 }
             }
         }
         KeyCode::Char(c) => {
-            // Ctrl+Enter always applies (handled via KeyCode::Enter for most terminals;
-            // catch crossterm variants that send Char('\n'))
-            if c == '\n' && key.modifiers.contains(KeyModifiers::CONTROL) {
-                return PanelAction::Apply;
-            }
-
             match state.focus {
                 PanelFocus::ModelField | PanelFocus::BaseUrlField => {
                     let cursor = state.current_cursor();
-                    let new_buf = {
-                        let mut s = state.current_buffer().to_string();
-                        s.insert(cursor, c);
-                        s
-                    };
-                    state.set_buffer(new_buf);
+                    let mut s = state.current_buffer().to_string();
+                    s.insert(cursor, c);
+                    state.set_buffer(s);
                     state.set_cursor(cursor + c.len_utf8());
                 }
                 _ => {}
@@ -276,7 +281,7 @@ pub fn handle_key(state: &mut ProviderPanelState, key: KeyEvent) -> PanelAction 
     PanelAction::None
 }
 
-// ── Helper methods on ProviderPanelState for text field manipulation ────────
+// ── Helper methods ─────────────────────────────────────────────────────────
 
 impl ProviderPanelState {
     fn current_buffer(&self) -> &str {
@@ -322,25 +327,22 @@ impl ProviderPanelState {
 
 // ── Render ─────────────────────────────────────────────────────────────────
 
-/// Render the provider configuration panel as a centered overlay.
 pub fn render(
     area: Rect,
     buf: &mut Buffer,
     state: &ProviderPanelState,
     config: &providers::ProviderConfig,
 ) {
-    // Need at least 54x20 for the compact panel to fit
     if area.width < 54 || area.height < 22 {
         return;
     }
 
-    let popup_width = area.width.min(58);
-    let popup_height = 20u16;
-    let x = area.x + (area.width.saturating_sub(popup_width)) / 2;
-    let y = area.y + (area.height.saturating_sub(popup_height)) / 2;
-    let popup_area = Rect::new(x, y, popup_width, popup_height);
+    let pw = area.width.min(58);
+    let ph = 20u16;
+    let x = area.x + (area.width.saturating_sub(pw)) / 2;
+    let y = area.y + (area.height.saturating_sub(ph)) / 2;
 
-    // Dim the background
+    // Dim background
     for cy in area.y..area.y + area.height {
         for cx in area.x..area.x + area.width {
             if let Some(cell) = buf.cell_mut((cx, cy)) {
@@ -349,157 +351,154 @@ pub fn render(
         }
     }
 
-    // Available content width inside the block borders (1 left + 1 right)
-    let content_w = (popup_width.saturating_sub(2)) as usize;
+    // Available width inside block borders
+    let iw = (pw - 2) as usize; // inner width
 
-    // ── Helper: render a labelled inline box (Model / URL) ─────────────
-    // The label sits outside the box, the box fills the remaining width.
-    let inline_box = |label: &str, buffer: &str, focused: bool, placeholder: &str|
-        -> Vec<Line<'static>>
-    {
-        let border_style = if focused {
-            Style::default().fg(theme::ACCENT)
-        } else {
-            theme::style_dim()
-        };
-        let box_w = content_w.saturating_sub(label.len());
-        let text = if buffer.is_empty() {
-            placeholder.to_string()
-        } else {
-            // Truncate if wider than box interior
-            let interior = box_w.saturating_sub(3); // 2 for "│ " opening, 1 for "│" closing
-            if buffer.len() > interior {
-                format!("…{}", &buffer[buffer.len().saturating_sub(interior - 1)..])
-            } else {
-                buffer.to_string()
-            }
-        };
-        let fill = box_w.saturating_sub(3).saturating_sub(text.len());
-
-        vec![
-            // ── top border ──
-            Line::from(vec![
-                Span::styled(label.to_string(), theme::style_dim()),
-                Span::styled("┌", border_style),
-                Span::raw("─".repeat(box_w.saturating_sub(2))),
-                Span::styled("┐", border_style),
-            ]),
-            // ── content line ──
-            Line::from(vec![
-                Span::raw(" ".repeat(label.len())),
-                Span::styled("│ ", Style::default().fg(theme::DIM)),
-                Span::styled(text, Style::default().fg(theme::FG)),
-                Span::raw(" ".repeat(fill)),
-                Span::styled("│", Style::default().fg(theme::DIM)),
-            ]),
-            // ── bottom border ──
-            Line::from(vec![
-                Span::styled(label.to_string(), theme::style_dim()),
-                Span::styled("└", border_style),
-                Span::raw("─".repeat(box_w.saturating_sub(2))),
-                Span::styled("┘", border_style),
-            ]),
-        ]
-    };
-
-    // ── Build content lines ──────────────────────────────────────────────
+    // ── Build lines ─────────────────────────────────────────────────────
     let mut lines: Vec<Line<'static>> = Vec::new();
-    let all_providers = providers::ProviderKind::all();
-    let col_w = 17usize;
+    let all = providers::ProviderKind::all();
 
-    // Compact provider grid
+    // Blank + provider grid
     lines.push(Line::from(""));
-    for chunk in all_providers.chunks(3) {
-        let mut spans = Vec::new();
-        spans.push(Span::raw("  "));
+    for chunk in all.chunks(3) {
+        let mut spans = vec![Span::raw(" ")];
         for (ci, kind) in chunk.iter().enumerate() {
-            let idx = all_providers.iter()
+            let idx = all.iter()
                 .position(|k| std::mem::discriminant(k) == std::mem::discriminant(kind))
-                .unwrap();
-            let is_sel = idx == state.selected_provider;
-            let is_foc = state.focus == PanelFocus::ProviderGrid && is_sel;
-            let style = if is_foc {
+                .unwrap_or(0);
+            let sel = idx == state.selected_provider;
+            let foc = state.focus == PanelFocus::ProviderGrid && sel;
+            let style = if foc {
                 Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD)
-            } else if is_sel {
+            } else if sel {
                 Style::default().fg(theme::ACCENT)
             } else {
                 theme::style_dim()
             };
-            let label = format!("{} {}", if is_sel { "◉" } else { "○" }, kind);
+            let label = format!("{}{}", if sel { "◉" } else { "○" }, kind);
             spans.push(Span::styled(label, style));
+            let kind_str = format!("{}", kind);
+            let pad = 17usize.saturating_sub(kind_str.len() + 1);
             if ci < 2 {
-                let pad = col_w.saturating_sub(format!("{}", kind).len() + 2);
                 spans.push(Span::raw(" ".repeat(pad)));
             }
         }
         lines.push(Line::from(spans));
     }
 
-    // ── Inline Model field ───────────────────────────────────────────────
+    // Model field — single line with focus indicator
     lines.push(Line::from(""));
-    lines.extend(inline_box(
-        "  Model  ",
-        &state.model_buffer,
-        state.focus == PanelFocus::ModelField,
-        "enter model name…",
-    ));
-
-    // ── Inline Base URL field ────────────────────────────────────────────
-    lines.push(Line::from(""));
-    lines.extend(inline_box(
-        "  URL  ",
-        &state.url_buffer,
-        state.focus == PanelFocus::BaseUrlField,
-        "enter base URL…",
-    ));
-
-    // ── API key + numeric fields (one line each, no blanks) ─────────────
-    lines.push(Line::from(""));
-    let (key_label, key_icon, key_style) = if config.api_key.as_deref().filter(|k| !k.is_empty()).is_some() {
-        ("Key", "●●●●●●●●●●", Style::default().fg(theme::SUCCESS))
+    let m_foc = state.focus == PanelFocus::ModelField;
+    let m_label = if m_foc { "▸ Model " } else { "  Model " };
+    let model_display = if state.model_buffer.is_empty() {
+        String::from("enter model name…")
     } else {
-        ("Key", "— not set —", Style::default().fg(theme::ERROR))
+        state.model_buffer.clone()
     };
-    let tkn_foc = state.focus == PanelFocus::MaxTokens;
-    let tmp_foc = state.focus == PanelFocus::Temperature;
-    lines.push(Line::from(vec![
-        Span::styled(format!(" {} ", key_label), theme::style_dim()),
-        Span::raw(" "),
-        Span::styled(key_icon, key_style),
-        Span::raw("   "),
-        Span::styled("Max tokens", if tkn_foc {
-            Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD)
-        } else { theme::style_dim() }),
-        Span::raw(":"),
-        Span::styled(format!("{}", state.max_tokens), if tkn_foc {
-            Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD)
-        } else { Style::default().fg(theme::FG) }),
-        Span::raw("  "),
-        Span::styled("Temp", if tmp_foc {
-            Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD)
-        } else { theme::style_dim() }),
-        Span::raw(":"),
-        Span::styled(format!("{:.1}", state.temperature), if tmp_foc {
-            Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD)
-        } else { Style::default().fg(theme::FG) }),
-    ]));
-
-    // ── Apply button + hints (compact one line) ──────────────────────────
-    lines.push(Line::from(""));
-    let btn_foc = state.focus == PanelFocus::ApplyButton;
-    let btn_style = if btn_foc {
-        Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD)
+    let m_avail = iw.saturating_sub(m_label.len() + 3); // space for ":" and cursor
+    let m_trunc: String = if model_display.len() > m_avail {
+        format!("…{}", &model_display[model_display.len().saturating_sub(m_avail - 1)..])
+    } else {
+        model_display
+    };
+    let m_style = if m_foc {
+        Style::default().fg(theme::ACCENT)
     } else {
         theme::style_dim()
     };
+    let m_span: Span<'static> = if m_foc {
+        Span::styled(m_trunc, Style::default().fg(theme::FG))
+    } else {
+        Span::styled(m_trunc, theme::style_dim())
+    };
+    // Model count indicator
+    let count_span = if state.models_loading {
+        Some(Span::styled(" ⟳", theme::style_dim()))
+    } else if !state.models.is_empty() {
+        Some(Span::styled(
+            format!(" ({})", state.models.len()),
+            theme::style_dim(),
+        ))
+    } else if let Some(ref err) = state.models_error {
+        let short = if err.len() > 20 { &err[..20] } else { err.as_str() };
+        Some(Span::styled(format!(" ⚠{}", short), Style::default().fg(theme::ERROR)))
+    } else {
+        None
+    };
+    let mut ml = vec![Span::styled(m_label, m_style), m_span];
+    if let Some(c) = count_span {
+        ml.push(c);
+    }
+    lines.push(Line::from(ml));
+
+    // URL field
+    let u_foc = state.focus == PanelFocus::BaseUrlField;
+    let u_label = if u_foc { "▸ URL " } else { "  URL " };
+    let url_text = if state.url_buffer.is_empty() {
+        "enter base URL…".to_string()
+    } else {
+        let u_avail = iw.saturating_sub(u_label.len() + 3);
+        if state.url_buffer.len() > u_avail {
+            format!("…{}", &state.url_buffer[state.url_buffer.len().saturating_sub(u_avail - 1)..])
+        } else {
+            state.url_buffer.clone()
+        }
+    };
+    let u_style = if u_foc {
+        Style::default().fg(theme::ACCENT)
+    } else {
+        theme::style_dim()
+    };
+    let u_span: Span<'static> = if u_foc {
+        Span::styled(url_text, Style::default().fg(theme::FG))
+    } else {
+        Span::styled(url_text, theme::style_dim())
+    };
     lines.push(Line::from(vec![
-        Span::raw("  "),
-        Span::styled("▶ Apply (Ctrl+Enter)", btn_style),
-        Span::raw("   "),
-        Span::styled("Tab/↑↓ · Esc cancel", theme::style_dim()),
+        Span::styled(u_label, u_style),
+        u_span,
     ]));
 
-    // ── Render the popup ─────────────────────────────────────────────────
+    // API key status + numeric fields (one line)
+    lines.push(Line::from(""));
+    let key_display = if config.api_key.as_deref().filter(|k| !k.is_empty()).is_some() {
+        "● ● ● ● ● ● ● ● ● ●"
+    } else {
+        "— not set —"
+    };
+    let key_color = if config.api_key.as_deref().filter(|k| !k.is_empty()).is_some() {
+        theme::SUCCESS
+    } else {
+        theme::ERROR
+    };
+    let tkn_foc = state.focus == PanelFocus::MaxTokens;
+    let tmp_foc = state.focus == PanelFocus::Temperature;
+    let tkn_lbl = if tkn_foc { "▸" } else { " " };
+    let tmp_lbl = if tmp_foc { "▸" } else { " " };
+    lines.push(Line::from(vec![
+        Span::styled("Key ", theme::style_dim()),
+        Span::styled(key_display, Style::default().fg(key_color)),
+        Span::raw("  "),
+        Span::styled(format!("{}Max:", tkn_lbl), if tkn_foc { Style::default().fg(theme::ACCENT) } else { theme::style_dim() }),
+        Span::styled(format!("{}", state.max_tokens), if tkn_foc { Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD) } else { Style::default().fg(theme::FG) }),
+        Span::raw("  "),
+        Span::styled(format!("{}Temp:", tmp_lbl), if tmp_foc { Style::default().fg(theme::ACCENT) } else { theme::style_dim() }),
+        Span::styled(format!("{:.1}", state.temperature), if tmp_foc { Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD) } else { Style::default().fg(theme::FG) }),
+    ]));
+
+    // Apply button + hints
+    lines.push(Line::from(""));
+    let b_foc = state.focus == PanelFocus::ApplyButton;
+    lines.push(Line::from(vec![
+        Span::styled(if b_foc { "▸ Apply (Ctrl+Enter)" } else { "  Apply (Ctrl+Enter)" },
+            if b_foc { Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD) } else { theme::style_dim() }
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("  Tab/↑↓ cycle · Esc cancel", theme::style_dim()),
+    ]));
+
+    // ── Render main popup ──────────────────────────────────────────────
     let text = Text::from(lines);
     let para = Paragraph::new(text)
         .block(
@@ -512,5 +511,47 @@ pub fn render(
         )
         .alignment(Alignment::Left)
         .wrap(Wrap { trim: false });
-    para.render(popup_area, buf);
+    para.render(Rect::new(x, y, pw, ph), buf);
+
+    // ── Model dropdown overlay ──────────────────────────────────────────
+    if state.show_dropdown && state.focus == PanelFocus::ModelField && !state.models.is_empty() {
+        let dd_top = y + 4 + 5 + 1 + 1; // top border + blank + 5 providers + blank + model label
+        let dd_height = state.models.len().min(6) as u16 + 2; // +2 for border
+        let dd_area = Rect::new(
+            x + 2,
+            dd_top,
+            pw.saturating_sub(4).min(40),
+            dd_height,
+        );
+        if dd_area.bottom() <= area.bottom() {
+            let mut dd_lines: Vec<Line<'static>> = Vec::new();
+            let visible = state.models.iter().take(6);
+            for (i, model) in visible.enumerate() {
+                let style = if i == state.selected_model {
+                    Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD)
+                } else {
+                    theme::style_dim()
+                };
+                let prefix = if i == state.selected_model { "▸ " } else { "  " };
+                dd_lines.push(Line::from(Span::styled(
+                    format!("{}{}", prefix, model),
+                    style,
+                )));
+            }
+            if state.models.len() > 6 {
+                dd_lines.push(Line::from(Span::styled(
+                    format!("  … {} more", state.models.len() - 6),
+                    theme::style_dim(),
+                )));
+            }
+            let dd = Paragraph::new(Text::from(dd_lines))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(theme::ACCENT))
+                        .style(Style::default().bg(theme::BG)),
+                );
+            dd.render(dd_area, buf);
+        }
+    }
 }

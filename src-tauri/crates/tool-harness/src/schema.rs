@@ -26,15 +26,13 @@ pub fn validate_input(schema: &Value, input: &Value) -> Result<(), ToolError> {
 
 fn validate_object_input(schema: &serde_json::Map<String, Value>, input: &Value) -> Result<(), ToolError> {
     if let Value::Object(obj) = input {
-        // Check required fields
-        if let Some(required) = schema.get("properties") {
-            if let Some(props) = required.get("required") {
-                if let Some(req_arr) = props.as_array() {
-                    for req_field in req_arr {
-                        if let Some(field_name) = req_field.as_str() {
-                            if !obj.contains_key(field_name) {
-                                return Err(ToolError::new(format!("Missing required field: {}", field_name)));
-                            }
+        // Check required fields — "required" is at the schema root, not under "properties"
+        if let Some(required) = schema.get("required") {
+            if let Some(req_arr) = required.as_array() {
+                for req_field in req_arr {
+                    if let Some(field_name) = req_field.as_str() {
+                        if !obj.contains_key(field_name) {
+                            return Err(ToolError::new(format!("Missing required field: {}", field_name)));
                         }
                     }
                 }
@@ -258,6 +256,35 @@ mod tests {
             "age": -5
         });
         assert!(validate_input(&schema, &invalid_input).is_err());
+    }
+
+    #[test]
+    fn test_validate_missing_required_field() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "filePath": { "type": "string" },
+                "content": { "type": "string" }
+            },
+            "required": ["filePath", "content"]
+        });
+        // Missing "content" field
+        let invalid_input = serde_json::json!({
+            "filePath": "/some/path"
+        });
+        let result = validate_input(&schema, &invalid_input);
+        assert!(result.is_err(), "Should error on missing required field");
+        assert!(
+            result.unwrap_err().to_string().contains("Missing required field: content"),
+            "Error should name the missing field"
+        );
+
+        // Happy path — all required fields present
+        let valid_input = serde_json::json!({
+            "filePath": "/some/path",
+            "content": "hello"
+        });
+        assert!(validate_input(&schema, &valid_input).is_ok());
     }
 
     #[test]
