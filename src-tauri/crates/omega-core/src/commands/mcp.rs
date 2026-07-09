@@ -6,7 +6,7 @@ use mcp::McpRequest;
 use std::sync::OnceLock;
 
 
-static MCP_SKILLS: OnceLock<Vec<Skill>> = OnceLock::new();
+static MCP_SKILLS: OnceLock<(Vec<Skill>, Vec<String>)> = OnceLock::new();
 
 fn skills_dir() -> std::path::PathBuf {
     if let Ok(dir) = std::env::var("OMEGA_SKILLS_DIR") {
@@ -19,32 +19,25 @@ fn skills_dir() -> std::path::PathBuf {
 }
 
 /// Load MCP skills from `skills/` config dir (or `OMEGA_SKILLS_DIR` env).
-/// Returns (count, errors). Safe to call multiple times — loads once.
+/// Returns (count, errors). Safe to call multiple times — loads once atomically.
 pub fn load_skills() -> (usize, Vec<String>) {
-    if MCP_SKILLS.get().is_some() {
-        let skills = MCP_SKILLS.get().unwrap();
-        return (skills.len(), vec![]);
-    }
-
-    let dir = skills_dir();
-    let (registry, errors) = mcp::skills::SkillsRegistry::load_dir(&dir);
-    let skills: Vec<Skill> = registry.list().to_vec();
-    MCP_SKILLS
-        .set(skills)
-        .unwrap_or_else(|_| {}); // ignore if already set
-
-    let count = MCP_SKILLS.get().map(|s| s.len()).unwrap_or(0);
-    (count, errors)
+    let (skills, errors) = MCP_SKILLS.get_or_init(|| {
+        let dir = skills_dir();
+        let (registry, errors) = mcp::skills::SkillsRegistry::load_dir(&dir);
+        let skills: Vec<Skill> = registry.list().to_vec();
+        (skills, errors)
+    });
+    (skills.len(), errors.clone())
 }
 
 pub fn find_skill(name: &str) -> Option<Skill> {
     MCP_SKILLS
         .get()
-        .and_then(|skills| skills.iter().find(|s| s.name == name).cloned())
+        .and_then(|(skills, _)| skills.iter().find(|s| s.name == name).cloned())
 }
 
 pub fn loaded_skills() -> Vec<Skill> {
-    MCP_SKILLS.get().cloned().unwrap_or_default()
+    MCP_SKILLS.get().map(|(s, _)| s.clone()).unwrap_or_default()
 }
 
 pub fn tool_definitions() -> Vec<providers::ToolDefinition> {
@@ -55,12 +48,13 @@ pub fn tool_definitions() -> Vec<providers::ToolDefinition> {
             function: providers::ToolFunctionDef {
                 name: skill.name,
                 description: skill.description,
-                // MCP skills accept arbitrary JSON arguments
-                parameters: serde_json::json!({
+                // Use the skill's own parameter schema if provided, otherwise fall back
+                // to an open schema so the LLM can still pass arbitrary JSON arguments.
+                parameters: skill.parameters.unwrap_or_else(|| serde_json::json!({
                     "type": "object",
                     "properties": {},
                     "additionalProperties": true,
-                }),
+                })),
             },
         })
         .collect()

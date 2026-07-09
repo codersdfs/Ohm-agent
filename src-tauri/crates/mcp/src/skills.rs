@@ -83,6 +83,7 @@ mod tests {
             name: "test".into(),
             description: "A test skill".into(),
             endpoint: "http://localhost:8080".into(),
+            parameters: None,
         });
 
         assert_eq!(reg.list().len(), 1);

@@ -3,32 +3,76 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Classification for tool errors
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolErrorKind {
+    NotFound,
+    SchemaValidation,
+    PermissionDenied,
+    ExecutionFailed,
+    Timeout,
+    ProviderError,
+    Aborted,
+    BudgetExceeded,
+    Internal,
+}
+
 /// Error type for tool execution
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolError {
     pub message: String,
     pub details: Option<String>,
+    pub kind: ToolErrorKind,
+    pub retryable: bool,
+    pub source_tool: Option<String>,
 }
 
 impl ToolError {
     pub fn new(message: impl Into<String>) -> Self {
         Self {
+            kind: ToolErrorKind::Internal,
             message: message.into(),
             details: None,
+            retryable: false,
+            source_tool: None,
         }
     }
 
     pub fn with_details(message: impl Into<String>, details: impl Into<String>) -> Self {
         Self {
+            kind: ToolErrorKind::Internal,
             message: message.into(),
             details: Some(details.into()),
+            retryable: false,
+            source_tool: None,
+        }
+    }
+
+    pub fn with_kind(kind: ToolErrorKind, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+            details: None,
+            retryable: matches!(kind, ToolErrorKind::ProviderError | ToolErrorKind::Timeout),
+            source_tool: None,
+        }
+    }
+
+    pub fn with_kind_and_source(kind: ToolErrorKind, message: impl Into<String>, tool: impl Into<String>) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+            details: None,
+            retryable: matches!(kind, ToolErrorKind::ProviderError | ToolErrorKind::Timeout),
+            source_tool: Some(tool.into()),
         }
     }
 }
 
 impl std::fmt::Display for ToolError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.message)?;
+        write!(f, "[{}] {}", self.kind, self.message)?;
         if let Some(ref details) = self.details {
             write!(f, " ({})", details)?;
         }
@@ -37,6 +81,23 @@ impl std::fmt::Display for ToolError {
 }
 
 impl std::error::Error for ToolError {}
+
+impl std::fmt::Display for ToolErrorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            ToolErrorKind::NotFound => "not_found",
+            ToolErrorKind::SchemaValidation => "schema_validation",
+            ToolErrorKind::PermissionDenied => "permission_denied",
+            ToolErrorKind::ExecutionFailed => "execution_failed",
+            ToolErrorKind::Timeout => "timeout",
+            ToolErrorKind::ProviderError => "provider_error",
+            ToolErrorKind::Aborted => "aborted",
+            ToolErrorKind::BudgetExceeded => "budget_exceeded",
+            ToolErrorKind::Internal => "internal",
+        };
+        write!(f, "{}", s)
+    }
+}
 
 /// Result of a tool execution
 #[derive(Debug, Clone, Serialize, Deserialize)]

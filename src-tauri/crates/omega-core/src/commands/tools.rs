@@ -97,7 +97,10 @@ pub async fn execute_tool_inner(
     let gate_result = if matches!(tool_name.as_str(), "write" | "edit") {
         let content_to_check = match tool_name.as_str() {
             "write" => request.args.get("content").and_then(|v| v.as_str()).unwrap_or(""),
-            "edit" => &result.output,
+            "edit" => request.args.get("newText")
+                .or_else(|| request.args.get("newString"))
+                .and_then(|v| v.as_str())
+                .unwrap_or(""),
             _ => "",
         };
         if !content_to_check.is_empty() {

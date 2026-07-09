@@ -147,6 +147,10 @@ impl ToolOrchestrator {
             let mut streaming_text = false;
 
             while let Some(chunk) = rx.recv().await {
+                if !chunk.thinking.is_empty() {
+                    emitter.emit_thinking(&chunk.thinking).map_err(OrchestratorError::ProviderError)?;
+                }
+
                 if !chunk.content.is_empty() {
                     if !streaming_text {
                         streaming_text = true;
@@ -252,6 +256,15 @@ pub trait ChatEmitter {
     fn emit_token(&self, token: &str) -> Result<(), String>;
     fn emit_done(&self, full_response: &str) -> Result<(), String>;
     fn emit_error(&self, error: &str) -> Result<(), String>;
+
+    /// Called when the model emits a thinking/reasoning token.
+    fn emit_thinking(&self, _token: &str) -> Result<(), String> { Ok(()) }
+    /// Called when thinking is complete. `full` is the entire thinking text.
+    fn emit_thinking_done(&self, _full: &str) -> Result<(), String> { Ok(()) }
+    /// Called when a tool call starts. `args` is the JSON arguments string.
+    fn emit_tool_call(&self, _name: &str, _args: &str) -> Result<(), String> { Ok(()) }
+    /// Called when a tool call completes. `success` and `output` describe the result.
+    fn emit_tool_result(&self, _name: &str, _success: bool, _output: &str) -> Result<(), String> { Ok(()) }
 }
 
 /// Orchestrator errors

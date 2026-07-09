@@ -197,16 +197,16 @@ impl LlmProvider for OpenAIProvider {
             return Err(format!("API error {}: {}", status, text));
         }
 
-        let body_text = resp.text().await.map_err(|e| format!("failed to read response body: {}", e))?;
+        let body_bytes = resp.bytes().await.map_err(|e| format!("failed to read response body: {}", e))?;
 
         // Some providers (OpenRouter, etc.) return 200 with an error body
-        if let Ok(err_resp) = serde_json::from_str::<OpenAIErrorResponse>(&body_text) {
+        if let Ok(err_resp) = serde_json::from_slice::<OpenAIErrorResponse>(&body_bytes) {
             return Err(format!("API error: {}", err_resp.error.message));
         }
 
-        let data: OpenAIResponse = serde_json::from_str(&body_text)
+        let data: OpenAIResponse = serde_json::from_slice(&body_bytes)
             .map_err(|e| {
-                let preview: String = body_text.chars().take(1000).collect();
+                let preview = String::from_utf8_lossy(&body_bytes[..body_bytes.len().min(1000)]);
                 format!("parse failed: {} (body: {}...)", e, preview)
             })?;
 
