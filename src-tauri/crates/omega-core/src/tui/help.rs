@@ -22,7 +22,7 @@ pub fn render(area: Rect, buf: &mut Buffer) {
     // Dim the background behind the popup
     for cy in area.y..area.y + area.height {
         for cx in area.x..area.x + area.width {
-            if let Some(cell) = buf.cell_mut((cx, cy)) {
+            if let Some(cell) = theme::buf_cell_mut(buf, cx, cy) {
                 cell.set_style(Style::default().fg(theme::DIM));
             }
         }

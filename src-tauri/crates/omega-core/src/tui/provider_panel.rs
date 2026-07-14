@@ -43,6 +43,8 @@ pub struct ProviderPanelState {
     pub show_dropdown: bool,
     pub selected_model: usize,
     pub models_rx: Option<tokio::sync::oneshot::Receiver<Result<Vec<String>, String>>>,
+    /// Stashed config for Component rendering (API key display etc.).
+    pub config: providers::ProviderConfig,
 }
 
 impl ProviderPanelState {
@@ -71,6 +73,7 @@ impl ProviderPanelState {
             show_dropdown: false,
             selected_model: 0,
             models_rx: None,
+            config: config.clone(),
         }
     }
 
@@ -345,7 +348,7 @@ pub fn render(
     // Dim background
     for cy in area.y..area.y + area.height {
         for cx in area.x..area.x + area.width {
-            if let Some(cell) = buf.cell_mut((cx, cy)) {
+            if let Some(cell) = theme::buf_cell_mut(buf, cx, cy) {
                 cell.set_style(Style::default().fg(theme::DIM));
             }
         }
@@ -553,5 +556,22 @@ pub fn render(
                 );
             dd.render(dd_area, buf);
         }
+    }
+}
+
+use crate::tui::component::{Action, Component};
+
+impl Component for ProviderPanelState {
+    fn handle_key(&mut self, key: crossterm::event::KeyEvent) -> Action {
+        use crate::tui::provider_panel::{handle_key, PanelAction};
+        match handle_key(self, key) {
+            PanelAction::Apply => Action::ProviderApply,
+            PanelAction::Close => Action::ProviderClose,
+            PanelAction::None => Action::Noop,
+        }
+    }
+
+    fn render(&mut self, f: &mut ratatui::Frame, area: ratatui::layout::Rect) {
+        crate::tui::provider_panel::render(area, f.buffer_mut(), self, &self.config);
     }
 }

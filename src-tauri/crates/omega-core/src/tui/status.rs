@@ -39,7 +39,6 @@ impl StatusState {
         Self::default()
     }
 
-    /// Format a token count for display (e.g. 1234 → "1.2k", 850 → "850").
     fn format_tokens(count: u64) -> String {
         if count >= 1_000_000 {
             format!("{:.1}M", count as f64 / 1_000_000.0)
@@ -50,7 +49,6 @@ impl StatusState {
         }
     }
 
-    /// Build the right-side token display string.
     fn token_display(&self) -> String {
         let total_in = self.tokens_in + self.streaming_estimate;
         let total_out = self.tokens_out + self.streaming_estimate / 2;
@@ -69,62 +67,56 @@ impl StatusState {
     }
 }
 
-/// Render the status line — a single line under the editor.
-///
-/// Layout (left to right):
-///   [spinner] [action]  ...padding...  [tokens]
-pub fn render(area: Rect, buf: &mut Buffer, state: &StatusState) {
-    if area.width < 4 {
-        return;
-    }
+impl Widget for &StatusState {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        if area.width < 4 {
+            return;
+        }
 
-    let mut spans: Vec<Span<'static>> = Vec::new();
+        let mut spans: Vec<Span<'static>> = Vec::new();
 
-    // Left side: spinner + action
-    if let Some(ref spinner) = state.spinner {
-        spans.push(Span::styled(
-            format!(" {} ", spinner),
-            Style::default().fg(theme::ACCENT),
-        ));
-    }
-
-    if !state.action_text.is_empty() {
-        spans.push(Span::styled(
-            format!("{} ", state.action_text),
-            theme::style_dim(),
-        ));
-    }
-
-    // Show keybinding hints when idle
-    if spans.is_empty() {
-        if let Some(ref hint) = state.hint_text {
+        if let Some(ref spinner) = self.spinner {
             spans.push(Span::styled(
-                format!(" {} ", hint),
-                Style::default().fg(theme::DIM),
-            ));
-        } else {
-            spans.push(Span::styled(
-                " · ",
-                Style::default().fg(theme::DIM),
+                format!(" {} ", spinner),
+                Style::default().fg(theme::ACCENT),
             ));
         }
+
+        if !self.action_text.is_empty() {
+            spans.push(Span::styled(
+                format!("{} ", self.action_text),
+                theme::style_dim(),
+            ));
+        }
+
+        if spans.is_empty() {
+            if let Some(ref hint) = self.hint_text {
+                spans.push(Span::styled(
+                    format!(" {} ", hint),
+                    Style::default().fg(theme::DIM),
+                ));
+            } else {
+                spans.push(Span::styled(
+                    " · ",
+                    Style::default().fg(theme::DIM),
+                ));
+            }
+        }
+
+        let right_parts = self.token_display();
+        let right_width = right_parts.len() as u16;
+        let left_width: u16 = spans.iter().map(|s| s.width() as u16).sum();
+        let fill = area.width.saturating_sub(left_width).saturating_sub(right_width);
+
+        if fill > 0 {
+            spans.push(Span::raw(" ".repeat(fill as usize)));
+        }
+        if !right_parts.is_empty() {
+            spans.push(Span::styled(right_parts, theme::style_dim()));
+        }
+
+        let para = Paragraph::new(Line::from(spans))
+            .style(Style::default().bg(theme::BG));
+        para.render(area, buf);
     }
-
-    // Right side: tokens
-    let right_parts = state.token_display();
-
-    let right_width = right_parts.len() as u16;
-    let left_width: u16 = spans.iter().map(|s| s.width() as u16).sum();
-    let fill = area.width.saturating_sub(left_width).saturating_sub(right_width);
-
-    if fill > 0 {
-        spans.push(Span::raw(" ".repeat(fill as usize)));
-    }
-    if !right_parts.is_empty() {
-        spans.push(Span::styled(right_parts, theme::style_dim()));
-    }
-
-    let para = Paragraph::new(Line::from(spans))
-        .style(Style::default().bg(theme::BG));
-    para.render(area, buf);
 }

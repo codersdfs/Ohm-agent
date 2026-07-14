@@ -1,6 +1,7 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
+use ratatui::widgets::Widget;
 
 use super::theme;
 
@@ -15,86 +16,77 @@ pub enum AgentState {
 /// Phase key used by the tick-driven animation.
 #[derive(Clone, Copy)]
 pub struct AnimationPhase {
-    /// Ticks since mark first appeared (incremented by the caller each draw).
     pub tick: u64,
-    /// Current agent state.
     pub agent: AgentState,
 }
 
-/// Render the big interactive Omega mark in the given area.
-/// Shows only when the transcript is empty; caller is responsible for that check.
-pub fn render(area: Rect, buf: &mut Buffer, phase: &AnimationPhase) {
-    let w = area.width;
+impl Widget for &AnimationPhase {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let w = area.width;
 
-    if w < 50 {
-        // Too narrow — don't render the big mark at all
-        return;
-    }
-
-    let (glyph, dots, accent_mod) = if w >= 82 {
-        // ── Large version (Concept A: Braille Aurora) ──────────────────────
-        full_omega(phase)
-    } else {
-        // ── Compact version (Concept B: Interference) ──────────────────────
-        compact_omega(phase)
-    };
-
-    // Compute centering — use max char count for width
-    let glyph_height = glyph.len() as u16;
-    let glyph_width = glyph.iter().map(|l| l.chars().count() as u16).max().unwrap_or(0);
-    let start_y = area.top().saturating_add(
-        area.height.saturating_sub(glyph_height).saturating_sub(2) / 2,
-    );
-    let start_x = area.left().saturating_add(
-        area.width.saturating_sub(glyph_width) / 2,
-    );
-
-    // Pad each line to glyph_width for consistent alignment
-    let padded: Vec<String> = glyph
-        .iter()
-        .map(|line| format!("{:^width$}", line, width = glyph_width as usize))
-        .collect();
-
-    // ── Draw the glyph ──────────────────────────────────────────────────
-    let accent = if let Some(modif) = accent_mod {
-        Style::default().fg(theme::ACCENT).add_modifier(modif)
-    } else {
-        Style::default().fg(theme::ACCENT)
-    };
-    let dim_style = theme::style_dim();
-
-    for (row, line_str) in padded.iter().enumerate() {
-        let y = start_y + row as u16;
-        if y >= area.bottom() {
-            break;
+        if w < 50 {
+            return;
         }
-        for (col, ch) in line_str.chars().enumerate() {
-            let x = start_x + col as u16;
-            if x >= area.right() {
+
+        let (glyph, dots, accent_mod) = if w >= 82 {
+            full_omega(self)
+        } else {
+            compact_omega(self)
+        };
+
+        let glyph_height = glyph.len() as u16;
+        let glyph_width = glyph.iter().map(|l| l.chars().count() as u16).max().unwrap_or(0);
+        let start_y = area.top().saturating_add(
+            area.height.saturating_sub(glyph_height).saturating_sub(2) / 2,
+        );
+        let start_x = area.left().saturating_add(
+            area.width.saturating_sub(glyph_width) / 2,
+        );
+
+        let padded: Vec<String> = glyph
+            .iter()
+            .map(|line| format!("{:^width$}", line, width = glyph_width as usize))
+            .collect();
+
+        let accent = if let Some(modif) = accent_mod {
+            Style::default().fg(theme::ACCENT).add_modifier(modif)
+        } else {
+            Style::default().fg(theme::ACCENT)
+        };
+        let dim_style = theme::style_dim();
+
+        for (row, line_str) in padded.iter().enumerate() {
+            let y = start_y + row as u16;
+            if y >= area.bottom() {
                 break;
             }
-            if let Some(cell) = buf.cell_mut((x, y)) {
-                let style = if ch == 'Ω' || ch == 'ω' {
-                    accent
-                } else if ch == '▓' || ch == '▒' || ch == '█' {
-                    dim_style
-                } else {
-                    Style::default()
-                };
-                cell.set_char(ch);
-                cell.set_style(style);
+            for (col, ch) in line_str.chars().enumerate() {
+                let x = start_x + col as u16;
+                if x >= area.right() {
+                    break;
+                }
+                if let Some(cell) = theme::buf_cell_mut(buf, x, y) {
+                    let style = if ch == 'Ω' || ch == 'ω' {
+                        accent
+                    } else if ch == '▓' || ch == '▒' || ch == '█' {
+                        dim_style
+                    } else {
+                        Style::default()
+                    };
+                    cell.set_char(ch);
+                    cell.set_style(style);
+                }
             }
         }
-    }
 
-    // ── Draw orbiting dots ──────────────────────────────────────────────
-    for (dx, dy, dot_char) in dots {
-        let x = (start_x as i32 + dx as i32 + glyph_width as i32 / 2).max(0) as u16;
-        let y = (start_y as i32 + dy as i32 + glyph_height as i32 / 2).max(0) as u16;
-        if y < area.bottom() && x < area.right() && x >= area.left() {
-            if let Some(cell) = buf.cell_mut((x, y)) {
-                cell.set_char(dot_char);
-                cell.set_style(accent);
+        for (dx, dy, dot_char) in dots {
+            let x = (start_x as i32 + dx as i32 + glyph_width as i32 / 2).max(0) as u16;
+            let y = (start_y as i32 + dy as i32 + glyph_height as i32 / 2).max(0) as u16;
+            if y < area.bottom() && x < area.right() && x >= area.left() {
+                if let Some(cell) = theme::buf_cell_mut(buf, x, y) {
+                    cell.set_char(dot_char);
+                    cell.set_style(accent);
+                }
             }
         }
     }

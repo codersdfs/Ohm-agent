@@ -7,3 +7,4 @@ pub mod editor;
 pub mod help;
 pub mod omega_mark;
 pub mod status;
+pub mod component;

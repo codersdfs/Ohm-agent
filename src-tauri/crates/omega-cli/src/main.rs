@@ -1,5 +1,5 @@
 // ── Omega Agent TUI ───────────────────────────────────────────────────────────
-// Ratatui-based full-screen terminal UI with minimal, conversation-first design.
+// Ratatui + ratata full-screen terminal UI.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -7,37 +7,25 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use clap::Parser;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind};
-use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
-use crossterm::ExecutableCommand;
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
-use ratatui::Terminal;
 
+use ratata::prelude::*;
+
+use omega_core::tui::component::{Action, Component, UiStreamEvent};
 use omega_core::tui::editor::{EditorMode, EditorState};
 use omega_core::tui::header::HeaderState;
 use omega_core::tui::status::StatusState;
-use omega_core::tui::omega_mark::{self, AgentState, AnimationPhase};
+use omega_core::tui::omega_mark::{AgentState, AnimationPhase};
 use omega_core::tui::theme;
-use omega_core::tui::transcript::{self, TranscriptEntry, ScrollState};
+use omega_core::tui::transcript::{self, TranscriptEntry, Transcript};
 use omega_core::{commands, AppState, ChatEmitter, default_db_path};
 
 // ── Event types for streaming ────────────────────────────────────────────────
-
-/// Events sent from the streaming task to the UI event loop.
-#[derive(Debug, Clone)]
-enum UiStreamEvent {
-    Token(String),
-    Thinking(String),
-    ThinkingDone,
-    ToolCall { name: String, args: String },
-    ToolResult { name: String, success: bool, output: String },
-    Done { full: String, tokens_in: u32, tokens_out: u32, messages: Vec<providers::ChatMessage> },
-    Error(String),
-}
 
 /// ChatEmitter impl that sends events through an mpsc channel.
 struct ChannelEmitter {
@@ -98,18 +86,14 @@ struct App {
 
     // UI state
     header: HeaderState,
-    entries: Vec<TranscriptEntry>,
-    scroll: ScrollState,
+    transcript: Transcript,
     editor: EditorState,
     status: StatusState,
 
-    // LLM conversation history
-    messages: Vec<providers::ChatMessage>,
+    // LLM conversation history is now inside Transcript
 
     // Streaming
     is_streaming: bool,
-    stream_event_rx: Option<tokio::sync::mpsc::UnboundedReceiver<UiStreamEvent>>,
-    streaming_fragment: String,
     cancel_flag: Arc<AtomicBool>,
 
     // Spinner / animation
@@ -151,14 +135,10 @@ impl App {
             state,
             config,
             header,
-            entries: Vec::new(),
-            scroll: ScrollState::default(),
+            transcript: Transcript::new(),
             editor,
             status,
-            messages: Vec::new(),
             is_streaming: false,
-            stream_event_rx: None,
-            streaming_fragment: String::new(),
             cancel_flag: Arc::new(AtomicBool::new(false)),
             spinner_idx: 0,
             anim_tick: 0,
@@ -179,7 +159,7 @@ impl App {
         };
 
         // Welcome notice
-        app.entries.push(TranscriptEntry::Notice {
+        app.transcript.entries.push(TranscriptEntry::Notice {
             text: format!("Ω v{} — {} ({}). Type a message to start.", env!("CARGO_PKG_VERSION"), app.config.model, app.config.kind),
             is_error: false,
         });
@@ -187,7 +167,7 @@ impl App {
         // Show setup hint when API key is needed for cloud providers
         let is_local = matches!(app.config.kind, providers::ProviderKind::Local);
         if app.config.api_key.is_none() && !is_local {
-            app.entries.push(TranscriptEntry::Notice {
+            app.transcript.entries.push(TranscriptEntry::Notice {
                 text: "No API key found. Set OMEGA_API_KEY or run: omega -p local".into(),
                 is_error: true,
             });
@@ -196,13 +176,13 @@ impl App {
         // Load MCP skills
         let (mcp_loaded, mcp_errors) = commands::mcp::load_skills();
         if mcp_loaded > 0 {
-            app.entries.push(TranscriptEntry::Notice {
+            app.transcript.entries.push(TranscriptEntry::Notice {
                 text: format!("MCP: {} skills loaded", mcp_loaded),
                 is_error: false,
             });
         }
         for err in &mcp_errors {
-            app.entries.push(TranscriptEntry::Notice {
+            app.transcript.entries.push(TranscriptEntry::Notice {
                 text: format!("MCP: {}", err),
                 is_error: true,
             });
@@ -253,7 +233,7 @@ impl App {
                         format!("{}", self.config.kind),
                     );
                     save_config(&self.config);
-                    self.entries.push(TranscriptEntry::Notice {
+                    self.transcript.entries.push(TranscriptEntry::Notice {
                         text: format!("Provider set to {} ({})", self.config.model, self.config.kind),
                         is_error: false,
                     });
@@ -274,60 +254,28 @@ impl App {
             return;
         }
 
-        // Editor input
+        // Delegate to editor component (handles letters, Enter, navigation, Tab)
+        let action = self.editor.handle_key(key);
+        match action {
+            Action::SendMessage => self.submit_message(),
+            _ => {}
+        }
+
+        // Scroll keys (also handled at App level for dual history+scroll binding)
         match key.code {
-            KeyCode::Enter => {
-                if key.modifiers.contains(KeyModifiers::SHIFT) {
-                    self.editor.newline();
-                } else {
-                    self.submit_message();
-                }
-            }
-            KeyCode::Char(c) => {
-                self.editor.insert_char(c);
-            }
-            KeyCode::Backspace => {
-                self.editor.backspace();
-            }
-            KeyCode::Delete => {
-                self.editor.delete();
-            }
-            KeyCode::Left => {
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    self.editor.cursor_home();
-                } else {
-                    self.editor.cursor_left();
-                }
-            }
-            KeyCode::Right => {
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    self.editor.cursor_end();
-                } else {
-                    self.editor.cursor_right();
-                }
-            }
-            KeyCode::Home => self.editor.cursor_home(),
-            KeyCode::End => self.editor.cursor_end(),
-            KeyCode::Tab => {
-                // Cycle through suggestions
-                if !self.editor.suggestions.is_empty() {
-                    self.editor.selected_suggestion = (self.editor.selected_suggestion + 1)
-                        % self.editor.suggestions.len();
-                }
-            }
             KeyCode::Up => {
                 self.recall_history_up();
-                transcript::scroll_up(&mut self.scroll, 3);
+                transcript::scroll_up(&mut self.transcript.scroll, 3);
             }
             KeyCode::Down => {
                 self.recall_history_down();
-                transcript::scroll_down(&mut self.scroll, self.entries.len(), 3);
+                transcript::scroll_down(&mut self.transcript.scroll, self.transcript.entries.len(), 3);
             }
             KeyCode::PageUp => {
-                transcript::scroll_up(&mut self.scroll, 10);
+                transcript::scroll_up(&mut self.transcript.scroll, 10);
             }
             KeyCode::PageDown => {
-                transcript::scroll_down(&mut self.scroll, self.entries.len(), 10);
+                transcript::scroll_down(&mut self.transcript.scroll, self.transcript.entries.len(), 10);
             }
             _ => {}
         }
@@ -338,7 +286,7 @@ impl App {
         self.cancel_flag.store(true, Ordering::SeqCst);
 
         // Drop the receiver so the streaming task's tx.send() fails
-        self.stream_event_rx = None;
+        self.transcript.stream_event_rx = None;
 
         self.is_streaming = false;
         self.editor.state = EditorMode::Idle;
@@ -346,7 +294,7 @@ impl App {
         self.status.action_text = String::new();
 
         // Mark the pending assistant entry as stopped
-        for entry in self.entries.iter_mut().rev() {
+        for entry in self.transcript.entries.iter_mut().rev() {
             if let TranscriptEntry::Assistant { ref mut is_streaming, .. } = entry {
                 *is_streaming = false;
                 break;
@@ -354,13 +302,13 @@ impl App {
         }
 
         // Show cancel notice
-        self.entries.push(TranscriptEntry::Notice {
+        self.transcript.entries.push(TranscriptEntry::Notice {
             text: "Stream cancelled".into(),
             is_error: false,
         });
 
-        self.scroll.auto_scroll = true;
-        self.streaming_fragment.clear();
+        self.transcript.scroll.auto_scroll = true;
+        self.transcript.streaming_fragment.clear();
     }
 
     /// Navigate input history: move to older entry.
@@ -406,10 +354,10 @@ impl App {
     fn handle_mouse(&mut self, kind: MouseEventKind) {
         match kind {
             MouseEventKind::ScrollDown => {
-                transcript::scroll_down(&mut self.scroll, self.entries.len(), 3);
+                transcript::scroll_down(&mut self.transcript.scroll, self.transcript.entries.len(), 3);
             }
             MouseEventKind::ScrollUp => {
-                transcript::scroll_up(&mut self.scroll, 3);
+                transcript::scroll_up(&mut self.transcript.scroll, 3);
             }
             _ => {}
         }
@@ -435,7 +383,7 @@ impl App {
         }
 
         // Add user message to transcript
-        self.entries.push(TranscriptEntry::User {
+        self.transcript.entries.push(TranscriptEntry::User {
             content: content.clone(),
         });
 
@@ -447,27 +395,27 @@ impl App {
     fn handle_slash_command(&mut self, cmd: &str) {
         match cmd.to_lowercase().trim() {
             "/help" | "/?" | "/h" => {
-                self.entries.push(TranscriptEntry::Notice {
+                self.transcript.entries.push(TranscriptEntry::Notice {
                     text: "Commands: /help, /clear, /tools, /model <name>, /exit, /cost".into(),
                     is_error: false,
                 });
             }
             "/clear" | "/cls" => {
-                self.entries.clear();
-                self.messages.clear();
+                self.transcript.entries.clear();
+                self.transcript.messages.clear();
                 self.editor.buffer.clear();
             }
             "/tools" => {
                 match commands::tools::list_tools() {
                     Ok(tools) => {
                         let list = tools.join(", ");
-                        self.entries.push(TranscriptEntry::Notice {
+                        self.transcript.entries.push(TranscriptEntry::Notice {
                             text: format!("Available tools: {}", list),
                             is_error: false,
                         });
                     }
                     Err(e) => {
-                        self.entries.push(TranscriptEntry::Notice {
+                        self.transcript.entries.push(TranscriptEntry::Notice {
                             text: format!("Error listing tools: {}", e),
                             is_error: true,
                         });
@@ -476,7 +424,7 @@ impl App {
             }
             "/model" | "/provider" | "/providers" | "/p" => {
                 if self.is_streaming {
-                    self.entries.push(TranscriptEntry::Notice {
+                    self.transcript.entries.push(TranscriptEntry::Notice {
                         text: "Can't open provider panel while streaming.".into(),
                         is_error: true,
                     });
@@ -486,7 +434,7 @@ impl App {
                 }
             }
             "/cost" => {
-                self.entries.push(TranscriptEntry::Notice {
+                self.transcript.entries.push(TranscriptEntry::Notice {
                     text: format!(
                         "Session tokens — {} in / {} out ({} messages)",
                         self.session_tokens_in, self.session_tokens_out, self.session_messages
@@ -498,7 +446,7 @@ impl App {
                 self.should_quit = true;
             }
             other => {
-                self.entries.push(TranscriptEntry::Notice {
+                self.transcript.entries.push(TranscriptEntry::Notice {
                     text: format!("Unknown command: {}. Type /help for commands.", other),
                     is_error: true,
                 });
@@ -516,10 +464,10 @@ impl App {
 
         // Create channel
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        self.stream_event_rx = Some(rx);
+        self.transcript.stream_event_rx = Some(rx);
 
         // Add a placeholder assistant entry
-        self.entries.push(TranscriptEntry::Assistant {
+        self.transcript.entries.push(TranscriptEntry::Assistant {
             content: String::new(),
             rendered: None,
             is_streaming: true,
@@ -533,7 +481,7 @@ impl App {
         let permission_mode = "off".to_string();
 
         // Shared message list for the task to modify
-        let messages = Arc::new(tokio::sync::Mutex::new(self.messages.clone()));
+        let messages = Arc::new(tokio::sync::Mutex::new(self.transcript.messages.clone()));
         let cancel_flag = self.cancel_flag.clone();
 
         let event_tx = tx.clone();
@@ -593,120 +541,51 @@ impl App {
 
     /// Process streaming events from the channel.
     fn process_stream_events(&mut self) {
-        let Some(rx) = &mut self.stream_event_rx else {
+        let rx = self.transcript.stream_event_rx.take();
+        let Some(mut rx) = rx else {
             return;
         };
 
         let mut done = false;
 
         while let Ok(event) = rx.try_recv() {
-            match event {
-                UiStreamEvent::Token(t) => {
-                    self.streaming_fragment.push_str(&t);
+            // Update App-level state from events
+            match &event {
+                UiStreamEvent::Token(_) => {
                     self.editor.state = EditorMode::Streaming;
                     self.status.action_text = "streaming…".into();
                     self.status.spinner = Some("⠙".into());
-
-                    if let Some(last) = self.entries.last_mut() {
-                        if let TranscriptEntry::Assistant { content, rendered, is_streaming, .. } = last {
-                            content.push_str(&t);
-                            *rendered = None;
-                            *is_streaming = true;
-                        }
-                    }
                 }
-
-                UiStreamEvent::Thinking(t) => {
+                UiStreamEvent::Thinking(_) => {
                     self.editor.state = EditorMode::Thinking;
                     self.status.action_text = "reasoning…".into();
                     self.status.spinner = Some("⠉".into());
-
-                    // Append thinking text to the last assistant entry
-                    for entry in self.entries.iter_mut().rev() {
-                        if let TranscriptEntry::Assistant { ref mut thinking, ref mut rendered, is_streaming, .. } = entry {
-                            thinking.push_str(&t);
-                            *rendered = None;
-                            *is_streaming = true;
-                            break;
-                        }
-                    }
                 }
-
-                UiStreamEvent::ThinkingDone => {
-                    for entry in self.entries.iter_mut().rev() {
-                        if let TranscriptEntry::Assistant { ref mut is_streaming, ref mut rendered, .. } = entry {
-                            *is_streaming = false;
-                            *rendered = None;
-                            break;
-                        }
-                    }
-                }
-
-                UiStreamEvent::ToolCall { name, args } => {
-                    let args_preview: String = if args.len() > 120 {
-                        format!("{}…", &args[..117])
-                    } else {
-                        args.clone()
-                    };
-                    self.entries.push(TranscriptEntry::ToolCall {
-                        tool_name: name,
-                        args: args_preview,
-                        result: None,
-                    });
+                UiStreamEvent::ToolCall { .. } => {
                     self.status.action_text = format!("running {}…", "tool");
                     self.status.spinner = Some("⠹".into());
                 }
-
-                UiStreamEvent::ToolResult { name: _name, success, output } => {
-                    // Update the last ToolCall entry with the result
-                    let preview: String = if output.len() > 200 {
-                        format!("{}…", &output[..197])
-                    } else {
-                        output.clone()
-                    };
-                    for entry in self.entries.iter_mut().rev() {
-                        if let TranscriptEntry::ToolCall { result, .. } = entry {
-                            *result = Some(if success { preview } else { format!("ERROR: {}", preview) });
-                            break;
-                        }
-                    }
-                }
-
-                UiStreamEvent::Done { full: _full, tokens_in, tokens_out, messages } => {
-                    self.session_tokens_in += tokens_in as u64;
-                    self.session_tokens_out += tokens_out as u64;
+                UiStreamEvent::Done { tokens_in, tokens_out, .. } => {
+                    self.session_tokens_in += *tokens_in as u64;
+                    self.session_tokens_out += *tokens_out as u64;
                     self.session_messages += 1;
-
-                    // Preserve conversation history across turns
-                    self.messages = messages;
-
-                    // Update assistant entry: mark not streaming
-                    for entry in self.entries.iter_mut().rev() {
-                        if let TranscriptEntry::Assistant { ref mut is_streaming, ref mut rendered, .. } = entry {
-                            *is_streaming = false;
-                            *rendered = None;
-                            break;
-                        }
-                    }
-
                     done = true;
                 }
-                UiStreamEvent::Error(e) => {
-                    self.entries.push(TranscriptEntry::Notice {
-                        text: e,
-                        is_error: true,
-                    });
+                UiStreamEvent::Error(_) => {
                     done = true;
-
-                    // Remove the failed assistant entry if it has no content
-                    if let Some(last) = self.entries.last() {
-                        if let TranscriptEntry::Assistant { content, .. } = last {
-                        if content.is_empty() {
-                            self.entries.pop();
-                        }
-                    }
-                    }
                 }
+                _ => {}
+            }
+
+            // Delegate event processing to the transcript component
+            let action = self.transcript.process_stream_event(&event);
+
+            // Handle any actions returned by the transcript
+            match action {
+                Action::StreamDone { .. } | Action::StreamError => {
+                    done = true;
+                }
+                _ => {}
             }
         }
 
@@ -715,9 +594,12 @@ impl App {
             self.editor.state = EditorMode::Idle;
             self.status.spinner = None;
             self.status.action_text = String::new();
-            self.stream_event_rx = None;
-            self.streaming_fragment.clear();
-            self.scroll.auto_scroll = true; // jump to bottom
+            self.transcript.stream_event_rx = None;
+            self.transcript.streaming_fragment.clear();
+            self.transcript.scroll.auto_scroll = true; // jump to bottom
+        } else {
+            // Put the rx back if we're still streaming
+            self.transcript.stream_event_rx = Some(rx);
         }
     }
 
@@ -729,9 +611,74 @@ impl App {
         }
     }
 
+    /// Poll the provider panel model-fetch channel.
+    fn poll_provider_models(&mut self) {
+        if let Some(rx) = &mut self.provider_panel_state.models_rx {
+            match rx.try_recv() {
+                Ok(Ok(models)) => {
+                    self.provider_panel_state.models = models;
+                    self.provider_panel_state.models_loading = false;
+                    self.provider_panel_state.models_rx = None;
+                }
+                Ok(Err(e)) => {
+                    self.provider_panel_state.models.clear();
+                    self.provider_panel_state.models_error = Some(e);
+                    self.provider_panel_state.models_loading = false;
+                    self.provider_panel_state.models_rx = None;
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+                Err(_) => {
+                    self.provider_panel_state.models_loading = false;
+                    self.provider_panel_state.models_rx = None;
+                }
+            }
+        }
+
+        // Trigger new fetch if needed
+        if self.show_provider_panel
+            && self.provider_panel_state.needs_fetch
+            && self.provider_panel_state.models_rx.is_none()
+        {
+            self.provider_panel_state.needs_fetch = false;
+            self.provider_panel_state.models_loading = true;
+            self.provider_panel_state.models.clear();
+            self.provider_panel_state.models_error = None;
+            self.provider_panel_state.show_dropdown = false;
+
+            let all = providers::ProviderKind::all();
+            let sel = self.provider_panel_state.selected_provider;
+            let kind = all.get(sel).cloned().unwrap_or(self.config.kind.clone());
+            let fetch_config = providers::ProviderConfig {
+                kind,
+                api_key: self.config.api_key.clone(),
+                base_url: Some(self.provider_panel_state.url_buffer.clone())
+                    .filter(|s| !s.is_empty()),
+                model: self.config.model.clone(),
+                max_tokens: self.config.max_tokens,
+                temperature: self.config.temperature,
+            };
+
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            self.provider_panel_state.models_rx = Some(rx);
+
+            tokio::spawn(async move {
+                let result = providers::fetch_models(&fetch_config).await;
+                match result {
+                    Ok(list) => {
+                        let names: Vec<String> = list.into_iter().map(|m| m.id).collect();
+                        let _ = tx.send(Ok(names));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Err(e));
+                    }
+                }
+            });
+        }
+    }
+
     /// Render the full UI.
-    fn render(&mut self, frame: &mut ratatui::Frame) {
-        let area = frame.area();
+    fn render_widgets(&mut self, frame: &mut ratatui::Frame) {
+        let area = frame.size();
 
         // ── Layout ──────────────────────────────────────────────────────────
         let header_height = 2u16; // 1 line + 1 rule
@@ -766,15 +713,15 @@ impl App {
         };
 
         // ── Render widgets ──────────────────────────────────────────────────
-        omega_core::tui::header::render(header_area, frame.buffer_mut(), &self.header);
+        frame.render_widget(&self.header, header_area);
 
         // Render transcript first (so startup messages show at top)
-        let is_scrolled_up = self.scroll.offset > 0;
-        transcript::render(transcript_area, frame.buffer_mut(), &mut self.entries, &mut self.scroll);
+        let is_scrolled_up = self.transcript.scroll.offset > 0;
+        self.transcript.render(frame, transcript_area);
 
         // Big Omega mark OVERLAY on empty transcript area (rendered after transcript
         // so it overwrites the empty space below any startup notices)
-        let has_conversation = self.entries.iter().any(|e| matches!(e, TranscriptEntry::User { .. } | TranscriptEntry::Assistant { .. }));
+        let has_conversation = self.transcript.entries.iter().any(|e| matches!(e, TranscriptEntry::User { .. } | TranscriptEntry::Assistant { .. }));
         if !has_conversation && !self.show_help {
             let agent_state = if self.is_streaming {
                 AgentState::Streaming
@@ -787,12 +734,12 @@ impl App {
                 tick: self.anim_tick,
                 agent: agent_state,
             };
-            omega_mark::render(transcript_area, frame.buffer_mut(), &phase);
+            frame.render_widget(&phase, transcript_area);
         }
 
         // Draw a scroll-up indicator as an overlay at the bottom of transcript
         if is_scrolled_up && !self.show_help && !self.is_streaming {
-            let indicator_text = format!(" ↑ {} more ", self.scroll.offset);
+            let indicator_text = format!(" ↑ {} more ", self.transcript.scroll.offset);
             let indicator = Paragraph::new(Line::from(Span::styled(
                 indicator_text,
                 theme::style_dim(),
@@ -819,7 +766,7 @@ impl App {
             );
         }
 
-        omega_core::tui::editor::render(editor_area, frame.buffer_mut(), &self.editor);
+        frame.render_widget(&self.editor, editor_area);
 
         // Set keybinding hints when idle
         if !self.is_streaming && !self.show_help {
@@ -834,11 +781,11 @@ impl App {
         self.status.tokens_out = tokens_out;
         self.status.messages_count = self.session_messages;
         if self.is_streaming {
-            self.status.streaming_estimate = (self.streaming_fragment.len() / 4) as u64;
+            self.status.streaming_estimate = (self.transcript.streaming_fragment.len() / 4) as u64;
         } else {
             self.status.streaming_estimate = 0;
         }
-        omega_core::tui::status::render(status_area, frame.buffer_mut(), &self.status);
+        frame.render_widget(&self.status, status_area);
 
         // Provider panel overlay (drawn on top, before help)
         if self.show_provider_panel && !self.show_help {
@@ -875,9 +822,43 @@ impl App {
     }
 }
 
+impl ratata::screen::Screen for App {
+    fn render(&mut self, f: &mut ratatui::Frame) {
+        self.render_widgets(f);
+    }
+
+    fn update(&mut self, message: Message) -> Option<Command> {
+        match message {
+            Message::Tick => {
+                self.process_stream_events();
+                self.poll_provider_models();
+                self.tick_spinner();
+                self.anim_tick = self.anim_tick.wrapping_add(1);
+                self.last_tick = Instant::now();
+                None
+            }
+            Message::Key(msg) => {
+                let key = KeyEvent {
+                    code: msg.code,
+                    modifiers: msg.modifiers,
+                    kind: KeyEventKind::Press,
+                    state: msg.state,
+                };
+                self.handle_key(key);
+                if self.should_quit { Some(Command::Quit) } else { None }
+            }
+            Message::Mouse(event) => {
+                self.handle_mouse(event.kind);
+                None
+            }
+            Message::Resize(_, _) => None,
+            _ => None,
+        }
+    }
+}
 
 
-// ── Config helpers (from old main.rs, kept minimal) ──────────────────────────
+// ── Config helpers ──────────────────────────────────────────────────────────
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct CliConfig {
@@ -994,136 +975,35 @@ struct Cli {
 }
 
 // entry point
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let cli = Cli::parse();
     let config = load_provider_config(cli.provider, cli.model, cli.base_url);
 
-    // ── Setup ratatui ──────────────────────────────────────────────────────
-    let mut stdout = std::io::stdout();
-    stdout.execute(EnterAlternateScreen)?;
-    terminal::enable_raw_mode()?;
+    let model = config.model.clone();
+    let kind = config.kind.to_string();
 
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-    terminal.clear()?;
+    let app = App::new(config);
 
-    let mut app = App::new(config);
-    let tick_rate = Duration::from_millis(80);
+    // Create a tokio runtime for background streaming tasks
+    let rt = tokio::runtime::Runtime::new()?;
+    let _guard = rt.enter();
 
-    // ── Event loop ─────────────────────────────────────────────────────────
-    loop {
-        // Process streaming events without blocking
-        app.process_stream_events();
+    let backend = CrosstermBackend::new(std::io::stdout());
 
-        // ── Model fetch for provider panel ────────────────────────────────
-        // Check if fetch result is ready
-        if let Some(rx) = &mut app.provider_panel_state.models_rx {
-            match rx.try_recv() {
-                Ok(Ok(models)) => {
-                    app.provider_panel_state.models = models;
-                    app.provider_panel_state.models_loading = false;
-                    app.provider_panel_state.models_rx = None;
-                }
-                Ok(Err(e)) => {
-                    app.provider_panel_state.models.clear();
-                    app.provider_panel_state.models_error = Some(e);
-                    app.provider_panel_state.models_loading = false;
-                    app.provider_panel_state.models_rx = None;
-                }
-                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
-                Err(_) => {
-                    app.provider_panel_state.models_loading = false;
-                    app.provider_panel_state.models_rx = None;
-                }
-            }
-        }
+    Application::new()
+        .tick_rate(Duration::from_millis(80))
+        .screen(app)
+        .build(std::io::stdout(), backend)?
+        .run::<App>()?;
 
-        // Trigger new fetch if needed
-        if app.show_provider_panel
-            && app.provider_panel_state.needs_fetch
-            && app.provider_panel_state.models_rx.is_none()
-        {
-            app.provider_panel_state.needs_fetch = false;
-            app.provider_panel_state.models_loading = true;
-            app.provider_panel_state.models.clear();
-            app.provider_panel_state.models_error = None;
-            app.provider_panel_state.show_dropdown = false;
-
-            let all = providers::ProviderKind::all();
-            let sel = app.provider_panel_state.selected_provider;
-            let kind = all.get(sel).cloned().unwrap_or(app.config.kind.clone());
-            let fetch_config = providers::ProviderConfig {
-                kind,
-                api_key: app.config.api_key.clone(),
-                base_url: Some(app.provider_panel_state.url_buffer.clone())
-                    .filter(|s| !s.is_empty()),
-                model: app.config.model.clone(),
-                max_tokens: app.config.max_tokens,
-                temperature: app.config.temperature,
-            };
-
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            app.provider_panel_state.models_rx = Some(rx);
-
-            tokio::spawn(async move {
-                let result = providers::fetch_models(&fetch_config).await;
-                match result {
-                    Ok(list) => {
-                        let names: Vec<String> = list.into_iter().map(|m| m.id).collect();
-                        let _ = tx.send(Ok(names));
-                    }
-                    Err(e) => {
-                        let _ = tx.send(Err(e));
-                    }
-                }
-            });
-        }
-
-        // Draw
-        terminal.draw(|frame| app.render(frame))?;
-
-        // Tick-based spinner advancement + animation tick
-        let now = Instant::now();
-        if now.duration_since(app.last_tick) >= tick_rate {
-            if app.is_streaming {
-                app.tick_spinner();
-            }
-            app.anim_tick = app.anim_tick.wrapping_add(1);
-            app.last_tick = now;
-        }
-
-        // Check for quit
-        if app.should_quit {
-            break;
-        }
-
-        // Poll for input with a short timeout (so streaming events get processed)
-        if event::poll(Duration::from_millis(50))? {
-            match event::read()? {
-                Event::Key(key) => app.handle_key(key),
-                Event::Mouse(mouse) => app.handle_mouse(mouse.kind),
-                Event::Resize(_w, _h) => {
-                    // Terminal resize is handled automatically by ratatui
-                }
-                _ => {}
-            }
-        }
-    }
-
-    // ── Cleanup ────────────────────────────────────────────────────────────
-    terminal::disable_raw_mode()?;
-    let mut stdout = std::io::stdout();
-    stdout.execute(LeaveAlternateScreen)?;
-
-    // Print a summary on exit
+    // Session summary (tokens from global statics, config captured before run)
+    let (tokens_in, tokens_out) = omega_core::commands::chat::session_token_counts();
     println!();
     println!("Ω Omega Agent — session summary");
-    println!("  Model:     {}", app.config.model);
-    println!("  Provider:  {}", app.config.kind);
-    println!("  Messages:  {}", app.session_messages);
-    println!("  Tokens:    {} in / {} out", app.session_tokens_in, app.session_tokens_out);
+    println!("  Model:     {}", model);
+    println!("  Provider:  {}", kind);
+    println!("  Tokens:    {} in / {} out", tokens_in, tokens_out);
     println!();
 
     Ok(())
