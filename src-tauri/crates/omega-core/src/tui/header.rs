@@ -100,6 +100,7 @@ impl Widget for &HeaderState {
             .saturating_sub(if ctx_span.is_some() { ctx_width } else { 0 })
             .saturating_sub(right_width);
 
+<<<<<<< HEAD
         let mut spans = left_spans;
         if fill_width > 0 {
             spans.push(Span::raw(" ".repeat(fill_width as usize)));

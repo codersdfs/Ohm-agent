@@ -353,6 +353,7 @@ pub fn render(
 
     let para = Paragraph::new(text)
         .block(Block::default().style(Style::default().bg(theme::BG)))
+        .style(Style::default().bg(theme::BG))
         .wrap(Wrap { trim: false });
     para.render(area, buf);
 }

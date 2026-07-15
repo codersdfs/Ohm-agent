@@ -32,6 +32,11 @@ pub struct Skill {
     pub name: String,
     pub description: String,
     pub endpoint: String,
+    /// Optional JSON Schema describing this skill's parameters.
+    /// When provided, tools will advertise a typed parameter schema to the LLM
+    /// instead of relying on `additionalProperties: true` with no property definitions.
+    #[serde(default)]
+    pub parameters: Option<serde_json::Value>,
 }
 
 impl Skill {
@@ -39,8 +44,15 @@ impl Skill {
         let content = std::fs::read_to_string(path)
             .map_err(|e| format!("failed to read file: {e}"))?;
 
-        let skill: Skill =
+        let mut skill: Skill =
             serde_json::from_str(&content).map_err(|e| format!("invalid JSON: {e}"))?;
+
+        // Normalize parameters: if present but not a valid JSON Schema object, treat as absent
+        if let Some(ref params) = skill.parameters {
+            if !params.is_object() {
+                skill.parameters = None;
+            }
+        }
 
         if skill.name.is_empty() {
             return Err("skill name is empty".into());

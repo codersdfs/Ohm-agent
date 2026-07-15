@@ -13,7 +13,7 @@ mod orchestrator;
 
 pub mod tools;
 
-pub use types::{ToolError, ToolResult, ToolInput, ToolRequest, ExecutionOutcome, PermissionResult, BudgetCheck, GateCheckResult, GateViolationInfo};
+pub use types::{ToolError, ToolErrorKind, ToolResult, ToolInput, ToolRequest, ExecutionOutcome, PermissionResult, BudgetCheck, GateCheckResult, GateViolationInfo};
 pub use traits::Tool;
 pub use context::ToolUseContext;
 pub use registry::ToolRegistry;

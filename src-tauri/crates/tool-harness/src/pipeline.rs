@@ -1,6 +1,6 @@
 // 14-step execution pipeline
 
-use crate::{ToolRegistry, ToolUseContext, ToolInput, ToolResult, ToolError, PermissionResult, BudgetCheck};
+use crate::{ToolRegistry, ToolUseContext, ToolInput, ToolResult, ToolError, ToolErrorKind, PermissionResult, BudgetCheck, Tool};
 use crate::{PermissionResolver, ResultBudget};
 use crate::HooksRegistry;
 
@@ -58,17 +58,17 @@ impl ExecutionPipeline {
     ) -> Result<(ToolResult, BudgetCheck), ToolError> {
         // Step 1: Tool Lookup
         let tool = self.registry.get(tool_name)
-            .ok_or_else(|| ToolError::new(format!("Tool not found: {}", tool_name)))?;
+            .ok_or_else(|| ToolError::with_kind_and_source(ToolErrorKind::NotFound, format!("Tool not found: {}", tool_name), tool_name))?;
 
         // Step 2: Abort check (via CancellationToken)
         if let Some(token) = &ctx.abort_token {
             if token.is_cancelled() {
-                return Err(ToolError::new("Execution aborted"));
+                return Err(ToolError::with_kind(ToolErrorKind::Aborted, "Execution aborted"));
             }
         }
 
         // Step 3: JSON schema validation
-        self.validate_input_schema(tool_name, &input)?;
+        self.validate_input_schema(tool, &input)?;
 
         // Step 4: Semantic validation (tool-specific)
         // Semantic validation happens inside tool.call() below.
@@ -141,35 +141,31 @@ impl ExecutionPipeline {
         }))
     }
 
-    fn validate_input_schema(&self, tool_name: &str, input: &ToolInput) -> Result<(), ToolError> {
-        let tool = self.registry.get(tool_name)
-            .ok_or_else(|| ToolError::new(format!("Tool not found: {}", tool_name)))?;
+    fn validate_input_schema(&self, tool: &dyn Tool, input: &ToolInput) -> Result<(), ToolError> {
         let schema = tool.parameters_schema();
 
         crate::schema::validate_input(&schema, &input.args)
-            .map_err(|e| ToolError::with_details("Schema validation failed", e.to_string()))
+            .map_err(|e| ToolError {
+                kind: ToolErrorKind::SchemaValidation,
+                message: "Schema validation failed".into(),
+                details: Some(e.to_string()),
+                retryable: false,
+                source_tool: tool.name().to_string().into(),
+            })
     }
 
     fn backfill_input(&self, mut input: ToolInput) -> Result<ToolInput, ToolError> {
-        // Expand ~ to home directory on supported platforms
-        if let Some(path) = input.args.get("filePath").and_then(|v| v.as_str()) {
-            if path.starts_with('~') {
-                let home = dirs::home_dir()
-                    .map(|h| h.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "~".into());
-                let expanded = format!("{}{}", home, &path[1..]);
-                input.args["filePath"] = serde_json::json!(expanded);
-            }
-        }
-
-        // Expand path in glob patterns
-        if let Some(path) = input.args.get("path").and_then(|v| v.as_str()) {
-            if path.starts_with('~') {
-                let home = dirs::home_dir()
-                    .map(|h| h.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "~".into());
-                let expanded = format!("{}{}", home, &path[1..]);
-                input.args["path"] = serde_json::json!(expanded);
+        // Expand ~ to home directory for any string argument that starts with ~
+        if let Some(obj) = input.args.as_object_mut() {
+            for (_key, value) in obj.iter_mut() {
+                if let Some(s) = value.as_str() {
+                    if s.starts_with('~') && s.len() > 1 {
+                        let home = dirs::home_dir()
+                            .map(|h| h.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| "~".into());
+                        *value = serde_json::json!(format!("{}{}", home, &s[1..]));
+                    }
+                }
             }
         }
 

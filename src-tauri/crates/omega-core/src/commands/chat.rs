@@ -375,11 +375,18 @@ pub async fn stream_message_with_history<E: ChatEmitter>(
                             s.finish_and_clear();
                         }
                     }
-                        emitter.emit_token(&chunk.content)?;
-                        full_response.push_str(&chunk.content);
+                    emitter.emit_token(&chunk.content)?;
+                    full_response.push_str(&chunk.content);
                 }
 
                 if let Some(ref deltas) = chunk.delta_tool_calls {
+                    // Model is producing tool calls — clear spinner if still spinning
+                    if !streaming_text {
+                        streaming_text = true;
+                        if let Some(ref s) = spinner {
+                            s.finish_and_clear();
+                        }
+                    }
                     log::debug!("received {} tool call deltas", deltas.len());
                     for d in deltas {
                         let pos = tool_call_deltas.iter().position(|(idx, _, _, _)| *idx == d.index);
