@@ -29,101 +29,98 @@ impl HeaderState {
         }
     }
 
-    fn ctx_gauge(&self) -> (String, ratatui::style::Color) {
+    fn ctx_gauge_color(&self) -> Option<(f32, ratatui::style::Color)> {
         let pct = match self.ctx_pct {
-            Some(p) => p.min(100),
-            None => return (String::new(), theme::DIM),
+            Some(p) => p.min(100) as f32,
+            None => return None,
         };
-
-        let color = if pct > 90 {
+        let color = if pct > 90.0 {
             theme::ERROR
-        } else if pct > 70 {
+        } else if pct > 70.0 {
             theme::WARN
         } else {
             theme::DIM
         };
-
-        let filled = ((pct as f32 / 100.0) * 10.0).round() as usize;
-        let filled = filled.min(10);
-        let empty = 10 - filled;
-
-        let bar: String = std::iter::repeat('▓')
-            .take(filled)
-            .chain(std::iter::repeat('░').take(empty))
-            .collect();
-
-        (format!(" ctx {} {}% ", bar, pct), color)
+        Some((pct / 100.0, color))
     }
 }
 
 impl Widget for &HeaderState {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        if area.height < 1 || area.width < 4 {
+        if area.height < 2 || area.width < 20 {
             return;
         }
 
+        let top_line_y = area.y;
+        let bottom_line_y = area.y + 1;
+
+        // ── Line 1: Ω label, model/provider, context gauge ──────────────
         let label = format!(" omega v{} ", self.app_version);
 
         let left_spans = vec![
             Span::styled("Ω ", Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD)),
             Span::styled(label, theme::style_dim_bold()),
-            Span::styled("· ", theme::style_dim()),
-            Span::styled(&self.model, theme::style_dim()),
-            Span::styled(" · ", theme::style_dim()),
-            Span::styled(&self.provider, theme::style_dim()),
         ];
 
-        let (ctx_text, ctx_color) = self.ctx_gauge();
-        let ctx_span = if !ctx_text.is_empty() {
-            Some(Span::styled(ctx_text, Style::default().fg(ctx_color)))
-        } else {
-            None
-        };
-
-        let right_text = if area.width > 60 {
-            let cwd = if self.cwd.len() > 30 {
-                format!("…{}", &self.cwd[self.cwd.len().saturating_sub(29)..])
-            } else {
-                self.cwd.clone()
-            };
-            format!(" {}", cwd)
-        } else {
-            String::new()
-        };
-        let right = Span::styled(right_text, theme::style_dim());
+        // Right side: context gauge as a thin bar if available
+        let right_gauge = self.ctx_gauge_color().map(|(pct, color)| {
+            let bar_width = 10u16;
+            let filled = (pct * bar_width as f32).round() as u16;
+            let filled = filled.min(bar_width);
+            let bar: String = std::iter::repeat('█')
+                .take(filled as usize)
+                .chain(std::iter::repeat('░').take((bar_width - filled) as usize))
+                .collect();
+            let pct_text = format!(" {:.0}% ", pct * 100.0);
+            Span::styled(
+                format!("{} {}", bar, pct_text),
+                Style::default().fg(color),
+            )
+        });
 
         let left_width: u16 = left_spans.iter().map(|s| s.width() as u16).sum();
-        let ctx_width = ctx_span.as_ref().map(|s| s.width() as u16).unwrap_or(0);
-        let right_width = right.width() as u16;
-        let fill_width = area.width
-            .saturating_sub(left_width)
-            .saturating_sub(if ctx_span.is_some() { ctx_width } else { 0 })
-            .saturating_sub(right_width);
+        let right_width = right_gauge.as_ref().map(|s| s.width() as u16).unwrap_or(0);
+        let fill = area.width.saturating_sub(left_width).saturating_sub(right_width + 1);
 
-<<<<<<< HEAD
-        let mut spans = left_spans;
-        if fill_width > 0 {
-            spans.push(Span::raw(" ".repeat(fill_width as usize)));
+        let mut line1_spans = left_spans;
+        if fill > 0 {
+            line1_spans.push(Span::raw(" ".repeat(fill as usize)));
         }
-        if let Some(ctx) = ctx_span {
-            spans.push(ctx);
+        if let Some(gauge) = right_gauge {
+            line1_spans.push(gauge);
         }
-        spans.push(right);
 
-        let para = Paragraph::new(Line::from(spans)).block(
-            Block::default()
-                .style(Style::default().bg(theme::BG)),
-        );
-        para.render(area, buf);
+        let line1 = Paragraph::new(Line::from(line1_spans))
+            .block(Block::default().style(Style::default().bg(theme::BG)));
+        line1.render(Rect::new(area.x, top_line_y, area.width, 1), buf);
 
-        // Thin rule beneath the header
-        if area.height >= 2 {
-            let rule_y = area.y + 1;
-            let rule_color = theme::DIM;
+        // ── Line 2: model · provider · cwd ─────────────────────────────
+        let cwd_display = if self.cwd.len() > 35 {
+            format!("…{}", &self.cwd[self.cwd.len().saturating_sub(34)..])
+        } else {
+            self.cwd.clone()
+        };
+
+        let line2_spans = vec![
+            Span::styled("model: ", theme::style_dim()),
+            Span::styled(&self.model, theme::style_dim()),
+            Span::styled(" · provider: ", theme::style_dim()),
+            Span::styled(&self.provider, theme::style_dim()),
+            Span::styled(" · cwd: ", theme::style_dim()),
+            Span::styled(cwd_display, theme::style_dim()),
+        ];
+
+        let line2 = Paragraph::new(Line::from(line2_spans))
+            .block(Block::default().style(Style::default().bg(theme::BG)));
+        line2.render(Rect::new(area.x, bottom_line_y, area.width, 1), buf);
+
+        // ── Thin separator line below the two-line header ──────────────
+        let rule_y = area.y + 2;
+        if rule_y < area.y + area.height {
             for x in area.x..area.x + area.width {
                 if let Some(cell) = theme::buf_cell_mut(buf, x, rule_y) {
                     cell.set_symbol("─");
-                    cell.set_fg(rule_color);
+                    cell.set_fg(theme::DIM);
                 }
             }
         }

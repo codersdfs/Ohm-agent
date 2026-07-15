@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use crate::{AppState, MutexExt};
 use crate::ChatEmitter;
-use colored::Colorize;
+
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const DIM: &str = "\x1b[2m";

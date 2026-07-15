@@ -5,12 +5,12 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
 use super::theme;
+use super::spinner::{OmegaSpinner, SpinnerState, CompactOmega};
 
 /// Status line state — what to show in the single-line footer.
 pub struct StatusState {
     pub mode: String,
-    pub spinner: Option<String>,
-    pub action_text: String,
+    pub spinner: OmegaSpinner,
     pub hint_text: Option<String>,
     pub tokens_in: u64,
     pub tokens_out: u64,
@@ -23,8 +23,7 @@ impl Default for StatusState {
     fn default() -> Self {
         Self {
             mode: "chat".into(),
-            spinner: None,
-            action_text: String::new(),
+            spinner: OmegaSpinner::new(),
             hint_text: None,
             tokens_in: 0,
             tokens_out: 0,
@@ -37,6 +36,16 @@ impl Default for StatusState {
 impl StatusState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Set the spinner state from external state (streaming, thinking, etc.)
+    pub fn set_spinner_state(&mut self, state: SpinnerState) {
+        self.spinner.state = state;
+    }
+
+    /// Tick the spinner animation.
+    pub fn tick_spinner(&mut self) {
+        self.spinner.tick();
     }
 
     fn format_tokens(count: u64) -> String {
@@ -75,20 +84,18 @@ impl Widget for &StatusState {
 
         let mut spans: Vec<Span<'static>> = Vec::new();
 
-        if let Some(ref spinner) = self.spinner {
-            spans.push(Span::styled(
-                format!(" {} ", spinner),
-                Style::default().fg(theme::ACCENT),
-            ));
+        // Render the Ω spinner with cooking phrase
+        let compact = CompactOmega::new(OmegaSpinner {
+            state: self.spinner.state,
+            tick: self.spinner.tick,
+            phrase_idx: self.spinner.phrase_idx,
+        });
+        let (spinner_text, spinner_style) = compact.render_inline();
+        if !spinner_text.trim().is_empty() {
+            spans.push(Span::styled(spinner_text, spinner_style));
         }
 
-        if !self.action_text.is_empty() {
-            spans.push(Span::styled(
-                format!("{} ", self.action_text),
-                theme::style_dim(),
-            ));
-        }
-
+        // If no spinner is active, show hint text
         if spans.is_empty() {
             if let Some(ref hint) = self.hint_text {
                 spans.push(Span::styled(
@@ -103,6 +110,7 @@ impl Widget for &StatusState {
             }
         }
 
+        // Right side: token counts
         let right_parts = self.token_display();
         let right_width = right_parts.len() as u16;
         let left_width: u16 = spans.iter().map(|s| s.width() as u16).sum();
@@ -113,6 +121,12 @@ impl Widget for &StatusState {
         }
         if !right_parts.is_empty() {
             spans.push(Span::styled(right_parts, theme::style_dim()));
+        }
+
+        // Add messages count as dimmed info
+        if self.messages_count > 0 {
+            let msgs_text = format!(" msgs: {} ", self.messages_count);
+            spans.push(Span::styled(msgs_text, theme::style_dim()));
         }
 
         let para = Paragraph::new(Line::from(spans))

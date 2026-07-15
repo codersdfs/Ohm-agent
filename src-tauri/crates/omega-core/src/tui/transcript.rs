@@ -40,9 +40,10 @@ impl TranscriptEntry {
         match self {
             TranscriptEntry::User { content } => {
                 let mut text = markdown::render_markdown(content);
-                // Prepend user marker
+                // Prepend user marker: "▶ You"
                 let marker = Line::from(vec![
-                    Span::styled("┃ ", Style::default().fg(theme::USER_MARKER)),
+                    Span::styled("▶ ", Style::default().fg(theme::USER_MARKER).add_modifier(Modifier::BOLD)),
+                    Span::styled("You", Style::default().fg(theme::USER_MARKER).add_modifier(Modifier::BOLD)),
                 ]);
                 let mut all = vec![marker];
                 all.append(&mut text.lines);
@@ -51,20 +52,21 @@ impl TranscriptEntry {
             TranscriptEntry::Assistant { content, rendered, is_streaming, thinking } => {
                 let mut all = Vec::new();
 
-                // Agent marker
+                // Agent marker: "Ω Agent"
                 all.push(Line::from(vec![
-                    Span::styled("▸ ", Style::default().fg(theme::AGENT_MARKER)),
+                    Span::styled("Ω ", Style::default().fg(theme::AGENT_MARKER).add_modifier(Modifier::BOLD)),
+                    Span::styled("Agent", Style::default().fg(theme::AGENT_MARKER).add_modifier(Modifier::BOLD)),
                 ]));
 
                 // Thinking/reasoning block (dimmed, before actual content)
                 if !thinking.is_empty() || (*is_streaming && content.is_empty()) {
                     let label = if thinking.is_empty() {
-                        "thinking…"
+                        "  thinking…"
                     } else {
-                        "reasoning"
+                        "  reasoning"
                     };
                     all.push(Line::from(vec![
-                        Span::styled(format!("  {} ", label), theme::style_dim()),
+                        Span::styled(format!("{} ", label), theme::style_dim()),
                     ]));
                     if !thinking.is_empty() {
                         let mut thinking_lines = markdown::render_markdown(thinking).lines;
@@ -85,7 +87,7 @@ impl TranscriptEntry {
 
                 if *is_streaming {
                     all.push(Line::from(Span::styled(
-                        " ⠋",
+                        " ⍟",
                         Style::default().fg(theme::ACCENT),
                     )));
                 }
@@ -102,9 +104,9 @@ impl TranscriptEntry {
                 } else {
                     Style::default().fg(theme::DIM)
                 };
+                let icon = if *is_error { "⚠" } else { "·" };
                 Text::from(Line::from(vec![
-                    Span::styled("  ", style),
-                    Span::styled(if *is_error { "⚠ " } else { "· " }, style),
+                    Span::styled(format!(" {} ", icon), style),
                     Span::styled(text.clone(), style),
                 ]))
             }
@@ -127,16 +129,25 @@ impl TranscriptEntry {
 
 /// Render a tool call box — Claude Code inspired: compact, colored borders,
 /// tool name embedded in the top border, args dimmed, result truncated.
-///
-/// ```text
-/// ┌─ read ─────────────────────────────────┐
-/// │ src/main.rs                             │
-/// ├─ 23 lines ─────────────────────────────┤
-/// │ pub fn main() { ...                     │
-/// └────────────────────────────────────────┘
-/// ```
+/// Uses per-tool icons: 🔧 for generic, 📖 for read, ✏️ for write/edit,
+/// 💻 for bash, 🔍 for grep/glob.
+fn tool_icon(name: &str) -> &'static str {
+    match name {
+        "read" | "view" | "cat" => "📖",
+        "write" | "create" => "✏️",
+        "edit" | "patch" | "str_replace" => "✏️",
+        "bash" | "shell" | "command" | "run" => "💻",
+        "glob" | "ls" | "list" => "🔍",
+        "grep" | "search" | "rg" => "🔍",
+        "task" | "agent" => "🧠",
+        "web" | "fetch" | "browse" => "🌐",
+        _ => "🔧",
+    }
+}
+
 fn render_tool_call_box(tool_name: &str, args: &str, result: &Option<String>, avail_width: u16) -> Text<'static> {
     let color = tool_color(tool_name);
+    let icon = tool_icon(tool_name);
     let mut lines: Vec<Line<'static>> = Vec::new();
 
     let arg_lines: Vec<&str> = if args.trim().is_empty() {
@@ -152,16 +163,17 @@ fn render_tool_call_box(tool_name: &str, args: &str, result: &Option<String>, av
         .unwrap_or_default();
     let max_res = result_lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
 
-    let name_len = tool_name.chars().count();
+    let name_str = format!("{} {}", icon, tool_name);
+    let name_len = name_str.chars().count();
 
     let (divider_text, is_err) = match result.as_ref().filter(|r| !r.trim().is_empty()) {
-        Some(r) if r.starts_with("ERROR") => (" Error".to_string(), true),
+        Some(r) if r.starts_with("ERROR") => (" ⚠ Error ".to_string(), true),
         Some(_) => {
             let n = result_lines.len();
-            if n > 0 { (format!(" {}L", n), false) }
-            else { (" Result".to_string(), false) }
+            if n > 0 { (format!(" {}L ", n), false) }
+            else { (" Result ".to_string(), false) }
         }
-        _ => (" Result".to_string(), false),
+        _ => (" Result ".to_string(), false),
     };
     let divider_len = divider_text.chars().count();
 
@@ -172,11 +184,11 @@ fn render_tool_call_box(tool_name: &str, args: &str, result: &Option<String>, av
         .min((avail_width as usize).saturating_sub(2).max(20))
         .max(name_len + 6);
 
-    // Top border with tool name embedded: ┌─ read ──────────────┐
-    let right_dashes = box_w.saturating_sub(name_len + 3); // 2 for "┌─", 1 for space
+    // Top border with tool name + icon embedded: ┌─ 📖 read ──────────────┐
+    let right_dashes = box_w.saturating_sub(name_len + 3);
     lines.push(Line::from(vec![
-        Span::styled("┌─", Style::default().fg(color)),
-        Span::styled(tool_name.to_string(), Style::default().fg(color).add_modifier(Modifier::BOLD)),
+        Span::styled("┌─ ", Style::default().fg(color)),
+        Span::styled(name_str.clone(), Style::default().fg(color).add_modifier(Modifier::BOLD)),
         Span::styled(
             format!(" {}", "─".repeat(right_dashes)),
             Style::default().fg(color),
@@ -219,9 +231,6 @@ fn render_tool_call_box(tool_name: &str, args: &str, result: &Option<String>, av
 }
 
 /// Build one interior line of the box: `│ <content><pad>│`.
-///
-/// If `content` exceeds the interior width it is **wrapped** into multiple
-/// lines so the box borders stay intact (long results don't bleed out).
 fn box_line(
     content: &str,
     box_w: usize,
@@ -240,12 +249,10 @@ fn box_line(
         if remaining.is_empty() {
             break;
         }
-        // Chars available for actual content on this row.
         let is_first = out.is_empty();
-        let lead = if is_first { prefix.len() } else { 1 }; // continuation lines always have a leading space
+        let lead = if is_first { prefix.len() } else { 1 };
         let max_chunk = max_body.saturating_sub(lead);
 
-        // Take up to max_body chars, respecting char boundaries.
         let chunk: String = remaining.chars().take(max_chunk).collect();
         let chunk_len = chunk.chars().count();
 
@@ -269,7 +276,6 @@ fn box_line(
     }
 
     if out.is_empty() {
-        // Empty content — emit one empty line.
         let pad = max_body.saturating_sub(prefix.len());
         out.push(Line::from(vec![
             Span::styled("│", Style::default().fg(border_color)),
@@ -415,8 +421,6 @@ impl Transcript {
         match event {
             super::component::UiStreamEvent::Token(t) => {
                 self.streaming_fragment.push_str(t);
-                // Append to the current assistant entry, creating a new bubble
-                // after a tool call (so the post-tool answer renders below the box).
                 let follows_tool = matches!(self.entries.last(), Some(TranscriptEntry::ToolCall { .. }));
                 if follows_tool {
                     let drop_idx = if self.entries.len() >= 2 {
@@ -511,7 +515,6 @@ impl Transcript {
                     text: e.clone(),
                     is_error: true,
                 });
-                // Remove empty assistant entry
                 if let Some(last) = self.entries.last() {
                     if let TranscriptEntry::Assistant { content, .. } = last {
                         if content.is_empty() {
@@ -542,5 +545,78 @@ impl Component for Transcript {
 
     fn render(&mut self, f: &mut ratatui::Frame, area: Rect) {
         render(area, f.buffer_mut(), &mut self.entries, &mut self.scroll);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn text_to_string(t: &Text<'static>) -> String {
+        t.lines.iter().map(|l| {
+            l.spans.iter().map(|s| s.content.clone()).collect::<String>()
+        }).collect::<Vec<_>>().join("\n")
+    }
+
+    #[test]
+    fn print_all_tool_boxes() {
+        let test_data: Vec<(&str, &str, Option<&str>)> = vec![
+            ("read", r#"{"filePath": "src/main.rs"}"#, Some("pub fn main() {\n    println!(\"hello\");\n}")),
+            ("write", r#"{"filePath": "hello.txt", "content": "Hello world"}"#, Some("wrote 11 bytes to hello.txt")),
+            ("edit", r#"{"filePath": "src/main.rs", "oldString": "foo", "newString": "bar"}"#, Some("patched src/main.rs")),
+            ("bash", "cargo build", Some("Compiling omega-core v0.1.0\nerror[E0425]: cannot find value `x` in this scope\n\nerror: could not compile `omega-core` (lib) due to 1 previous error")),
+            ("glob", r#"{"pattern": "**/*.rs"}"#, Some("src/main.rs\nsrc/lib.rs\nsrc/utils.rs")),
+            ("grep", r#"{"pattern": "fn main", "include": "*.rs"}"#, Some("src/main.rs:42: pub fn main() {")),
+            ("bash", "", None),
+        ];
+
+        println!("\n═══ Tool call box renders ═══\n");
+        for (tool, args, result) in &test_data {
+            let result_owned = result.map(|s| s.to_string());
+            let entry = TranscriptEntry::ToolCall {
+                tool_name: tool.to_string(),
+                args: args.to_string(),
+                result: result_owned,
+            };
+            let mut entry_clone = entry.clone();
+            let rendered = entry_clone.get_rendered(80);
+            println!("→ {} {} {}", tool, args, result.unwrap_or("(running)"));
+            println!("{}", text_to_string(&rendered));
+            println!();
+        }
+    }
+
+    #[test]
+    fn tool_box_borders_close() {
+        let mut entry = TranscriptEntry::ToolCall {
+            tool_name: "bash".into(),
+            args: "cargo build --release".into(),
+            result: Some("Compiling...\nFinished\n".into()),
+        };
+        let rendered = entry.get_rendered(60);
+        let s = text_to_string(&rendered);
+        let lines: Vec<&str> = s.lines().collect();
+
+        assert!(lines[0].starts_with("┌─"), "top border should start with ┌─");
+        assert!(lines[0].ends_with("┐"), "top border should end with ┐");
+
+        for line in &lines[1..lines.len()-1] {
+            if line.starts_with("├") || line.starts_with("└") { continue; }
+            assert!(line.starts_with("│"), "content lines should start with │");
+            assert!(line.ends_with("│"), "content lines should end with │");
+        }
+
+        assert!(lines.last().unwrap().starts_with("└"), "bottom border should start with └");
+        assert!(lines.last().unwrap().ends_with("┘"), "bottom border should end with ┘");
+
+        let widths: Vec<usize> = lines.iter().map(|l| l.chars().count()).collect();
+        let expected = widths[0];
+        for (i, w) in widths.iter().enumerate() {
+            assert_eq!(*w, expected,
+                "line {} is {} chars wide, expected {}: '{}'",
+                i, w, expected, lines[i]);
+        }
+
+        println!("Tool box borders OK — {} lines, {} chars wide", lines.len(), expected);
     }
 }

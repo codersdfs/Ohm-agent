@@ -21,6 +21,7 @@ use omega_core::tui::editor::{EditorMode, EditorState};
 use omega_core::tui::header::HeaderState;
 use omega_core::tui::status::StatusState;
 use omega_core::tui::omega_mark::{AgentState, AnimationPhase};
+use omega_core::tui::spinner::SpinnerState;
 use omega_core::tui::theme;
 use omega_core::tui::transcript::{self, TranscriptEntry, Transcript};
 use omega_core::{commands, AppState, ChatEmitter, default_db_path};
@@ -77,8 +78,6 @@ impl ChatEmitter for ChannelEmitter {
 
 // ── App state ────────────────────────────────────────────────────────────────
 
-const SPINNER_FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-
 struct App {
     // Core state
     state: Arc<AppState>,
@@ -96,8 +95,7 @@ struct App {
     is_streaming: bool,
     cancel_flag: Arc<AtomicBool>,
 
-    // Spinner / animation
-    spinner_idx: usize,
+    // Animation tick
     anim_tick: u64,
     last_tick: Instant,
 
@@ -140,7 +138,6 @@ impl App {
             status,
             is_streaming: false,
             cancel_flag: Arc::new(AtomicBool::new(false)),
-            spinner_idx: 0,
             anim_tick: 0,
             last_tick: Instant::now(),
 
@@ -290,8 +287,7 @@ impl App {
 
         self.is_streaming = false;
         self.editor.state = EditorMode::Idle;
-        self.status.spinner = None;
-        self.status.action_text = String::new();
+        self.status.set_spinner_state(SpinnerState::Idle);
 
         // Mark the pending assistant entry as stopped
         for entry in self.transcript.entries.iter_mut().rev() {
@@ -459,8 +455,7 @@ impl App {
         self.is_streaming = true;
         self.cancel_flag.store(false, Ordering::SeqCst);
         self.editor.state = EditorMode::Thinking;
-        self.status.action_text = "thinking…".into();
-        self.status.spinner = Some("⠋".into());
+        self.status.set_spinner_state(SpinnerState::Thinking);
 
         // Create channel
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -553,17 +548,14 @@ impl App {
             match &event {
                 UiStreamEvent::Token(_) => {
                     self.editor.state = EditorMode::Streaming;
-                    self.status.action_text = "streaming…".into();
-                    self.status.spinner = Some("⠙".into());
+                    self.status.set_spinner_state(SpinnerState::Streaming);
                 }
                 UiStreamEvent::Thinking(_) => {
                     self.editor.state = EditorMode::Thinking;
-                    self.status.action_text = "reasoning…".into();
-                    self.status.spinner = Some("⠉".into());
+                    self.status.set_spinner_state(SpinnerState::Thinking);
                 }
                 UiStreamEvent::ToolCall { .. } => {
-                    self.status.action_text = format!("running {}…", "tool");
-                    self.status.spinner = Some("⠹".into());
+                    self.status.set_spinner_state(SpinnerState::ToolCall);
                 }
                 UiStreamEvent::Done { tokens_in, tokens_out, .. } => {
                     self.session_tokens_in += *tokens_in as u64;
@@ -572,6 +564,7 @@ impl App {
                     done = true;
                 }
                 UiStreamEvent::Error(_) => {
+                    self.status.set_spinner_state(SpinnerState::Error);
                     done = true;
                 }
                 _ => {}
@@ -592,8 +585,7 @@ impl App {
         if done {
             self.is_streaming = false;
             self.editor.state = EditorMode::Idle;
-            self.status.spinner = None;
-            self.status.action_text = String::new();
+            self.status.set_spinner_state(SpinnerState::Idle);
             self.transcript.stream_event_rx = None;
             self.transcript.streaming_fragment.clear();
             self.transcript.scroll.auto_scroll = true; // jump to bottom
@@ -603,12 +595,9 @@ impl App {
         }
     }
 
-    /// Advance the spinner frame.
+    /// Advance the spinner animation.
     fn tick_spinner(&mut self) {
-        self.spinner_idx = (self.spinner_idx + 1) % SPINNER_FRAMES.len();
-        if let Some(spinner) = &mut self.status.spinner {
-            *spinner = SPINNER_FRAMES[self.spinner_idx].to_string();
-        }
+        self.status.tick_spinner();
     }
 
     /// Poll the provider panel model-fetch channel.
@@ -681,7 +670,7 @@ impl App {
         let area = frame.size();
 
         // ── Layout ──────────────────────────────────────────────────────────
-        let header_height = 2u16; // 1 line + 1 rule
+        let header_height = 3u16; // 2 lines + 1 separator rule
         let status_height = 1u16;
         let editor_min_height = 3u16; // border + 1 line + padding
         let editor_lines = self.editor.buffer.lines().count().max(1).min(8) as u16;
@@ -994,6 +983,14 @@ fn main() -> Result<()> {
     Application::new()
         .tick_rate(Duration::from_millis(80))
         .screen(app)
+        .on_startup(|| Command::Batch(vec![
+            Command::EnableRawMode,
+            Command::crossterm(crossterm::terminal::EnterAlternateScreen),
+        ]))
+        .on_shutdown(|| Command::Batch(vec![
+            Command::crossterm(crossterm::terminal::LeaveAlternateScreen),
+            Command::DisableRawMode,
+        ]))
         .build(std::io::stdout(), backend)?
         .run::<App>()?;
 
