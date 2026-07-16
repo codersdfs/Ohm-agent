@@ -320,7 +320,7 @@ mod tests {
             .flat_map(|l| l.spans.iter().map(|s| format!("{:?}", s.style.add_modifier(Modifier::BOLD))))
             .collect();
         let has_bold = result.lines.iter()
-            .any(|l| l.spans.iter().any(|s| s.style.add_modifier(Modifier::BOLD).contains(Modifier::BOLD)));
+            .any(|l| l.spans.iter().any(|s| s.style.add_modifier(Modifier::BOLD) == s.style));
         assert!(has_bold || true); // Style comparison is tricky; just check content
         let text: String = result.lines.iter().flat_map(|l| l.spans.iter().map(|s| s.content.clone())).collect();
         assert!(text.contains("hello"));

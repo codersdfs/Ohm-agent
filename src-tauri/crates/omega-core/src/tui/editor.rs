@@ -123,53 +123,48 @@ impl EditorState {
     }
 }
 
-/// Render the input editor with a state-colored border.
-pub fn render(
-    area: Rect,
-    buf: &mut Buffer,
-    editor: &EditorState,
-) {
-    if area.height < 1 || area.width < 4 {
-        return;
+impl Widget for &EditorState {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        if area.height < 1 || area.width < 4 {
+            return;
+        }
+
+        let border_color = self.border_color();
+        let border_style = Style::default().fg(border_color);
+
+        let label = match self.state {
+            EditorMode::Idle => " type a message… ",
+            EditorMode::Thinking => " thinking… ",
+            EditorMode::Streaming => " streaming… ",
+            EditorMode::Error => " error ",
+            EditorMode::Confirm => " confirm? ",
+        };
+
+        let block = Block::default()
+            .borders(Borders::TOP)
+            .border_style(border_style)
+            .title(Line::from(Span::styled(label, Style::default().fg(border_color).add_modifier(Modifier::DIM))));
+
+        let text = if self.buffer.is_empty() {
+            Text::from(Line::from(Span::styled(
+                "",
+                theme::style_dim(),
+            )))
+        } else {
+            let lines: Vec<Line> = self
+                .buffer
+                .split('\n')
+                .map(|l| Line::from(Span::raw(l.to_string())))
+                .collect();
+            Text::from(lines)
+        };
+
+        let para = Paragraph::new(text)
+            .block(block)
+            .style(Style::default().bg(theme::BG));
+
+        para.render(area, buf);
     }
-
-    let border_color = editor.border_color();
-    let border_style = Style::default().fg(border_color);
-
-    // Label reflects current mode
-    let label = match editor.state {
-        EditorMode::Idle => " type a message… ",
-        EditorMode::Thinking => " thinking… ",
-        EditorMode::Streaming => " streaming… ",
-        EditorMode::Error => " error ",
-        EditorMode::Confirm => " confirm? ",
-    };
-
-    let block = Block::default()
-        .borders(Borders::TOP)
-        .border_style(border_style)
-        .title(Line::from(Span::styled(label, Style::default().fg(border_color).add_modifier(Modifier::DIM))));
-
-    // Build the text from buffer — show visible portion
-    let text = if editor.buffer.is_empty() {
-        Text::from(Line::from(Span::styled(
-            "",
-            theme::style_dim(),
-        )))
-    } else {
-        let lines: Vec<Line> = editor
-            .buffer
-            .split('\n')
-            .map(|l| Line::from(Span::raw(l.to_string())))
-            .collect();
-        Text::from(lines)
-    };
-
-    let para = Paragraph::new(text)
-        .block(block)
-        .style(Style::default().bg(theme::BG));
-
-    para.render(area, buf);
 }
 
 /// Render slash-command suggestion popup above the editor.
@@ -215,4 +210,72 @@ pub fn render_suggestions(
         .style(Style::default().bg(theme::BG));
 
     popup.render(popup_area, buf);
+}
+
+use crate::tui::component::{Action, Component};
+use crossterm::event::{KeyCode, KeyEventKind};
+
+impl Component for EditorState {
+    fn handle_key(&mut self, key: crossterm::event::KeyEvent) -> Action {
+        if key.kind != KeyEventKind::Press {
+            return Action::Noop;
+        }
+        match key.code {
+            KeyCode::Enter => {
+                if key.modifiers.contains(crossterm::event::KeyModifiers::SHIFT) {
+                    self.newline();
+                    Action::Noop
+                } else {
+                    Action::SendMessage
+                }
+            }
+            KeyCode::Char(c) => {
+                self.insert_char(c);
+                Action::Noop
+            }
+            KeyCode::Backspace => {
+                self.backspace();
+                Action::Noop
+            }
+            KeyCode::Delete => {
+                self.delete();
+                Action::Noop
+            }
+            KeyCode::Left => {
+                if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
+                    self.cursor_home();
+                } else {
+                    self.cursor_left();
+                }
+                Action::Noop
+            }
+            KeyCode::Right => {
+                if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
+                    self.cursor_end();
+                } else {
+                    self.cursor_right();
+                }
+                Action::Noop
+            }
+            KeyCode::Home => {
+                self.cursor_home();
+                Action::Noop
+            }
+            KeyCode::End => {
+                self.cursor_end();
+                Action::Noop
+            }
+            KeyCode::Tab => {
+                if !self.suggestions.is_empty() {
+                    self.selected_suggestion = (self.selected_suggestion + 1) % self.suggestions.len();
+                }
+                Action::Noop
+            }
+            _ => Action::Noop,
+        }
+    }
+
+    fn render(&mut self, f: &mut ratatui::Frame, area: ratatui::layout::Rect) {
+        f.render_widget(&*self, area);
+    }
 }

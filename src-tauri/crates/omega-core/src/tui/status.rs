@@ -5,12 +5,12 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
 use super::theme;
+use super::spinner::{OmegaSpinner, SpinnerState, CompactOmega};
 
 /// Status line state — what to show in the single-line footer.
 pub struct StatusState {
     pub mode: String,
-    pub spinner: Option<String>,
-    pub action_text: String,
+    pub spinner: OmegaSpinner,
     pub hint_text: Option<String>,
     pub tokens_in: u64,
     pub tokens_out: u64,
@@ -23,8 +23,7 @@ impl Default for StatusState {
     fn default() -> Self {
         Self {
             mode: "chat".into(),
-            spinner: None,
-            action_text: String::new(),
+            spinner: OmegaSpinner::new(),
             hint_text: None,
             tokens_in: 0,
             tokens_out: 0,
@@ -39,7 +38,16 @@ impl StatusState {
         Self::default()
     }
 
-    /// Format a token count for display (e.g. 1234 → "1.2k", 850 → "850").
+    /// Set the spinner state from external state (streaming, thinking, etc.)
+    pub fn set_spinner_state(&mut self, state: SpinnerState) {
+        self.spinner.state = state;
+    }
+
+    /// Tick the spinner animation.
+    pub fn tick_spinner(&mut self) {
+        self.spinner.tick();
+    }
+
     fn format_tokens(count: u64) -> String {
         if count >= 1_000_000 {
             format!("{:.1}M", count as f64 / 1_000_000.0)
@@ -50,7 +58,6 @@ impl StatusState {
         }
     }
 
-    /// Build the right-side token display string.
     fn token_display(&self) -> String {
         let total_in = self.tokens_in + self.streaming_estimate;
         let total_out = self.tokens_out + self.streaming_estimate / 2;
@@ -69,62 +76,61 @@ impl StatusState {
     }
 }
 
-/// Render the status line — a single line under the editor.
-///
-/// Layout (left to right):
-///   [spinner] [action]  ...padding...  [tokens]
-pub fn render(area: Rect, buf: &mut Buffer, state: &StatusState) {
-    if area.width < 4 {
-        return;
-    }
-
-    let mut spans: Vec<Span<'static>> = Vec::new();
-
-    // Left side: spinner + action
-    if let Some(ref spinner) = state.spinner {
-        spans.push(Span::styled(
-            format!(" {} ", spinner),
-            Style::default().fg(theme::ACCENT),
-        ));
-    }
-
-    if !state.action_text.is_empty() {
-        spans.push(Span::styled(
-            format!("{} ", state.action_text),
-            theme::style_dim(),
-        ));
-    }
-
-    // Show keybinding hints when idle
-    if spans.is_empty() {
-        if let Some(ref hint) = state.hint_text {
-            spans.push(Span::styled(
-                format!(" {} ", hint),
-                Style::default().fg(theme::DIM),
-            ));
-        } else {
-            spans.push(Span::styled(
-                " · ",
-                Style::default().fg(theme::DIM),
-            ));
+impl Widget for &StatusState {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        if area.width < 4 {
+            return;
         }
+
+        let mut spans: Vec<Span<'static>> = Vec::new();
+
+        // Render the Ω spinner with cooking phrase
+        let compact = CompactOmega::new(OmegaSpinner {
+            state: self.spinner.state,
+            tick: self.spinner.tick,
+            phrase_idx: self.spinner.phrase_idx,
+        });
+        let (spinner_text, spinner_style) = compact.render_inline();
+        if !spinner_text.trim().is_empty() {
+            spans.push(Span::styled(spinner_text, spinner_style));
+        }
+
+        // If no spinner is active, show hint text
+        if spans.is_empty() {
+            if let Some(ref hint) = self.hint_text {
+                spans.push(Span::styled(
+                    format!(" {} ", hint),
+                    Style::default().fg(theme::DIM),
+                ));
+            } else {
+                spans.push(Span::styled(
+                    " · ",
+                    Style::default().fg(theme::DIM),
+                ));
+            }
+        }
+
+        // Right side: token counts
+        let right_parts = self.token_display();
+        let right_width = right_parts.len() as u16;
+        let left_width: u16 = spans.iter().map(|s| s.width() as u16).sum();
+        let fill = area.width.saturating_sub(left_width).saturating_sub(right_width);
+
+        if fill > 0 {
+            spans.push(Span::raw(" ".repeat(fill as usize)));
+        }
+        if !right_parts.is_empty() {
+            spans.push(Span::styled(right_parts, theme::style_dim()));
+        }
+
+        // Add messages count as dimmed info
+        if self.messages_count > 0 {
+            let msgs_text = format!(" msgs: {} ", self.messages_count);
+            spans.push(Span::styled(msgs_text, theme::style_dim()));
+        }
+
+        let para = Paragraph::new(Line::from(spans))
+            .style(Style::default().bg(theme::BG));
+        para.render(area, buf);
     }
-
-    // Right side: tokens
-    let right_parts = state.token_display();
-
-    let right_width = right_parts.len() as u16;
-    let left_width: u16 = spans.iter().map(|s| s.width() as u16).sum();
-    let fill = area.width.saturating_sub(left_width).saturating_sub(right_width);
-
-    if fill > 0 {
-        spans.push(Span::raw(" ".repeat(fill as usize)));
-    }
-    if !right_parts.is_empty() {
-        spans.push(Span::styled(right_parts, theme::style_dim()));
-    }
-
-    let para = Paragraph::new(Line::from(spans))
-        .style(Style::default().bg(theme::BG));
-    para.render(area, buf);
 }

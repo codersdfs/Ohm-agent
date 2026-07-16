@@ -9,11 +9,11 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 // ─── Poison-safe Mutex extension ─────────────────────────────────────────────
 
 pub trait MutexExt<T> {
-    fn lock_guard(&self) -> MutexGuard<T>;
+    fn lock_guard(&self) -> MutexGuard<'_, T>;
 }
 
 impl<T> MutexExt<T> for Mutex<T> {
-    fn lock_guard(&self) -> MutexGuard<T> {
+    fn lock_guard(&self) -> MutexGuard<'_, T> {
         match self.lock() {
             Ok(g) => g,
             Err(poisoned) => {
@@ -67,6 +67,18 @@ impl ChatEmitter for TerminalPrinter {
     }
     fn emit_error(&self, error: &str) -> Result<(), String> {
         eprintln!("{}", error);
+        Ok(())
+    }
+    fn emit_tool_call(&self, name: &str, args: &str) -> Result<(), String> {
+        eprintln!("  ▶ {} {}", name, args);
+        Ok(())
+    }
+    fn emit_tool_result(&self, name: &str, success: bool, output: &str) -> Result<(), String> {
+        if success {
+            eprintln!("  ✓ {} → {}", name, output);
+        } else {
+            eprintln!("  ✗ {} → {}", name, output);
+        }
         Ok(())
     }
 }

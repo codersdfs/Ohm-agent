@@ -43,6 +43,8 @@ pub struct ProviderPanelState {
     pub show_dropdown: bool,
     pub selected_model: usize,
     pub models_rx: Option<tokio::sync::oneshot::Receiver<Result<Vec<String>, String>>>,
+    /// Stashed config for Component rendering (API key display etc.).
+    pub config: providers::ProviderConfig,
 }
 
 impl ProviderPanelState {
@@ -52,14 +54,15 @@ impl ProviderPanelState {
             .iter()
             .position(|k| std::mem::discriminant(k) == std::mem::discriminant(&config.kind))
             .unwrap_or(0);
+        let default_url = config.base_url.clone().unwrap_or_else(|| config.kind.default_base_url());
         Self {
             visible: true,
             focus: PanelFocus::ProviderGrid,
             selected_provider: selected,
             model_buffer: config.model.clone(),
             model_cursor: config.model.len(),
-            url_buffer: config.base_url.clone().unwrap_or_else(|| config.kind.default_base_url()),
-            url_cursor: config.base_url.as_deref().unwrap_or("").len(),
+            url_buffer: default_url.clone(),
+            url_cursor: default_url.len(),
             max_tokens: config.max_tokens,
             temperature: config.temperature,
             provider_scroll: 0,
@@ -70,6 +73,7 @@ impl ProviderPanelState {
             show_dropdown: false,
             selected_model: 0,
             models_rx: None,
+            config: config.clone(),
         }
     }
 
@@ -336,15 +340,15 @@ pub fn render(
         return;
     }
 
-    let pw = area.width.min(56);  // popup width
-    let ph = 19u16;               // popup height (17 content + 2 border)
+    let pw = area.width.min(58);
+    let ph = 20u16;
     let x = area.x + (area.width.saturating_sub(pw)) / 2;
     let y = area.y + (area.height.saturating_sub(ph)) / 2;
 
     // Dim background
     for cy in area.y..area.y + area.height {
         for cx in area.x..area.x + area.width {
-            if let Some(cell) = buf.cell_mut((cx, cy)) {
+            if let Some(cell) = theme::buf_cell_mut(buf, cx, cy) {
                 cell.set_style(Style::default().fg(theme::DIM));
             }
         }
@@ -552,5 +556,22 @@ pub fn render(
                 );
             dd.render(dd_area, buf);
         }
+    }
+}
+
+use crate::tui::component::{Action, Component};
+
+impl Component for ProviderPanelState {
+    fn handle_key(&mut self, key: crossterm::event::KeyEvent) -> Action {
+        use crate::tui::provider_panel::{handle_key, PanelAction};
+        match handle_key(self, key) {
+            PanelAction::Apply => Action::ProviderApply,
+            PanelAction::Close => Action::ProviderClose,
+            PanelAction::None => Action::Noop,
+        }
+    }
+
+    fn render(&mut self, f: &mut ratatui::Frame, area: ratatui::layout::Rect) {
+        crate::tui::provider_panel::render(area, f.buffer_mut(), self, &self.config);
     }
 }

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use crate::{AppState, MutexExt};
 use crate::ChatEmitter;
-use colored::Colorize;
+
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const DIM: &str = "\x1b[2m";
@@ -197,14 +197,17 @@ async fn handle_tool_calls<E: ChatEmitter>(
         tool_call_id: None,
         name: None,
     });
+    // ponytail: emit_tool_call not emitted for Allow-only (no actual execution yet)
     for tc in tool_calls {
         emitter.emit_tool_call(&tc.function.name, &tc.function.arguments)?;
         let args = match serde_json::from_str(&tc.function.arguments) {
             Ok(v) => v,
             Err(e) => {
+                let err_msg = format!("Error parsing arguments for `{}`: {}.\nArguments received: {}", tc.function.name, e, tc.function.arguments);
+                emitter.emit_tool_result(&tc.function.name, false, &err_msg)?;
                 messages.push(providers::ChatMessage {
                     role: "tool".into(),
-                    content: format!("Error parsing arguments for `{}`: {}.\nArguments received: {}", tc.function.name, e, tc.function.arguments),
+                    content: err_msg,
                     tool_calls: None,
                     tool_call_id: Some(tc.id.clone()),
                     name: Some(tc.function.name.clone()),
@@ -220,6 +223,7 @@ async fn handle_tool_calls<E: ChatEmitter>(
         match check_permission(permission_mode, &tc.function.name, &tc.function.arguments).await {
             Permission::Allow => {}
             Permission::Deny => {
+                emitter.emit_tool_result(&tc.function.name, false, "denied")?;
                 messages.push(providers::ChatMessage {
                     role: "tool".into(),
                     content: format!("Tool `{}` was denied by permission mode", tc.function.name),
@@ -546,6 +550,8 @@ mod tests {
         fn emit_token(&self, _token: &str) -> Result<(), String> { Ok(()) }
         fn emit_done(&self, _full: &str) -> Result<(), String> { Ok(()) }
         fn emit_error(&self, _error: &str) -> Result<(), String> { Ok(()) }
+        fn emit_tool_call(&self, _name: &str, _args: &str) -> Result<(), String> { Ok(()) }
+        fn emit_tool_result(&self, _name: &str, _success: bool, _output: &str) -> Result<(), String> { Ok(()) }
     }
 
     fn sse_line(value: &serde_json::Value) -> String {
@@ -628,6 +634,7 @@ mod tests {
             provider: Some(cfg),
             system_prompt: None,
             permission_mode: "off".into(),
+            show_progress: false,
         };
 
         let emitter = TestEmitter;
@@ -714,6 +721,7 @@ mod tests {
                 provider: Some(cfg.clone()),
                 system_prompt: None,
                 permission_mode: "off".into(),
+                show_progress: false,
             },
             &emitter,
             &mut messages,
@@ -729,6 +737,7 @@ mod tests {
                 provider: Some(cfg.clone()),
                 system_prompt: None,
                 permission_mode: "off".into(),
+                show_progress: false,
             },
             &emitter,
             &mut messages,
@@ -816,6 +825,7 @@ mod tests {
                 provider: Some(cfg),
                 system_prompt: None,
                 permission_mode: "off".into(),
+                show_progress: false,
             },
             &emitter,
             &mut messages,
