@@ -1,11 +1,15 @@
-// Thin shim: re-exports from tool-harness with omega-core-specific gate logic
+// Tool command module — metadata-aware tool infrastructure
+//
+// Bridges the tool-harness metadata system into omega-core.
+// Provides the AI-facing tool metadata layer that enriches LLM
+// tool definitions with category, tags, examples, and error specs.
 
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 use crate::{AppState, MutexExt};
 
 // Re-export core types from tool-harness
-pub use tool_harness::{ToolRequest};
+pub use tool_harness::{ToolRequest, ToolCategory, ToolRef, ToolMetadata};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResult {
@@ -140,14 +144,45 @@ pub async fn execute_tool(
     execute_tool_inner(state, request).await
 }
 
-static CACHED_TOOL_LIST: OnceLock<Vec<String>> = OnceLock::new();
+// ─── Tool Registry Cache ─────────────────────────────────────────────────────
+
+static CACHED_REGISTRY: OnceLock<tool_harness::ToolRegistry> = OnceLock::new();
+
+fn registry() -> &'static tool_harness::ToolRegistry {
+    CACHED_REGISTRY.get_or_init(|| {
+        tool_harness::tools::default_tool_registry()
+    })
+}
+
+// ─── Tool Listing ────────────────────────────────────────────────────────────
 
 pub fn list_tools() -> Result<Vec<String>, String> {
-    Ok(CACHED_TOOL_LIST.get_or_init(|| {
-        let registry = tool_harness::tools::default_tool_registry();
-        registry.list()
-    }).clone())
+    Ok(registry().list())
 }
+
+/// Return tools grouped by category.
+pub fn list_by_category() -> Vec<(ToolCategory, Vec<ToolRef>)> {
+    registry().list_by_category().into_iter().collect()
+}
+
+// ─── Tool Metadata & Search ──────────────────────────────────────────────────
+
+/// Get full metadata for a specific tool.
+pub fn get_tool_metadata(name: &str) -> Option<ToolMetadata> {
+    registry().get_metadata(name)
+}
+
+/// Search tools by name, description, or tags.
+pub fn search_tools(query: &str) -> Vec<ToolRef> {
+    registry().search(query)
+}
+
+/// Get metadata for every registered tool.
+pub fn all_tool_metadata() -> Vec<ToolMetadata> {
+    registry().all_metadata()
+}
+
+// ─── System Prompt ───────────────────────────────────────────────────────────
 
 pub const CHAT_SYSTEM_PROMPT: &str = r#"You are Omega Agent, an AI coding assistant. You have access to tools for reading, writing, editing, and searching files on the user's system.
 
@@ -169,8 +204,7 @@ static CACHED_TOOL_DEFINITIONS: OnceLock<Vec<providers::ToolDefinition>> = OnceL
 
 pub fn tool_definitions() -> Vec<providers::ToolDefinition> {
     CACHED_TOOL_DEFINITIONS.get_or_init(|| {
-        let registry = tool_harness::tools::default_tool_registry();
-        let mut defs = registry.tool_definitions();
+        let mut defs = registry().tool_definitions();
         defs.extend(crate::commands::mcp::tool_definitions());
         defs
     }).clone()

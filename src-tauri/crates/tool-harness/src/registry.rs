@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use crate::Tool;
+use crate::metadata::{ToolCategory, ToolMetadata, ToolRef};
 use providers::ToolDefinition;
 
 /// Tool registry for registration, lookup, and listing
@@ -68,6 +69,88 @@ impl ToolRegistry {
         defs.sort_by(|a, b| a.function.name.cmp(&b.function.name));
         defs
     }
+
+    // ── Metadata-aware extensions ────────────────────────────────
+
+    /// Get metadata for a single tool by name.
+    pub fn get_metadata(&self, name: &str) -> Option<ToolMetadata> {
+        self.get(name).map(|t| t.metadata())
+    }
+
+    /// Return metadata for every registered tool.
+    pub fn all_metadata(&self) -> Vec<ToolMetadata> {
+        let mut meta: Vec<ToolMetadata> = self.built_ins.values()
+            .chain(self.mcp_tools.values())
+            .map(|t| t.metadata())
+            .collect();
+        meta.sort_by(|a, b| a.name.cmp(&b.name));
+        meta
+    }
+
+    /// Return lightweight references for all tools (cheaper than full metadata).
+    pub fn all_refs(&self) -> Vec<ToolRef> {
+        self.all_metadata().iter().map(ToolRef::from).collect()
+    }
+
+    /// List tools grouped by category.
+    /// Returns a BTreeMap so categories are in a consistent order.
+    pub fn list_by_category(&self) -> std::collections::BTreeMap<ToolCategory, Vec<ToolRef>> {
+        let mut map: std::collections::BTreeMap<ToolCategory, Vec<ToolRef>> =
+            std::collections::BTreeMap::new();
+        for r in self.all_refs() {
+            map.entry(r.category).or_default().push(r);
+        }
+        map
+    }
+
+    /// Search tools by name, description, or tags.
+    /// Simple substring matching — Phase 2 will add fuzzy/ranked search.
+    pub fn search(&self, query: &str) -> Vec<ToolRef> {
+        let q = query.to_lowercase();
+        let mut results: Vec<(ToolRef, u32)> = self.all_refs().into_iter().filter_map(|r| {
+            let mut score = 0u32;
+            let name_lower = r.name.to_lowercase();
+            let desc_lower = r.description.to_lowercase();
+
+            // Exact name match tops the list
+            if name_lower == q {
+                score += 100;
+            }
+            // Name starts with query
+            if name_lower.starts_with(&q) {
+                score += 50;
+            }
+            // Name contains query
+            if name_lower.contains(&q) {
+                score += 30;
+            }
+            // Description contains query
+            if desc_lower.contains(&q) {
+                score += 10;
+            }
+            // Tags contain query
+            for tag in &r.tags {
+                if tag.to_lowercase().contains(&q) {
+                    score += 15;
+                    break;
+                }
+            }
+
+            if score > 0 { Some((r, score)) } else { None }
+        }).collect();
+
+        results.sort_by(|a, b| b.1.cmp(&a.1));
+        results.into_iter().map(|(r, _)| r).collect()
+    }
+
+    /// Count tools by source type.
+    pub fn count_by_source(&self) -> (usize, usize, usize) {
+        let builtin = self.built_ins.len();
+        let mcp = self.mcp_tools.len();
+        (builtin, mcp, builtin + mcp)
+    }
+
+    // ── End metadata extensions ──────────────────────────────────
 
     /// Merge MCP tools into registry
     pub fn merge_mcp_tools(&mut self, tools: Vec<Box<dyn Tool>>) {

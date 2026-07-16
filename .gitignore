@@ -39,3 +39,6 @@ plan.md
 
 # Subagent artifacts
 .pi-subagents/
+
+# Windows reserved device name
+nul

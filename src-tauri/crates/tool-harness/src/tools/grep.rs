@@ -2,6 +2,7 @@
 
 use crate::{Tool, ToolInput, ToolResult, ToolError, ToolUseContext};
 use crate::schema::string_param;
+use crate::metadata::{ToolMetadata, ToolCategory, LatencyHint, ToolErrorSpec, ToolExample, ToolSource, CostHint, CostCategory};
 use async_trait::async_trait;
 use regex::Regex;
 use walkdir::WalkDir;
@@ -25,6 +26,7 @@ impl Default for GrepTool {
 impl Tool for GrepTool {
     fn name(&self) -> &str { "grep" }
     fn description(&self) -> &str { "Search for a regex pattern across files in a directory. Returns matching lines with line numbers." }
+
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
@@ -35,6 +37,69 @@ impl Tool for GrepTool {
             },
             "required": ["pattern"]
         })
+    }
+
+    fn metadata(&self) -> ToolMetadata {
+        let schema = self.parameters_schema();
+        ToolMetadata {
+            name: "grep".into(),
+            label: "Search Text".into(),
+            description: "Search for a regex pattern across files in a directory. Returns matching lines with line numbers.".into(),
+            doc: Some("Searches file contents using regex patterns. Supports filtering by file extension.
+Results are returned as file:line:content for each match.
+Searches up to 10 directory levels deep. For very large directories, narrow the search path.
+The pattern is a Rust regex — use standard regex syntax.".into()),
+            category: ToolCategory::SearchQuery,
+            subcategory: Some("pattern".into()),
+            tags: vec!["search".into(), "text".into(), "regex".into(), "find".into(), "code".into()],
+            parameters: schema.clone(),
+            param_summaries: ToolMetadata::extract_param_summaries(&schema),
+            read_only: true,
+            concurrency_safe: true,
+            latency_hint: LatencyHint::Slow,
+            supports_streaming: true,
+            max_result_chars: 50_000,
+            errors: vec![
+                ToolErrorSpec {
+                    kind: "invalid_regex".into(),
+                    description: "The pattern is not a valid regular expression".into(),
+                    recoverable: true,
+                    retry_advice: Some("Check your regex syntax — escape special characters".into()),
+                },
+                ToolErrorSpec {
+                    kind: "path_not_found".into(),
+                    description: "The search path does not exist".into(),
+                    recoverable: true,
+                    retry_advice: Some("Check the path with glob or ls".into()),
+                },
+            ],
+            examples: vec![
+                ToolExample {
+                    title: "Search for a function".into(),
+                    description: "Find all uses of a function name".into(),
+                    arguments: serde_json::json!({
+                        "pattern": "fn main",
+                        "path": "src",
+                        "include": "*.rs"
+                    }),
+                    expected_result: Some("src/main.rs:1: fn main() {".into()),
+                },
+                ToolExample {
+                    title: "Search all files".into(),
+                    description: "Find a string in any file".into(),
+                    arguments: serde_json::json!({
+                        "pattern": "TODO",
+                        "path": "."
+                    }),
+                    expected_result: None,
+                },
+            ],
+            cost_hint: Some(CostHint { tokens_per_call: 200, category: CostCategory::Moderate }),
+            version: "1.0.0".into(),
+            deprecation: None,
+            source: ToolSource::Builtin,
+            source_name: None,
+        }
     }
 
     fn is_read_only(&self, _input: &ToolInput) -> bool {

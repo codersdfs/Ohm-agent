@@ -2,6 +2,7 @@
 
 use crate::{Tool, ToolInput, ToolResult, ToolError, ToolUseContext};
 use crate::schema::string_param;
+use crate::metadata::{ToolMetadata, ToolCategory, LatencyHint, ToolErrorSpec, ToolExample, ToolSource};
 use async_trait::async_trait;
 
 pub struct ReadTool;
@@ -26,10 +27,88 @@ impl Tool for ReadTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "filePath": string_param("Absolute or relative path to the file")
+                "filePath": string_param("Absolute or relative path to the file"),
+                "offset": {
+                    "type": "number",
+                    "description": "Starting line number (1-indexed)",
+                    "default": 1
+                },
+                "limit": {
+                    "type": "number",
+                    "description": "Maximum lines to read",
+                    "default": 2000
+                }
             },
             "required": ["filePath"]
         })
+    }
+
+    fn metadata(&self) -> ToolMetadata {
+        let schema = self.parameters_schema();
+        ToolMetadata {
+            name: "read".into(),
+            label: "Read File".into(),
+            description: "Read the contents of a file at the given path".into(),
+            doc: Some("Returns file contents as a string up to max_result_chars (default 50KB). 
+For binary files, returns a hex dump. Use offset/limit to read specific line ranges.
+Respects project allowlists for safe paths.".into()),
+            category: ToolCategory::FileOperations,
+            subcategory: Some("read".into()),
+            tags: vec!["file".into(), "view".into(), "cat".into(), "content".into()],
+            parameters: schema.clone(),
+            param_summaries: ToolMetadata::extract_param_summaries(&schema),
+            read_only: true,
+            concurrency_safe: true,
+            latency_hint: LatencyHint::Fast,
+            supports_streaming: true,
+            max_result_chars: 50_000,
+            errors: vec![
+                ToolErrorSpec {
+                    kind: "not_found".into(),
+                    description: "File does not exist at the specified path".into(),
+                    recoverable: true,
+                    retry_advice: Some("Check the file path with glob or ls".into()),
+                },
+                ToolErrorSpec {
+                    kind: "permission_denied".into(),
+                    description: "Cannot read file due to OS permissions".into(),
+                    recoverable: false,
+                    retry_advice: Some("Check file permissions or run with elevated access".into()),
+                },
+                ToolErrorSpec {
+                    kind: "too_large".into(),
+                    description: "File exceeds maximum read size".into(),
+                    recoverable: true,
+                    retry_advice: Some("Use offset/limit to read in chunks".into()),
+                },
+            ],
+            examples: vec![
+                ToolExample {
+                    title: "Read a file".into(),
+                    description: "Read entire file contents".into(),
+                    arguments: serde_json::json!({"filePath": "src/main.rs"}),
+                    expected_result: Some("fn main() { ... }".into()),
+                },
+                ToolExample {
+                    title: "Read with offset".into(),
+                    description: "Read lines 100-200 of a file".into(),
+                    arguments: serde_json::json!({
+                        "filePath": "src/main.rs",
+                        "offset": 100,
+                        "limit": 100
+                    }),
+                    expected_result: None,
+                },
+            ],
+            cost_hint: Some(crate::metadata::CostHint {
+                tokens_per_call: 50,
+                category: crate::metadata::CostCategory::Free,
+            }),
+            version: "1.0.0".into(),
+            deprecation: None,
+            source: ToolSource::Builtin,
+            source_name: None,
+        }
     }
 
     fn is_read_only(&self, _input: &ToolInput) -> bool {
