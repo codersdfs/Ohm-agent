@@ -2,7 +2,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Paragraph, Widget, Wrap};
+use ratatui::widgets::{Block, Paragraph, Widget, Wrap};
 
 use super::markdown;
 use super::theme;
@@ -318,15 +318,21 @@ fn render_tool_call_box_simple(tool_name: &str, args: &str, result: &Option<Stri
 
 /// Render a boxed tool call entry with bordered box, collapsible args, and inline result preview.
 fn render_tool_call_box(state: &ToolCallState) -> Text<'static> {
-    let border_color = match state.status {
+    // Clone all data out of the reference to satisfy the 'static lifetime
+    let status = state.status;
+    let args_kv: Vec<(String, String)> = state.args_kv.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let result_preview: Option<String> = state.result_preview.clone();
+    let expanded = state.expanded;
+    let title = state.title();
+
+    let border_color = match status {
         ToolCallStatus::Pending => theme::DIM,
         ToolCallStatus::Running => theme::TOOL_BOX_BORDER,
         ToolCallStatus::Completed => theme::SUCCESS,
         ToolCallStatus::Errored => theme::ERROR,
     };
     let border_style = Style::default().fg(border_color);
-    let title_text = state.title();
-    let title_style = match state.status {
+    let _title_style = match status {
         ToolCallStatus::Completed => theme::style_tool_box_ok(),
         ToolCallStatus::Errored => theme::style_tool_box_err(),
         _ => theme::style_tool_box_title(),
@@ -335,13 +341,13 @@ fn render_tool_call_box(state: &ToolCallState) -> Text<'static> {
     let mut lines: Vec<Line<'static>> = Vec::new();
 
     // ── Arguments section (collapsible) ────────────────────────────────
-    if state.expanded {
-        if !state.args_kv.is_empty() {
+    if expanded {
+        if !args_kv.is_empty() {
             lines.push(Line::from(Span::styled(
                 " Arguments ",
                 theme::style_dim(),
             )));
-            for (k, v) in &state.args_kv {
+            for (k, v) in &args_kv {
                 lines.push(Line::from(vec![
                     Span::raw("  "),
                     Span::styled(k.clone(), Style::default().fg(theme::FG).add_modifier(Modifier::BOLD)),
@@ -352,13 +358,13 @@ fn render_tool_call_box(state: &ToolCallState) -> Text<'static> {
         }
 
         // ── Result section ─────────────────────────────────────────────
-        match (&state.result_preview, state.status) {
+        match (&result_preview, status) {
             (Some(preview), ToolCallStatus::Completed) => {
                 lines.push(Line::from(Span::styled(
                     " Result ",
                     theme::style_dim(),
                 )));
-                for (i, line) in preview.lines().enumerate().take(6) {
+                for (_i, line) in preview.lines().enumerate().take(6) {
                     let truncated = if line.len() > 100 {
                         format!("{}…", &line[..97])
                     } else {
@@ -384,7 +390,7 @@ fn render_tool_call_box(state: &ToolCallState) -> Text<'static> {
                     " Error ",
                     theme::style_error(),
                 )));
-                let first_line = preview.lines().next().unwrap_or("");
+                let first_line = preview.lines().next().unwrap_or("").to_string();
                 lines.push(Line::from(vec![
                     Span::raw("  "),
                     Span::styled(first_line, theme::style_error()),
@@ -406,10 +412,10 @@ fn render_tool_call_box(state: &ToolCallState) -> Text<'static> {
         }
     } else {
         // Collapsed: show a compact summary
-        match (&state.result_preview, state.status) {
+        match (&result_preview, status) {
             (Some(preview), ToolCallStatus::Completed) => {
                 let summary = preview.lines().next().unwrap_or("");
-                let truncated = if summary.len() > 80 {
+                let truncated: String = if summary.len() > 80 {
                     format!("{}…", &summary[..77])
                 } else {
                     summary.to_string()
@@ -442,7 +448,7 @@ fn render_tool_call_box(state: &ToolCallState) -> Text<'static> {
     }
 
     // ── Hints in collapsed state ───────────────────────────────────────
-    if !state.expanded && state.status == ToolCallStatus::Completed {
+    if !expanded && status == ToolCallStatus::Completed {
         lines.push(Line::from(Span::styled(
             "  Ctrl+E to expand",
             theme::style_dim(),
@@ -454,7 +460,6 @@ fn render_tool_call_box(state: &ToolCallState) -> Text<'static> {
 
     let mut output_lines: Vec<Line<'static>> = Vec::new();
 
-    let title = state.title();
     let title_chars: Vec<char> = title.chars().collect();
     let title_width = title_chars.len() as u16;
     let min_width = title_width + 6;
