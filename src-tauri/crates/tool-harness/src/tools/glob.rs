@@ -2,6 +2,7 @@
 
 use crate::{Tool, ToolInput, ToolResult, ToolError, ToolUseContext};
 use crate::schema::string_param;
+use crate::metadata::{ToolMetadata, ToolCategory, LatencyHint, ToolErrorSpec, ToolExample, ToolSource, CostHint, CostCategory};
 use async_trait::async_trait;
 
 pub struct GlobTool;
@@ -22,6 +23,7 @@ impl Default for GlobTool {
 impl Tool for GlobTool {
     fn name(&self) -> &str { "glob" }
     fn description(&self) -> &str { "Find files matching a glob pattern. Use for listing files in a directory structure." }
+
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
@@ -31,6 +33,63 @@ impl Tool for GlobTool {
             },
             "required": ["pattern"]
         })
+    }
+
+    fn metadata(&self) -> ToolMetadata {
+        let schema = self.parameters_schema();
+        ToolMetadata {
+            name: "glob".into(),
+            label: "Find Files".into(),
+            description: "Find files matching a glob pattern. Use for listing files in a directory structure.".into(),
+            doc: Some("Lists all files matching the given glob pattern.
+Use ** for recursive matching (e.g. '**/*.rs' finds all Rust files recursively).
+Use ? for single-character wildcards.
+The path parameter sets the base directory; the pattern is relative to it.
+Returns one file path per line, sorted alphabetically.".into()),
+            category: ToolCategory::SearchQuery,
+            subcategory: Some("file-search".into()),
+            tags: vec!["file".into(), "find".into(), "search".into(), "list".into(), "ls".into()],
+            parameters: schema.clone(),
+            param_summaries: ToolMetadata::extract_param_summaries(&schema),
+            read_only: true,
+            concurrency_safe: true,
+            latency_hint: LatencyHint::Fast,
+            supports_streaming: false,
+            max_result_chars: 50_000,
+            errors: vec![
+                ToolErrorSpec {
+                    kind: "invalid_pattern".into(),
+                    description: "The glob pattern is invalid".into(),
+                    recoverable: true,
+                    retry_advice: Some("Check glob syntax — use ** for recursive, * for single-level".into()),
+                },
+            ],
+            examples: vec![
+                ToolExample {
+                    title: "Find all Rust files".into(),
+                    description: "Recursively find all .rs files".into(),
+                    arguments: serde_json::json!({
+                        "pattern": "**/*.rs",
+                        "path": "."
+                    }),
+                    expected_result: Some("src/main.rs\nsrc/lib.rs\n...".into()),
+                },
+                ToolExample {
+                    title: "Find files in a specific directory".into(),
+                    description: "Find all TypeScript files in src".into(),
+                    arguments: serde_json::json!({
+                        "pattern": "**/*.ts",
+                        "path": "src"
+                    }),
+                    expected_result: None,
+                },
+            ],
+            cost_hint: Some(CostHint { tokens_per_call: 100, category: CostCategory::Cheap }),
+            version: "1.0.0".into(),
+            deprecation: None,
+            source: ToolSource::Builtin,
+            source_name: None,
+        }
     }
 
     fn is_read_only(&self, _input: &ToolInput) -> bool {

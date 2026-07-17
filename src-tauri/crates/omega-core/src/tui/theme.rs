@@ -48,6 +48,26 @@ pub const EDITOR_STREAMING: Color = Color::Cyan;
 pub const EDITOR_ERROR: Color = Color::Red;
 pub const EDITOR_CONFIRM: Color = Color::Yellow;
 
+// ── Tool box colors ────────────────────────────────────────────
+
+pub const TOOL_BOX_BORDER: Color = Color::Yellow;
+
+pub fn style_tool_box_border() -> Style {
+    Style::default().fg(TOOL_BOX_BORDER)
+}
+
+pub fn style_tool_box_title() -> Style {
+    Style::default().fg(TOOL_BOX_BORDER).add_modifier(Modifier::BOLD)
+}
+
+pub fn style_tool_box_ok() -> Style {
+    Style::default().fg(SUCCESS).add_modifier(Modifier::BOLD)
+}
+
+pub fn style_tool_box_err() -> Style {
+    Style::default().fg(ERROR).add_modifier(Modifier::BOLD)
+}
+
 // ── Convenience styles ───────────────────────────────────────────────────────
 
 pub fn style_text() -> Style {

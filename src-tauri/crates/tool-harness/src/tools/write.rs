@@ -2,6 +2,7 @@
 
 use crate::{Tool, ToolInput, ToolResult, ToolError, ToolUseContext};
 use crate::schema::string_param;
+use crate::metadata::{ToolMetadata, ToolCategory, LatencyHint, ToolErrorSpec, ToolExample, ToolSource, CostHint, CostCategory};
 use async_trait::async_trait;
 use std::path::PathBuf;
 
@@ -23,6 +24,7 @@ impl Default for WriteTool {
 impl Tool for WriteTool {
     fn name(&self) -> &str { "write" }
     fn description(&self) -> &str { "Write content to a file, creating it if it doesn't exist. Overwrites existing content." }
+
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
@@ -32,6 +34,68 @@ impl Tool for WriteTool {
             },
             "required": ["filePath", "content"]
         })
+    }
+
+    fn metadata(&self) -> ToolMetadata {
+        let schema = self.parameters_schema();
+        ToolMetadata {
+            name: "write".into(),
+            label: "Write File".into(),
+            description: "Write content to a file, creating it if it doesn't exist. Overwrites existing content.".into(),
+            doc: Some("Creates the file and any parent directories if they don't exist. 
+Overwrites the entire file content — use edit for targeted replacements.
+For new files, ensure parent directories exist or they will be created automatically.".into()),
+            category: ToolCategory::FileOperations,
+            subcategory: Some("write".into()),
+            tags: vec!["file".into(), "create".into(), "save".into(), "overwrite".into()],
+            parameters: schema.clone(),
+            param_summaries: ToolMetadata::extract_param_summaries(&schema),
+            read_only: false,
+            concurrency_safe: false,
+            latency_hint: LatencyHint::Slow,
+            supports_streaming: false,
+            max_result_chars: 1_000,
+            errors: vec![
+                ToolErrorSpec {
+                    kind: "permission_denied".into(),
+                    description: "Cannot write to the specified path due to OS permissions".into(),
+                    recoverable: false,
+                    retry_advice: Some("Check directory permissions or use a different path".into()),
+                },
+                ToolErrorSpec {
+                    kind: "disk_full".into(),
+                    description: "Insufficient disk space to write the file".into(),
+                    recoverable: false,
+                    retry_advice: None,
+                },
+                ToolErrorSpec {
+                    kind: "invalid_path".into(),
+                    description: "The specified path is not valid".into(),
+                    recoverable: true,
+                    retry_advice: Some("Check that the path contains valid characters".into()),
+                },
+            ],
+            examples: vec![
+                ToolExample {
+                    title: "Write a new file".into(),
+                    description: "Create a file with content".into(),
+                    arguments: serde_json::json!({
+                        "filePath": "src/hello.rs",
+                        "content": "fn main() { println!(\"Hello!\"); }"
+                    }),
+                    expected_result: Some("Wrote 35 bytes to src/hello.rs".into()),
+                },
+            ],
+            cost_hint: Some(CostHint { tokens_per_call: 30, category: CostCategory::Cheap }),
+            version: "1.0.0".into(),
+            deprecation: None,
+            source: ToolSource::Builtin,
+            source_name: None,
+        }
+    }
+
+    fn is_read_only(&self, _input: &ToolInput) -> bool {
+        false
     }
 
     async fn call(&self, input: ToolInput, _ctx: &ToolUseContext) -> Result<ToolResult, ToolError> {

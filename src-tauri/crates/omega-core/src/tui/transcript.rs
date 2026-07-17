@@ -21,7 +21,12 @@ pub enum TranscriptEntry {
         /// Model-internal reasoning/thinking, shown dimmed before content
         thinking: String,
     },
-    /// Tool call — name + summarized args
+    /// Tool call — rendered as a bordered box (Claude Code / Pi Agent style)
+    ToolCallBox {
+        state: ToolCallState,
+    },
+
+    /// Legacy simple inline tool call (not boxed)
     ToolCall {
         tool_name: String,
         args: String,
@@ -96,7 +101,10 @@ impl TranscriptEntry {
                 t
             }
             TranscriptEntry::ToolCall { tool_name, args, result } => {
-                render_tool_call_box(tool_name, args, result, _width)
+                render_tool_call_box_simple(tool_name, args, result, _width)
+            }
+            TranscriptEntry::ToolCallBox { state } => {
+                render_tool_call_box(state)
             }
             TranscriptEntry::Notice { text, is_error } => {
                 let style = if *is_error {
@@ -127,9 +135,9 @@ impl TranscriptEntry {
     }
 }
 
-/// Render a tool call box — Claude Code inspired: compact, colored borders,
-/// tool name embedded in the top border, args dimmed, result truncated.
-/// Uses per-tool icons: 🔧 for generic, 📖 for read, ✏️ for write/edit,
+// ─── Shared box-rendering helpers ────────────────────────────────────────────
+
+/// Per-tool icon for tool call boxes: 🔧 for generic, 📖 for read, ✏️ for write/edit,
 /// 💻 for bash, 🔍 for grep/glob.
 fn tool_icon(name: &str) -> &'static str {
     match name {
@@ -143,91 +151,6 @@ fn tool_icon(name: &str) -> &'static str {
         "web" | "fetch" | "browse" => "🌐",
         _ => "🔧",
     }
-}
-
-fn render_tool_call_box(tool_name: &str, args: &str, result: &Option<String>, avail_width: u16) -> Text<'static> {
-    let color = tool_color(tool_name);
-    let icon = tool_icon(tool_name);
-    let mut lines: Vec<Line<'static>> = Vec::new();
-
-    let arg_lines: Vec<&str> = if args.trim().is_empty() {
-        Vec::new()
-    } else {
-        args.lines().collect()
-    };
-    let max_arg = arg_lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
-
-    let result_lines: Vec<&str> = result
-        .as_ref()
-        .map(|r| r.lines().collect())
-        .unwrap_or_default();
-    let max_res = result_lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
-
-    let name_str = format!("{} {}", icon, tool_name);
-    let name_len = name_str.chars().count();
-
-    let (divider_text, is_err) = match result.as_ref().filter(|r| !r.trim().is_empty()) {
-        Some(r) if r.starts_with("ERROR") => (" ⚠ Error ".to_string(), true),
-        Some(_) => {
-            let n = result_lines.len();
-            if n > 0 { (format!(" {}L ", n), false) }
-            else { (" Result ".to_string(), false) }
-        }
-        _ => (" Result ".to_string(), false),
-    };
-    let divider_len = divider_text.chars().count();
-
-    let inner = [max_arg + 1, max_res + 1, divider_len + 2]
-        .iter().max().copied().unwrap_or(0);
-    let box_w = inner
-        .min(76)
-        .min((avail_width as usize).saturating_sub(2).max(20))
-        .max(name_len + 6);
-
-    // Top border with tool name + icon embedded: ┌─ 📖 read ──────────────┐
-    let right_dashes = box_w.saturating_sub(name_len + 3);
-    lines.push(Line::from(vec![
-        Span::styled("┌─ ", Style::default().fg(color)),
-        Span::styled(name_str.clone(), Style::default().fg(color).add_modifier(Modifier::BOLD)),
-        Span::styled(
-            format!(" {}", "─".repeat(right_dashes)),
-            Style::default().fg(color),
-        ),
-        Span::styled("┐", Style::default().fg(color)),
-    ]));
-
-    for al in &arg_lines {
-        lines.extend(box_line(al, box_w, color, theme::DIM, Modifier::empty(), true));
-    }
-
-    match result {
-        Some(r) if r.trim().is_empty() => {}
-        Some(_) => {
-            let res_color = if is_err { theme::ERROR } else { theme::SUCCESS };
-            push_divider(&mut lines, box_w, color, &divider_text, res_color);
-            let show = if result_lines.len() > 6 { &result_lines[..5] } else { &result_lines };
-            for rl in show {
-                lines.extend(box_line(rl, box_w, color, res_color, Modifier::empty(), true));
-            }
-            if result_lines.len() > 6 {
-                let rest = result_lines.len() - 5;
-                let sfx = if rest != 1 { " more lines" } else { " more line" };
-                lines.extend(box_line(&format!("… {}{}", rest, sfx), box_w, color, theme::DIM, Modifier::empty(), true));
-            }
-        }
-        None => {
-            lines.extend(box_line("running…", box_w, color, theme::DIM, Modifier::empty(), true));
-        }
-    }
-
-    // Bottom border
-    lines.push(Line::from(vec![
-        Span::styled("└", Style::default().fg(color)),
-        Span::styled("─".repeat(box_w), Style::default().fg(color)),
-        Span::styled("┘", Style::default().fg(color)),
-    ]));
-
-    Text::from(lines)
 }
 
 /// Build one interior line of the box: `│ <content><pad>│`.
@@ -302,6 +225,379 @@ fn push_divider(lines: &mut Vec<Line<'static>>, box_w: usize, border_color: Colo
         Span::styled("┤", Style::default().fg(border_color)),
     ]));
 }
+
+// ─── Simple tool call box (for legacy ToolCall variant) ──────────────────────
+
+/// Render a compact box for simple tool call entries (not collapsible).
+fn render_tool_call_box_simple(tool_name: &str, args: &str, result: &Option<String>, avail_width: u16) -> Text<'static> {
+    let color = tool_color(tool_name);
+    let icon = tool_icon(tool_name);
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    let arg_lines: Vec<&str> = if args.trim().is_empty() {
+        Vec::new()
+    } else {
+        args.lines().collect()
+    };
+    let max_arg = arg_lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+
+    let result_lines: Vec<&str> = result
+        .as_ref()
+        .map(|r| r.lines().collect())
+        .unwrap_or_default();
+    let max_res = result_lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+
+    let name_str = format!("{} {}", icon, tool_name);
+    let name_len = name_str.chars().count();
+
+    let (divider_text, is_err) = match result.as_ref().filter(|r| !r.trim().is_empty()) {
+        Some(r) if r.starts_with("ERROR") => (" ⚠ Error ".to_string(), true),
+        Some(_) => {
+            let n = result_lines.len();
+            if n > 0 { (format!(" {}L ", n), false) }
+            else { (" Result ".to_string(), false) }
+        }
+        _ => (" Result ".to_string(), false),
+    };
+    let divider_len = divider_text.chars().count();
+
+    let inner = [max_arg + 1, max_res + 1, divider_len + 2]
+        .iter().max().copied().unwrap_or(0);
+    let box_w = inner
+        .min(76)
+        .min((avail_width as usize).saturating_sub(2).max(20))
+        .max(name_len + 6);
+
+    // Top border with tool name + icon embedded
+    let right_dashes = box_w.saturating_sub(name_len + 3);
+    lines.push(Line::from(vec![
+        Span::styled("┌─ ", Style::default().fg(color)),
+        Span::styled(name_str.clone(), Style::default().fg(color).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            format!(" {}", "─".repeat(right_dashes)),
+            Style::default().fg(color),
+        ),
+        Span::styled("┐", Style::default().fg(color)),
+    ]));
+
+    for al in &arg_lines {
+        lines.extend(box_line(al, box_w, color, theme::DIM, Modifier::empty(), true));
+    }
+
+    match result {
+        Some(r) if r.trim().is_empty() => {}
+        Some(_) => {
+            let res_color = if is_err { theme::ERROR } else { theme::SUCCESS };
+            push_divider(&mut lines, box_w, color, &divider_text, res_color);
+            let show = if result_lines.len() > 6 { &result_lines[..5] } else { &result_lines };
+            for rl in show {
+                lines.extend(box_line(rl, box_w, color, res_color, Modifier::empty(), true));
+            }
+            if result_lines.len() > 6 {
+                let rest = result_lines.len() - 5;
+                let sfx = if rest != 1 { " more lines" } else { " more line" };
+                lines.extend(box_line(&format!("… {}{}", rest, sfx), box_w, color, theme::DIM, Modifier::empty(), true));
+            }
+        }
+        None => {
+            lines.extend(box_line("running…", box_w, color, theme::DIM, Modifier::empty(), true));
+        }
+    }
+
+    // Bottom border
+    lines.push(Line::from(vec![
+        Span::styled("└", Style::default().fg(color)),
+        Span::styled("─".repeat(box_w), Style::default().fg(color)),
+        Span::styled("┘", Style::default().fg(color)),
+    ]));
+
+    Text::from(lines)
+}
+
+// ─── Collapsible tool call box (for ToolCallBox variant with ToolCallState) ───
+
+/// Render a boxed tool call entry with bordered box, collapsible args, and inline result preview.
+fn render_tool_call_box(state: &ToolCallState) -> Text<'static> {
+    // Clone all data out of the reference to satisfy the 'static lifetime
+    let status = state.status;
+    let args_kv: Vec<(String, String)> = state.args_kv.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let result_preview: Option<String> = state.result_preview.clone();
+    let expanded = state.expanded;
+    let title = state.title();
+
+    let border_color = match status {
+        ToolCallStatus::Pending => theme::DIM,
+        ToolCallStatus::Running => theme::TOOL_BOX_BORDER,
+        ToolCallStatus::Completed => theme::SUCCESS,
+        ToolCallStatus::Errored => theme::ERROR,
+    };
+    let border_style = Style::default().fg(border_color);
+    let _title_style = match status {
+        ToolCallStatus::Completed => theme::style_tool_box_ok(),
+        ToolCallStatus::Errored => theme::style_tool_box_err(),
+        _ => theme::style_tool_box_title(),
+    };
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    // ── Arguments section (collapsible) ────────────────────────────────
+    if expanded {
+        if !args_kv.is_empty() {
+            lines.push(Line::from(Span::styled(
+                " Arguments ",
+                theme::style_dim(),
+            )));
+            for (k, v) in &args_kv {
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(k.clone(), Style::default().fg(theme::FG).add_modifier(Modifier::BOLD)),
+                    Span::styled(": ", theme::style_dim()),
+                    Span::styled(v.clone(), Style::default().fg(theme::DIM)),
+                ]));
+            }
+        }
+
+        // ── Result section ─────────────────────────────────────────────
+        match (&result_preview, status) {
+            (Some(preview), ToolCallStatus::Completed) => {
+                lines.push(Line::from(Span::styled(
+                    " Result ",
+                    theme::style_dim(),
+                )));
+                for (_i, line) in preview.lines().enumerate().take(6) {
+                    let truncated = if line.len() > 100 {
+                        format!("{}…", &line[..97])
+                    } else {
+                        line.to_string()
+                    };
+                    lines.push(Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(truncated, Style::default().fg(theme::FG)),
+                    ]));
+                }
+                if preview.lines().count() > 6 {
+                    lines.push(Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(
+                            format!("… {} more lines", preview.lines().count() - 6),
+                            theme::style_dim(),
+                        ),
+                    ]));
+                }
+            }
+            (Some(preview), ToolCallStatus::Errored) => {
+                lines.push(Line::from(Span::styled(
+                    " Error ",
+                    theme::style_error(),
+                )));
+                let first_line = preview.lines().next().unwrap_or("").to_string();
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(first_line, theme::style_error()),
+                ]));
+            }
+            (None, ToolCallStatus::Running) => {
+                lines.push(Line::from(Span::styled(
+                    "  ⏳ running…",
+                    theme::style_dim(),
+                )));
+            }
+            (None, ToolCallStatus::Pending) => {
+                lines.push(Line::from(Span::styled(
+                    "  ⋯ queued",
+                    theme::style_dim(),
+                )));
+            }
+            _ => {}
+        }
+    } else {
+        // Collapsed: show a compact summary
+        match (&result_preview, status) {
+            (Some(preview), ToolCallStatus::Completed) => {
+                let summary = preview.lines().next().unwrap_or("");
+                let truncated: String = if summary.len() > 80 {
+                    format!("{}…", &summary[..77])
+                } else {
+                    summary.to_string()
+                };
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(truncated, Style::default().fg(theme::DIM)),
+                ]));
+            }
+            (Some(_), ToolCallStatus::Errored) => {
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled("Error — see details", theme::style_error()),
+                ]));
+            }
+            (None, ToolCallStatus::Running) => {
+                lines.push(Line::from(Span::styled(
+                    "  ⏳ running…",
+                    theme::style_dim(),
+                )));
+            }
+            (None, ToolCallStatus::Pending) => {
+                lines.push(Line::from(Span::styled(
+                    "  ⋯ queued",
+                    theme::style_dim(),
+                )));
+            }
+            _ => {}
+        }
+    }
+
+    // ── Hints in collapsed state ───────────────────────────────────────
+    if !expanded && status == ToolCallStatus::Completed {
+        lines.push(Line::from(Span::styled(
+            "  Ctrl+E to expand",
+            theme::style_dim(),
+        )));
+    }
+
+    // Build the bordered block manually with box-drawing chars
+    let inner_text = Text::from(lines);
+
+    let mut output_lines: Vec<Line<'static>> = Vec::new();
+
+    let title_chars: Vec<char> = title.chars().collect();
+    let title_width = title_chars.len() as u16;
+    let min_width = title_width + 6;
+    let box_width = 60u16.max(min_width);
+
+    // Top border
+    let dash_count = box_width.saturating_sub(title_width).saturating_sub(4);
+    let top_line: String = format!(
+        "┌─{}─{}\u{2500}┐",
+        title_chars.iter().collect::<String>(),
+        "─".repeat(dash_count as usize),
+    );
+    output_lines.push(Line::from(Span::styled(top_line, border_style)));
+
+    // Inner content lines with side borders
+    for line in inner_text.lines.iter() {
+        let content_width = line.width() as u16;
+        let padding = box_width.saturating_sub(content_width).saturating_sub(2);
+        let mut spans = vec![Span::styled("│", border_style)];
+        spans.extend(line.spans.clone());
+        if padding > 0 {
+            spans.push(Span::raw(" ".repeat(padding as usize)));
+        }
+        spans.push(Span::styled("│", border_style));
+        output_lines.push(Line::from(spans));
+    }
+
+    // Bottom border
+    let bottom_simple = format!("└{:─<width$}┘", "", width = box_width as usize - 1);
+    output_lines.push(Line::from(Span::styled(bottom_simple, border_style)));
+
+    Text::from(output_lines)
+}
+
+// ─── ToolCallState ───────────────────────────────────────────────────────────
+
+/// Tool call execution status.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolCallStatus {
+    Pending,
+    Running,
+    Completed,
+    Errored,
+}
+
+/// State for a boxed tool call entry.
+#[derive(Clone)]
+pub struct ToolCallState {
+    pub tool_name: String,
+    /// Raw arguments JSON string
+    pub args: String,
+    /// Parsed key-value lines for display (computed from args)
+    pub args_kv: Vec<(String, String)>,
+    /// Full result text, if available
+    pub result: Option<String>,
+    /// Preview snippet of the result (first N chars)
+    pub result_preview: Option<String>,
+    /// Whether arguments are expanded (Ctrl+E to toggle)
+    pub expanded: bool,
+    /// Execution status
+    pub status: ToolCallStatus,
+    /// Duration string like "12ms"
+    pub duration: Option<String>,
+}
+
+impl ToolCallState {
+    pub fn new(tool_name: String, args: String) -> Self {
+        let args_kv = parse_args_kv(&args);
+        Self {
+            tool_name,
+            args,
+            args_kv,
+            result: None,
+            result_preview: None,
+            expanded: true, // auto-expand on create
+            status: ToolCallStatus::Running,
+            duration: None,
+        }
+    }
+
+    /// Compute the title string for the box border.
+    pub fn title(&self) -> String {
+        let icon = match self.status {
+            ToolCallStatus::Pending => "⋯",
+            ToolCallStatus::Running => "▶",
+            ToolCallStatus::Completed => "✓",
+            ToolCallStatus::Errored => "✗",
+        };
+        let dur = self.duration.as_deref().unwrap_or("");
+        if self.expanded {
+            format!(" {} {} {} ", icon, self.tool_name, dur)
+        } else {
+            let kv_count = self.args_kv.len();
+            let dur_suffix = if !dur.is_empty() { format!(" {}", dur) } else { String::new() };
+            if self.result_preview.is_some() {
+                format!(" {} {} ({} args){}", icon, self.tool_name, kv_count, dur_suffix)
+            } else {
+                format!(" {} {} ({} args){}", icon, self.tool_name, kv_count, dur_suffix)
+            }
+        }
+    }
+}
+
+/// Parse a JSON arguments string into key-value pairs for clean display.
+fn parse_args_kv(args: &str) -> Vec<(String, String)> {
+    if args.trim().is_empty() {
+        return Vec::new();
+    }
+    // Try to parse as JSON object
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(args) {
+        if let Some(obj) = val.as_object() {
+            let mut pairs: Vec<(String, String)> = Vec::new();
+            for (k, v) in obj {
+                let v_str = match v {
+                    serde_json::Value::String(s) => {
+                        if s.len() > 80 {
+                            format!("\"{}…\"", &s[..77])
+                        } else {
+                            format!("\"{}\"", s)
+                        }
+                    }
+                    other => other.to_string(),
+                };
+                pairs.push((k.clone(), v_str));
+            }
+            return pairs;
+        }
+    }
+    // Fallback: show raw args as a single entry
+    let preview = if args.len() > 100 {
+        format!("{}…", &args[..97])
+    } else {
+        args.to_string()
+    };
+    vec![("args".to_string(), preview)]
+}
+
+// ─── Scroll State ────────────────────────────────────────────────────────────
 
 /// Scroll state for the transcript.
 pub struct ScrollState {
@@ -393,6 +689,7 @@ pub fn scroll_bottom(scroll: &mut ScrollState) {
     scroll.offset = 0;
 }
 
+// ─── Transcript Component ────────────────────────────────────────────────────
 
 use crate::tui::component::{Action, Component};
 
@@ -548,6 +845,8 @@ impl Component for Transcript {
     }
 }
 
+// ─── Tests ───────────────────────────────────────────────────────────────────
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -556,6 +855,28 @@ mod tests {
         t.lines.iter().map(|l| {
             l.spans.iter().map(|s| s.content.clone()).collect::<String>()
         }).collect::<Vec<_>>().join("\n")
+    }
+
+    #[test]
+    fn test_parse_args_kv_empty() {
+        let kv = parse_args_kv("");
+        assert!(kv.is_empty());
+    }
+
+    #[test]
+    fn test_parse_args_kv_json_object() {
+        let kv = parse_args_kv(r#"{"filePath": "src/main.rs", "limit": 2000}"#);
+        assert!(kv.len() >= 2);
+        assert!(kv.iter().any(|(k, _)| k == "filePath"));
+        assert!(kv.iter().any(|(k, _)| k == "limit"));
+    }
+
+    #[test]
+    fn test_tool_call_state_title_pending() {
+        let state = ToolCallState::new("read".into(), r#"{}"#.into());
+        let title = state.title();
+        assert!(title.contains("read"));
+        assert!(title.contains("▶"));
     }
 
     #[test]
