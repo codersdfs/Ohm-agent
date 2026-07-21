@@ -91,6 +91,122 @@ impl ProviderPanelState {
     }
 }
 
+// ── Navigation helpers ──────────────────────────────────────────────────────
+
+/// Move focus up within the current field or navigate the provider grid up.
+fn move_focus_up(state: &mut ProviderPanelState) {
+    match state.focus {
+        PanelFocus::ProviderGrid if state.selected_provider > 0 => {
+            state.selected_provider -= 1;
+            state.needs_fetch = true;
+            if state.selected_provider < state.provider_scroll {
+                state.provider_scroll = state.provider_scroll.saturating_sub(1);
+            }
+        }
+        PanelFocus::MaxTokens => state.max_tokens = state.max_tokens.saturating_add(512),
+        PanelFocus::Temperature => state.temperature = (state.temperature + 0.1).min(2.0),
+        _ => {}
+    }
+}
+
+/// Move focus down within the current field or navigate the provider grid down.
+fn move_focus_down(state: &mut ProviderPanelState) {
+    match state.focus {
+        PanelFocus::ProviderGrid => {
+            let max = providers::ProviderKind::all().len() - 1;
+            if state.selected_provider < max {
+                state.selected_provider += 1;
+                state.needs_fetch = true;
+            }
+            if state.selected_provider >= state.provider_scroll + 5 {
+                state.provider_scroll = state.provider_scroll.saturating_add(1).min(max.saturating_sub(4));
+            }
+        }
+        PanelFocus::MaxTokens => state.max_tokens = state.max_tokens.saturating_sub(512).max(1),
+        PanelFocus::Temperature => state.temperature = (state.temperature - 0.1).max(0.0),
+        _ => {}
+    }
+}
+
+/// Move focus left: navigate provider grid columns or cursor left in text fields.
+fn move_focus_left(state: &mut ProviderPanelState) {
+    match state.focus {
+        PanelFocus::ProviderGrid if state.selected_provider > 2 => {
+            state.selected_provider -= 3;
+            state.needs_fetch = true;
+        }
+        PanelFocus::ModelField | PanelFocus::BaseUrlField => {
+            let cursor = state.current_cursor();
+            if cursor > 0 {
+                let prev = state.current_buffer()[..cursor].char_indices().last().map(|(i, _)| i).unwrap_or(0);
+                state.set_cursor(prev);
+            }
+        }
+        PanelFocus::MaxTokens => state.max_tokens = state.max_tokens.saturating_sub(512).max(1),
+        PanelFocus::Temperature => state.temperature = (state.temperature - 0.1).max(0.0),
+        _ => {}
+    }
+}
+
+/// Move focus right: navigate provider grid columns or cursor right in text fields.
+fn move_focus_right(state: &mut ProviderPanelState) {
+    match state.focus {
+        PanelFocus::ProviderGrid => {
+            let max = providers::ProviderKind::all().len() - 1;
+            if state.selected_provider + 3 <= max {
+                state.selected_provider += 3;
+                state.needs_fetch = true;
+            }
+        }
+        PanelFocus::ModelField | PanelFocus::BaseUrlField => {
+            let buf = state.current_buffer().to_string();
+            let cursor = state.current_cursor();
+            if cursor < buf.len() {
+                let next = buf[cursor..].char_indices().nth(1);
+                if let Some((i, _)) = next {
+                    state.set_cursor(cursor + i);
+                } else {
+                    state.set_cursor(buf.len());
+                }
+            }
+        }
+        PanelFocus::MaxTokens => state.max_tokens = state.max_tokens.saturating_add(512),
+        PanelFocus::Temperature => state.temperature = (state.temperature + 0.1).min(2.0),
+        _ => {}
+    }
+}
+
+/// Jump directly to a provider by number (1-indexed).
+fn jump_to_provider_by_number(state: &mut ProviderPanelState, num: usize) {
+    let max = providers::ProviderKind::all().len();
+    if num >= 1 && num <= max {
+        let idx = num - 1;
+        state.selected_provider = idx;
+        state.needs_fetch = true;
+        // Adjust scroll so the selected provider is visible
+        let items_per_col = 5usize;
+        if idx < state.provider_scroll {
+            state.provider_scroll = idx;
+        } else if idx >= state.provider_scroll + items_per_col {
+            state.provider_scroll = idx.saturating_sub(items_per_col).saturating_add(1);
+        }
+    }
+}
+
+/// Toggle the model dropdown open/closed.
+fn toggle_dropdown(state: &mut ProviderPanelState) {
+    if !state.models.is_empty() {
+        state.show_dropdown = !state.show_dropdown;
+        // Close: apply the currently selected model
+        if !state.show_dropdown {
+            if let Some(m) = state.models.get(state.selected_model) {
+                state.model_buffer = m.clone();
+                state.model_cursor = m.len();
+            }
+        }
+    }
+}
+
 // ── Key handler ─────────────────────────────────────────────────────────────
 
 pub fn handle_key(state: &mut ProviderPanelState, key: KeyEvent) -> PanelAction {
@@ -104,18 +220,18 @@ pub fn handle_key(state: &mut ProviderPanelState, key: KeyEvent) -> PanelAction 
             KeyCode::Esc | KeyCode::Tab => {
                 state.show_dropdown = false;
             }
-            KeyCode::Up => {
+            KeyCode::Up | KeyCode::Char('k') => {
                 if state.selected_model > 0 {
                     state.selected_model -= 1;
                 }
             }
-            KeyCode::Down => {
+            KeyCode::Down | KeyCode::Char('j') => {
                 let max = state.models.len().saturating_sub(1);
                 if state.selected_model < max {
                     state.selected_model += 1;
                 }
             }
-            KeyCode::Enter => {
+            KeyCode::Enter | KeyCode::Char(' ') => {
                 if let Some(model) = state.models.get(state.selected_model) {
                     state.model_buffer = model.clone();
                     state.model_cursor = model.len();
@@ -129,6 +245,8 @@ pub fn handle_key(state: &mut ProviderPanelState, key: KeyEvent) -> PanelAction 
 
     match key.code {
         KeyCode::Esc => return PanelAction::Close,
+
+        // Tab forward
         KeyCode::Tab => {
             state.focus = match state.focus {
                 PanelFocus::ProviderGrid => PanelFocus::ModelField,
@@ -139,6 +257,8 @@ pub fn handle_key(state: &mut ProviderPanelState, key: KeyEvent) -> PanelAction 
                 PanelFocus::ApplyButton => PanelFocus::ProviderGrid,
             };
         }
+
+        // Tab backward (Shift+Tab)
         KeyCode::BackTab => {
             state.focus = match state.focus {
                 PanelFocus::ProviderGrid => PanelFocus::ApplyButton,
@@ -149,88 +269,38 @@ pub fn handle_key(state: &mut ProviderPanelState, key: KeyEvent) -> PanelAction 
                 PanelFocus::ApplyButton => PanelFocus::Temperature,
             };
         }
-        KeyCode::Up => match state.focus {
-            PanelFocus::ProviderGrid if state.selected_provider > 0 => {
-                state.selected_provider -= 1;
-                state.needs_fetch = true;
-                if state.selected_provider < state.provider_scroll {
-                    state.provider_scroll = state.provider_scroll.saturating_sub(1);
-                }
-            }
-            PanelFocus::MaxTokens => state.max_tokens = state.max_tokens.saturating_add(512),
-            PanelFocus::Temperature => state.temperature = (state.temperature + 0.1).min(2.0),
-            _ => {}
-        },
-        KeyCode::Down => match state.focus {
-            PanelFocus::ProviderGrid => {
-                let max = providers::ProviderKind::all().len() - 1;
-                if state.selected_provider < max {
-                    state.selected_provider += 1;
-                    state.needs_fetch = true;
-                }
-                if state.selected_provider >= state.provider_scroll + 5 {
-                    state.provider_scroll = state.provider_scroll.saturating_add(1).min(max.saturating_sub(4));
-                }
-            }
-            PanelFocus::MaxTokens => state.max_tokens = state.max_tokens.saturating_sub(512).max(1),
-            PanelFocus::Temperature => state.temperature = (state.temperature - 0.1).max(0.0),
-            _ => {}
-        },
-        KeyCode::Left => match state.focus {
-            PanelFocus::ProviderGrid if state.selected_provider > 2 => {
-                state.selected_provider -= 3;
-                state.needs_fetch = true;
-            }
-            PanelFocus::ModelField | PanelFocus::BaseUrlField => {
-                let cursor = state.current_cursor();
-                if cursor > 0 {
-                    let prev = state.current_buffer()[..cursor].char_indices().last().map(|(i, _)| i).unwrap_or(0);
-                    state.set_cursor(prev);
-                }
-            }
-            PanelFocus::MaxTokens => state.max_tokens = state.max_tokens.saturating_sub(512).max(1),
-            PanelFocus::Temperature => state.temperature = (state.temperature - 0.1).max(0.0),
-            _ => {}
-        },
-        KeyCode::Right => match state.focus {
-            PanelFocus::ProviderGrid => {
-                let max = providers::ProviderKind::all().len() - 1;
-                if state.selected_provider + 3 <= max {
-                    state.selected_provider += 3;
-                    state.needs_fetch = true;
-                }
-            }
-            PanelFocus::ModelField | PanelFocus::BaseUrlField => {
-                let buf = state.current_buffer().to_string();
-                let cursor = state.current_cursor();
-                if cursor < buf.len() {
-                    let next = buf[cursor..].char_indices().nth(1);
-                    if let Some((i, _)) = next {
-                        state.set_cursor(cursor + i);
-                    } else {
-                        state.set_cursor(buf.len());
-                    }
-                }
-            }
-            PanelFocus::MaxTokens => state.max_tokens = state.max_tokens.saturating_add(512),
-            PanelFocus::Temperature => state.temperature = (state.temperature + 0.1).min(2.0),
-            _ => {}
-        },
-        KeyCode::Enter => {
-            if key.modifiers.contains(KeyModifiers::CONTROL) {
+
+        // Vim-style navigation: j = down, k = up
+        KeyCode::Char('j') => move_focus_down(state),
+        KeyCode::Char('k') => move_focus_up(state),
+
+        // Vim-style navigation: h = left, l = right
+        KeyCode::Char('h') => move_focus_left(state),
+        KeyCode::Char('l') => move_focus_right(state),
+
+        // Arrow key navigation in all directions
+        KeyCode::Up => move_focus_up(state),
+        KeyCode::Down => move_focus_down(state),
+        KeyCode::Left => move_focus_left(state),
+        KeyCode::Right => move_focus_right(state),
+
+        // Number keys for direct provider selection (1-9, 0 for 10)
+        KeyCode::Char(c) if c.is_ascii_digit() && state.focus == PanelFocus::ProviderGrid => {
+            let num = if c == '0' { 10 } else { c.to_digit(10).unwrap_or(0) as usize };
+            jump_to_provider_by_number(state, num);
+        }
+
+        // Enter/Space to toggle dropdown or apply
+        KeyCode::Enter | KeyCode::Char(' ') => {
+            if key.modifiers.contains(KeyModifiers::CONTROL)
+                && (key.code == KeyCode::Enter || key.code == KeyCode::Char(' '))
+            {
                 return PanelAction::Apply;
             }
             match state.focus {
                 PanelFocus::ApplyButton => return PanelAction::Apply,
                 PanelFocus::ModelField if !state.models.is_empty() => {
-                    state.show_dropdown = !state.show_dropdown;
-                    if !state.show_dropdown {
-                        // Press Enter again to apply selected
-                        if let Some(m) = state.models.get(state.selected_model) {
-                            state.model_buffer = m.clone();
-                            state.model_cursor = m.len();
-                        }
-                    }
+                    toggle_dropdown(state);
                 }
                 _ => {
                     state.focus = match state.focus {
@@ -244,6 +314,7 @@ pub fn handle_key(state: &mut ProviderPanelState, key: KeyEvent) -> PanelAction 
                 }
             }
         }
+
         KeyCode::Home => {
             if matches!(state.focus, PanelFocus::ModelField | PanelFocus::BaseUrlField) {
                 state.set_cursor(0);
@@ -266,6 +337,8 @@ pub fn handle_key(state: &mut ProviderPanelState, key: KeyEvent) -> PanelAction 
                 }
             }
         }
+
+        // Regular character input for text fields
         KeyCode::Char(c) => {
             match state.focus {
                 PanelFocus::ModelField | PanelFocus::BaseUrlField => {
@@ -372,16 +445,42 @@ pub fn render(
             let sel = idx == state.selected_provider;
             let foc = state.focus == PanelFocus::ProviderGrid && sel;
             let style = if foc {
-                Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(theme::PRIMARY_CONTAINER)
+                    .add_modifier(Modifier::BOLD)
             } else if sel {
-                Style::default().fg(theme::ACCENT)
+                Style::default()
+                    .fg(theme::ACCENT)
             } else {
                 theme::style_dim()
             };
-            let label = format!("{}{}", if sel { "◉" } else { "○" }, kind);
+            // Use ◉ (filled circle) for selected, ○ (open circle) otherwise.
+            // Focused + selected gets a filled circle with bright color;
+            // selected but not focused gets a filled circle with accent;
+            // unselected gets open circle.
+            let marker = if sel { "◉" } else { "○" };
+            let label = format!("{}{}", marker, kind);
             spans.push(Span::styled(label, style));
+            // Dim the provider index hint when not in provider grid focus
+            let number_hint_style = if state.focus == PanelFocus::ProviderGrid {
+                Style::default().fg(theme::DIM).add_modifier(Modifier::DIM)
+            } else {
+                Style::default().fg(theme::DIM)
+            };
+            let num = idx + 1;
+            let hint = if num <= 9 {
+                format!("[{}]", num)
+            } else if num == 10 {
+                String::from("[0]")
+            } else {
+                String::new()
+            };
+            if !hint.is_empty() {
+                spans.push(Span::styled(hint, number_hint_style));
+            }
             let kind_str = format!("{}", kind);
-            let pad = 17usize.saturating_sub(kind_str.len() + 1);
+            // Account for marker (1) + kind + hint (3) + 1 = kind_str.len() + 5
+            let pad = 20usize.saturating_sub(kind_str.len() + 5);
             if ci < 2 {
                 spans.push(Span::raw(" ".repeat(pad)));
             }
@@ -389,7 +488,7 @@ pub fn render(
         lines.push(Line::from(spans));
     }
 
-    // Model field — single line with focus indicator
+    // Model field — single line with enhanced focus indicator
     lines.push(Line::from(""));
     let m_foc = state.focus == PanelFocus::ModelField;
     let m_label = if m_foc { "▸ Model " } else { "  Model " };
@@ -398,19 +497,22 @@ pub fn render(
     } else {
         state.model_buffer.clone()
     };
-    let m_avail = iw.saturating_sub(m_label.len() + 3); // space for ":" and cursor
-    let m_trunc: String = if model_display.len() > m_avail {
-        format!("…{}", &model_display[model_display.len().saturating_sub(m_avail - 1)..])
+    let m_avail = iw.saturating_sub(m_label.chars().count() + 3); // space for ":" and cursor
+    let m_trunc: String = if model_display.chars().count() > m_avail {
+        // Char-safe tail truncation with leading ellipsis.
+        let keep = m_avail.saturating_sub(1).max(1) as usize;
+        let tail: String = model_display.chars().rev().take(keep).collect::<Vec<_>>().into_iter().rev().collect();
+        format!("…{}", tail)
     } else {
         model_display
     };
-    let m_style = if m_foc {
-        Style::default().fg(theme::ACCENT)
+    let m_label_style = if m_foc {
+        Style::default().fg(theme::PRIMARY_CONTAINER).add_modifier(Modifier::BOLD)
     } else {
         theme::style_dim()
     };
     let m_span: Span<'static> = if m_foc {
-        Span::styled(m_trunc, Style::default().fg(theme::FG))
+        Span::styled(m_trunc.clone(), theme::style_focused_field())
     } else {
         Span::styled(m_trunc, theme::style_dim())
     };
@@ -423,12 +525,14 @@ pub fn render(
             theme::style_dim(),
         ))
     } else if let Some(ref err) = state.models_error {
-        let short = if err.len() > 20 { &err[..20] } else { err.as_str() };
+        // Char-safe truncation: byte slicing here would panic if the 20th
+        // byte lands inside a multibyte codepoint (e.g. localized errors).
+        let short: String = err.chars().take(20).collect();
         Some(Span::styled(format!(" ⚠{}", short), Style::default().fg(theme::ERROR)))
     } else {
         None
     };
-    let mut ml = vec![Span::styled(m_label, m_style), m_span];
+    let mut ml = vec![Span::styled(m_label, m_label_style), m_span];
     if let Some(c) = count_span {
         ml.push(c);
     }
@@ -440,25 +544,28 @@ pub fn render(
     let url_text = if state.url_buffer.is_empty() {
         "enter base URL…".to_string()
     } else {
-        let u_avail = iw.saturating_sub(u_label.len() + 3);
-        if state.url_buffer.len() > u_avail {
-            format!("…{}", &state.url_buffer[state.url_buffer.len().saturating_sub(u_avail - 1)..])
+        let u_avail = iw.saturating_sub(u_label.chars().count() + 3);
+        if state.url_buffer.chars().count() > u_avail {
+            // Char-safe tail truncation with leading ellipsis.
+            let keep = u_avail.saturating_sub(1).max(1) as usize;
+            let tail: String = state.url_buffer.chars().rev().take(keep).collect::<Vec<_>>().into_iter().rev().collect();
+            format!("…{}", tail)
         } else {
             state.url_buffer.clone()
         }
     };
-    let u_style = if u_foc {
-        Style::default().fg(theme::ACCENT)
+    let u_label_style = if u_foc {
+        Style::default().fg(theme::PRIMARY_CONTAINER).add_modifier(Modifier::BOLD)
     } else {
         theme::style_dim()
     };
     let u_span: Span<'static> = if u_foc {
-        Span::styled(url_text, Style::default().fg(theme::FG))
+        Span::styled(url_text, theme::style_focused_field())
     } else {
         Span::styled(url_text, theme::style_dim())
     };
     lines.push(Line::from(vec![
-        Span::styled(u_label, u_style),
+        Span::styled(u_label, u_label_style),
         u_span,
     ]));
 
@@ -478,27 +585,48 @@ pub fn render(
     let tmp_foc = state.focus == PanelFocus::Temperature;
     let tkn_lbl = if tkn_foc { "▸" } else { " " };
     let tmp_lbl = if tmp_foc { "▸" } else { " " };
+
+    // Max tokens value style
+    let tkn_val_style = if tkn_foc {
+        Style::default()
+            .fg(theme::PRIMARY_CONTAINER)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::FG)
+    };
+    // Temperature value style
+    let tmp_val_style = if tmp_foc {
+        Style::default()
+            .fg(theme::PRIMARY_CONTAINER)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::FG)
+    };
+
     lines.push(Line::from(vec![
         Span::styled("Key ", theme::style_dim()),
         Span::styled(key_display, Style::default().fg(key_color)),
         Span::raw("  "),
-        Span::styled(format!("{}Max:", tkn_lbl), if tkn_foc { Style::default().fg(theme::ACCENT) } else { theme::style_dim() }),
-        Span::styled(format!("{}", state.max_tokens), if tkn_foc { Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD) } else { Style::default().fg(theme::FG) }),
+        Span::styled(format!("{}Max:", tkn_lbl), if tkn_foc { Style::default().fg(theme::PRIMARY_CONTAINER).add_modifier(Modifier::BOLD) } else { theme::style_dim() }),
+        Span::styled(format!("{}", state.max_tokens), tkn_val_style),
         Span::raw("  "),
-        Span::styled(format!("{}Temp:", tmp_lbl), if tmp_foc { Style::default().fg(theme::ACCENT) } else { theme::style_dim() }),
-        Span::styled(format!("{:.1}", state.temperature), if tmp_foc { Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD) } else { Style::default().fg(theme::FG) }),
+        Span::styled(format!("{}Temp:", tmp_lbl), if tmp_foc { Style::default().fg(theme::PRIMARY_CONTAINER).add_modifier(Modifier::BOLD) } else { theme::style_dim() }),
+        Span::styled(format!("{:.1}", state.temperature), tmp_val_style),
     ]));
 
     // Apply button + hints
     lines.push(Line::from(""));
     let b_foc = state.focus == PanelFocus::ApplyButton;
+    let (apply_label, apply_style) = if b_foc {
+        ("▸ [ Apply (Ctrl+Enter) ]", theme::style_focused_button())
+    } else {
+        ("  Apply (Ctrl+Enter)", theme::style_dim())
+    };
     lines.push(Line::from(vec![
-        Span::styled(if b_foc { "▸ Apply (Ctrl+Enter)" } else { "  Apply (Ctrl+Enter)" },
-            if b_foc { Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD) } else { theme::style_dim() }
-        ),
+        Span::styled(apply_label, apply_style),
     ]));
     lines.push(Line::from(vec![
-        Span::styled("  Tab/↑↓ cycle · Esc cancel", theme::style_dim()),
+        Span::styled("  Tab/↑↓ cycle · h/j/k/l navigate · #1-9 select · Esc cancel", theme::style_dim()),
     ]));
 
     // ── Render main popup ──────────────────────────────────────────────
@@ -531,7 +659,7 @@ pub fn render(
             let visible = state.models.iter().take(6);
             for (i, model) in visible.enumerate() {
                 let style = if i == state.selected_model {
-                    Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD)
+                    Style::default().fg(theme::PRIMARY_CONTAINER).add_modifier(Modifier::BOLD)
                 } else {
                     theme::style_dim()
                 };
@@ -551,8 +679,8 @@ pub fn render(
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .border_style(Style::default().fg(theme::ACCENT))
-                        .style(Style::default().bg(theme::BG)),
+                        .border_style(Style::default().fg(theme::FOCUS_BORDER))
+                        .style(Style::default().bg(theme::SURFACE_HIGH)),
                 );
             dd.render(dd_area, buf);
         }

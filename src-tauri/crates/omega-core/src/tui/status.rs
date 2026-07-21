@@ -5,7 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
 use super::theme;
-use super::spinner::{OmegaSpinner, SpinnerState, CompactOmega};
+use super::spinner::{OmegaSpinner, SpinnerState};
 
 /// Status line state — what to show in the single-line footer.
 pub struct StatusState {
@@ -57,24 +57,7 @@ impl StatusState {
             count.to_string()
         }
     }
-
-    fn token_display(&self) -> String {
-        let total_in = self.tokens_in + self.streaming_estimate;
-        let total_out = self.tokens_out + self.streaming_estimate / 2;
-
-        if total_in == 0 && total_out == 0 {
-            return String::new();
-        }
-
-        if self.messages_count > 0 || total_in > 0 || total_out > 0 {
-            let in_str = Self::format_tokens(total_in);
-            let out_str = Self::format_tokens(total_out);
-            format!(" {} in / {} out ", in_str, out_str)
-        } else {
-            String::new()
-        }
-    }
-}
+}  // end impl StatusState
 
 impl Widget for &StatusState {
     fn render(self, area: Rect, buf: &mut Buffer) {
@@ -84,50 +67,36 @@ impl Widget for &StatusState {
 
         let mut spans: Vec<Span<'static>> = Vec::new();
 
-        // Render the Ω spinner with cooking phrase
-        let compact = CompactOmega::new(OmegaSpinner {
-            state: self.spinner.state,
-            tick: self.spinner.tick,
-            phrase_idx: self.spinner.phrase_idx,
-        });
-        let (spinner_text, spinner_style) = compact.render_inline();
-        if !spinner_text.trim().is_empty() {
-            spans.push(Span::styled(spinner_text, spinner_style));
-        }
+        // Left: copyright + mode
+        let left = vec![
+            Span::styled(" © OMEGA_ORCH ", theme::style_dim()),
+            Span::styled("MODE: INTERACTIVE_REPL ", theme::style_dim()),
+        ];
+        let left_w: u16 = left.iter().map(|s| s.width() as u16).sum();
 
-        // If no spinner is active, show hint text
-        if spans.is_empty() {
-            if let Some(ref hint) = self.hint_text {
-                spans.push(Span::styled(
-                    format!(" {} ", hint),
-                    Style::default().fg(theme::DIM),
-                ));
-            } else {
-                spans.push(Span::styled(
-                    " · ",
-                    Style::default().fg(theme::DIM),
-                ));
-            }
-        }
+        // Right: latency, tokens, sigma
+        let total_in = self.tokens_in + self.streaming_estimate;
+        let total_out = self.tokens_out + self.streaming_estimate / 2;
+        let tok_str = if total_in > 0 || total_out > 0 {
+            format!("TOKENS: {} IN / {} OUT ", StatusState::format_tokens(total_in), StatusState::format_tokens(total_out))
+        } else {
+            String::new()
+        };
 
-        // Right side: token counts
-        let right_parts = self.token_display();
-        let right_width = right_parts.len() as u16;
-        let left_width: u16 = spans.iter().map(|s| s.width() as u16).sum();
-        let fill = area.width.saturating_sub(left_width).saturating_sub(right_width);
+        let right_spans = vec![
+            Span::styled(" LTCY: 24MS ", theme::style_dim()),
+            Span::styled(tok_str.clone(), Style::default().fg(theme::SECONDARY)),
+            Span::styled(" SIGMA_LINK: ", theme::style_dim()),
+            Span::styled("ESTABLISHED", Style::default().fg(theme::PRIMARY)),
+        ];
+        let right_w: u16 = right_spans.iter().map(|s| s.width() as u16).sum();
 
-        if fill > 0 {
-            spans.push(Span::raw(" ".repeat(fill as usize)));
-        }
-        if !right_parts.is_empty() {
-            spans.push(Span::styled(right_parts, theme::style_dim()));
-        }
+        // Fill
+        let fill = area.width.saturating_sub(left_w).saturating_sub(right_w);
 
-        // Add messages count as dimmed info
-        if self.messages_count > 0 {
-            let msgs_text = format!(" msgs: {} ", self.messages_count);
-            spans.push(Span::styled(msgs_text, theme::style_dim()));
-        }
+        spans.extend(left);
+        if fill > 0 { spans.push(Span::raw(" ".repeat(fill as usize))); }
+        spans.extend(right_spans);
 
         let para = Paragraph::new(Line::from(spans))
             .style(Style::default().bg(theme::BG));

@@ -143,25 +143,22 @@ impl Widget for &EditorState {
         let block = Block::default()
             .borders(Borders::TOP)
             .border_style(border_style)
-            .title(Line::from(Span::styled(label, Style::default().fg(border_color).add_modifier(Modifier::DIM))));
+            .title(Line::from(Span::styled(label, Style::default().fg(border_color).add_modifier(Modifier::DIM))))
+            .style(Style::default().bg(theme::RECESSED));
 
         let text = if self.buffer.is_empty() {
-            Text::from(Line::from(Span::styled(
-                "",
-                theme::style_dim(),
-            )))
+            Text::from(Line::from(Span::styled("", theme::style_dim())))
         } else {
             let lines: Vec<Line> = self
                 .buffer
                 .split('\n')
-                .map(|l| Line::from(Span::raw(l.to_string())))
+                .map(|l| Line::from(Span::styled(l.to_string(), Style::default().fg(theme::FG))))
                 .collect();
             Text::from(lines)
         };
 
         let para = Paragraph::new(text)
-            .block(block)
-            .style(Style::default().bg(theme::BG));
+            .block(block);
 
         para.render(area, buf);
     }

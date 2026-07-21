@@ -51,13 +51,22 @@ enum Permission {
     Abort,
 }
 
-async fn check_permission(mode: &str, tool: &str, _args: &str) -> Permission {
+async fn check_permission<E: ChatEmitter>(mode: &str, tool: &str, _args: &str, emitter: &E) -> Permission {
     match mode {
         "strict" => {
-            eprintln!("  {}{} denied (strict mode){}", DIM, tool, RESET);
+            if emitter.allows_direct_terminal_output() {
+                eprintln!("  {}{} denied (strict mode){}", DIM, tool, RESET);
+            } else {
+                log::info!("{} denied (strict mode)", tool);
+            }
             Permission::Deny
         }
         "on" => {
+            if !emitter.allows_direct_terminal_output() {
+                // Full-screen TUI owns the terminal; cannot prompt on stdin.
+                log::info!("{} auto-approved (TUI permission prompt unavailable)", tool);
+                return Permission::Allow;
+            }
             use std::io::Write;
             use tokio::io::AsyncBufReadExt;
             let mut input = String::new();
@@ -80,8 +89,14 @@ async fn check_permission(mode: &str, tool: &str, _args: &str) -> Permission {
         _ => Permission::Allow,
     }
 }
-fn show_diff(path: &str, old: &str, new: &str) {
+fn show_diff<E: ChatEmitter>(path: &str, old: &str, new: &str, emitter: &E) {
     if old == new {
+        return;
+    }
+    if !emitter.allows_direct_terminal_output() {
+        // The bounded edit preview inside ToolExecutionComponent already shows
+        // the file path and diff. Direct stderr writes here would bypass the
+        // Ratatui buffer and corrupt the full-screen TUI.
         return;
     }
     eprintln!("  {} {} {}", "──", path, "──");
@@ -220,7 +235,7 @@ async fn handle_tool_calls<E: ChatEmitter>(
             args,
         };
         // Check permission FIRST — before any file I/O
-        match check_permission(permission_mode, &tc.function.name, &tc.function.arguments).await {
+        match check_permission(permission_mode, &tc.function.name, &tc.function.arguments, emitter).await {
             Permission::Allow => {}
             Permission::Deny => {
                 emitter.emit_tool_result(&tc.function.name, false, "denied")?;
@@ -249,10 +264,11 @@ async fn handle_tool_calls<E: ChatEmitter>(
             Err(e) => crate::commands::tools::ToolResult::err(e),
         };
 
-        // Show diff after execution
+        // Show diff after execution (terminal CLI only; TUI shows the bounded
+        // diff preview inside ToolExecutionComponent).
         if let Some(ref path) = diff_path {
             let new = std::fs::read_to_string(path).unwrap_or_default();
-            show_diff(path, &old, &new);
+            show_diff(path, &old, &new, emitter);
         }
         let output = if result.success { &result.output } else { result.error.as_deref().unwrap_or("") };
         emitter.emit_tool_result(&tc.function.name, result.success, output)?;

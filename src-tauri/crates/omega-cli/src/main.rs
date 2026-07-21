@@ -10,7 +10,7 @@ use clap::Parser;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
-use ratatui::style::Style;
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
@@ -18,9 +18,7 @@ use ratata::prelude::*;
 
 use omega_core::tui::component::{Action, Component, UiStreamEvent};
 use omega_core::tui::editor::{EditorMode, EditorState};
-use omega_core::tui::header::HeaderState;
 use omega_core::tui::status::StatusState;
-use omega_core::tui::omega_mark::{AgentState, AnimationPhase};
 use omega_core::tui::spinner::SpinnerState;
 use omega_core::tui::theme;
 use omega_core::tui::transcript::{self, TranscriptEntry, Transcript};
@@ -84,7 +82,6 @@ struct App {
     config: providers::ProviderConfig,
 
     // UI state
-    header: HeaderState,
     transcript: Transcript,
     editor: EditorState,
     status: StatusState,
@@ -115,6 +112,12 @@ struct App {
     show_provider_panel: bool,
     provider_panel_state: omega_core::tui::provider_panel::ProviderPanelState,
 
+    // Sidebar visibility
+    show_sidebar: bool,
+
+    // Global write/edit preview expansion
+    tool_output_expanded: bool,
+
     // Should quit
     should_quit: bool,
 }
@@ -122,9 +125,8 @@ struct App {
 impl App {
     fn new(config: providers::ProviderConfig) -> Self {
         let state = Arc::new(AppState::new_with_provider_config(&default_db_path(), config.clone()));
-        let model = config.model.clone();
-        let kind_str = format!("{}", config.kind);
-        let header = HeaderState::new(model, kind_str);
+        let _model = config.model.clone();
+        let _kind = format!("{}", config.kind);
         let editor = EditorState::new();
         let status = StatusState::new();
 
@@ -132,7 +134,6 @@ impl App {
         let mut app = Self {
             state,
             config,
-            header,
             transcript: Transcript::new(),
             editor,
             status,
@@ -150,6 +151,8 @@ impl App {
 
             show_help: false,
             show_provider_panel: false,
+            show_sidebar: true,
+            tool_output_expanded: false,
             provider_panel_state: omega_core::tui::provider_panel::ProviderPanelState::from_config(&cfg_for_panel),
 
             should_quit: false,
@@ -225,10 +228,6 @@ impl App {
                 omega_core::tui::provider_panel::PanelAction::Apply => {
                     let new_config = self.provider_panel_state.to_config(&self.config);
                     self.config = new_config.clone();
-                    self.header = omega_core::tui::header::HeaderState::new(
-                        self.config.model.clone(),
-                        format!("{}", self.config.kind),
-                    );
                     save_config(&self.config);
                     self.transcript.entries.push(TranscriptEntry::Notice {
                         text: format!("Provider set to {} ({})", self.config.model, self.config.kind),
@@ -248,6 +247,19 @@ impl App {
         if key.code == KeyCode::Char('?') && !key.modifiers.contains(KeyModifiers::CONTROL) {
             self.show_help = !self.show_help;
             self.editor.suggestions.clear();
+            return;
+        }
+
+        // Ctrl+B: toggle sidebar visibility
+        if key.code == KeyCode::Char('b') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.show_sidebar = !self.show_sidebar;
+            return;
+        }
+
+        // Ctrl+E: globally expand/collapse bounded write and edit previews.
+        if key.code == KeyCode::Char('e') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.tool_output_expanded = !self.tool_output_expanded;
+            self.transcript.set_tools_expanded(self.tool_output_expanded);
             return;
         }
 
@@ -287,6 +299,8 @@ impl App {
 
         self.is_streaming = false;
         self.editor.state = EditorMode::Idle;
+        self.editor.buffer.clear();
+        self.editor.cursor = 0;
         self.status.set_spinner_state(SpinnerState::Idle);
 
         // Mark the pending assistant entry as stopped
@@ -585,6 +599,8 @@ impl App {
         if done {
             self.is_streaming = false;
             self.editor.state = EditorMode::Idle;
+            self.editor.buffer.clear();
+            self.editor.cursor = 0;
             self.status.set_spinner_state(SpinnerState::Idle);
             self.transcript.stream_event_rx = None;
             self.transcript.streaming_fragment.clear();
@@ -665,106 +681,53 @@ impl App {
         }
     }
 
-    /// Render the full UI.
+    /// Render the full UI — cyber-noir reference layout:
+    /// top system bar, metrics panel, main process panel, command input, footer.
     fn render_widgets(&mut self, frame: &mut ratatui::Frame) {
         let area = frame.size();
 
-        // ── Layout ──────────────────────────────────────────────────────────
-        let header_height = 3u16; // 2 lines + 1 separator rule
-        let status_height = 1u16;
-        let editor_min_height = 3u16; // border + 1 line + padding
-        let editor_lines = self.editor.buffer.lines().count().max(1).min(8) as u16;
-        let editor_height = editor_min_height + editor_lines.saturating_sub(1);
+        // ── Full-screen background fill ─────────────────────────────────
+        fill_area(frame, area, theme::BG);
 
-        let chunks = Layout::default()
+        // ── Layout: vertical stack ──────────────────────────────────────
+        let top_bar_h = 1u16;
+        let metrics_h = 3u16;  // 3 lines: token gauge + model/context row + tool chips
+        let footer_h = 1u16;
+        let editor_min = 3u16;
+        let editor_lines = self.editor.buffer.lines().count().max(1).min(4) as u16;
+        let editor_h = editor_min + editor_lines.saturating_sub(1);
+
+        let vert = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(header_height),
-                Constraint::Min(1),
-                Constraint::Length(editor_height),
-                Constraint::Length(status_height),
+                Constraint::Length(top_bar_h),       // system bar
+                Constraint::Length(metrics_h),       // metrics panel
+                Constraint::Min(4),                  // process (transcript)
+                Constraint::Length(editor_h),        // command input
+                Constraint::Length(footer_h),        // footer
             ])
             .split(area);
 
-        let header_area = chunks[0];
-        let transcript_area = chunks[1];
-        let editor_area = chunks[2];
-        let status_area = chunks[3];
+        let top_area = vert[0];
+        let metrics_area = vert[1];
+        let process_area = vert[2];
+        let editor_area = vert[3];
+        let footer_area = vert[4];
 
-        // ── Compute context fill ───────────────────────────────────────────
-        let (tok_in, tok_out) = omega_core::commands::chat::session_token_counts();
-        let ctx_window = self.config.kind.context_window();
-        let total_tokens = tok_in + tok_out;
-        self.header.ctx_pct = if ctx_window > 0 && total_tokens > 0 {
-            Some(((total_tokens * 100) / ctx_window) as u8)
-        } else {
-            None
-        };
+        // ── Top system bar ──────────────────────────────────────────────
+        render_top_bar(frame, top_area, self.config.model.as_str());
 
-        // ── Render widgets ──────────────────────────────────────────────────
-        frame.render_widget(&self.header, header_area);
+        // ── Metrics panel (glass-bordered) ───────────────────────────────
+        render_metrics_panel(frame, metrics_area, &self.config, self.is_streaming);
 
-        // Render transcript first (so startup messages show at top)
-        let is_scrolled_up = self.transcript.scroll.offset > 0;
-        self.transcript.render(frame, transcript_area);
+        // ── Main process panel (glass-bordered) ──────────────────────────
+        render_process_panel(frame, process_area, &mut self.transcript, self.show_help);
 
-        // Big Omega mark OVERLAY on empty transcript area (rendered after transcript
-        // so it overwrites the empty space below any startup notices)
-        let has_conversation = self.transcript.entries.iter().any(|e| matches!(e, TranscriptEntry::User { .. } | TranscriptEntry::Assistant { .. }));
-        if !has_conversation && !self.show_help {
-            let agent_state = if self.is_streaming {
-                AgentState::Streaming
-            } else if self.editor.state == omega_core::tui::editor::EditorMode::Thinking {
-                AgentState::Thinking
-            } else {
-                AgentState::Idle
-            };
-            let phase = AnimationPhase {
-                tick: self.anim_tick,
-                agent: agent_state,
-            };
-            frame.render_widget(&phase, transcript_area);
-        }
+        // ── Command input (glass-bordered) ───────────────────────────────
+        render_command_input(frame, editor_area, &self.editor, self.is_streaming);
 
-        // Draw a scroll-up indicator as an overlay at the bottom of transcript
-        if is_scrolled_up && !self.show_help && !self.is_streaming {
-            let indicator_text = format!(" ↑ {} more ", self.transcript.scroll.offset);
-            let indicator = Paragraph::new(Line::from(Span::styled(
-                indicator_text,
-                theme::style_dim(),
-            )))
-            .style(Style::default())
-            .alignment(Alignment::Right);
-            let indicator_area = Rect::new(
-                transcript_area.right().saturating_sub(16),
-                transcript_area.bottom().saturating_sub(1),
-                16,
-                1,
-            );
-            indicator.render(indicator_area, frame.buffer_mut());
-        }
-
-        // Editor — show suggestions if typing a slash command
-        if self.editor.buffer.starts_with('/') && !self.is_streaming {
-            let suggestions = self.get_slash_suggestions();
-            omega_core::tui::editor::render_suggestions(
-                editor_area,
-                frame.buffer_mut(),
-                &suggestions,
-                self.editor.selected_suggestion,
-            );
-        }
-
-        frame.render_widget(&self.editor, editor_area);
-
-        // Set keybinding hints when idle
-        if !self.is_streaming && !self.show_help {
-            self.status.hint_text = Some("Ctrl+Q quit · ? help".into());
-        } else if !self.show_help {
-            self.status.hint_text = None;
-        }
-
-        // Status — read tokens from globals, estimate streaming live
+        // ── Footer bar ──────────────────────────────────────────────────
+        self.status.hint_text = Some("[CR] COMMIT | [^C] ABORT | ? help".into());
         let (tokens_in, tokens_out) = omega_core::commands::chat::session_token_counts();
         self.status.tokens_in = tokens_in;
         self.status.tokens_out = tokens_out;
@@ -774,9 +737,9 @@ impl App {
         } else {
             self.status.streaming_estimate = 0;
         }
-        frame.render_widget(&self.status, status_area);
+        frame.render_widget(&self.status, footer_area);
 
-        // Provider panel overlay (drawn on top, before help)
+        // ── Overlays ────────────────────────────────────────────────────
         if self.show_provider_panel && !self.show_help {
             omega_core::tui::provider_panel::render(
                 area,
@@ -785,31 +748,11 @@ impl App {
                 &self.config,
             );
         }
-
-        // Help overlay (drawn last, on top of everything)
         if self.show_help {
             omega_core::tui::help::render(area, frame.buffer_mut());
         }
-    }
-
-    fn get_slash_suggestions(&self) -> Vec<String> {
-        let input = self.editor.buffer.to_lowercase();
-        let all_commands = vec![
-            "/help".to_string(),
-            "/clear".to_string(),
-            "/tools".to_string(),
-            "/model".to_string(),
-            "/provider".to_string(),
-            "/cost".to_string(),
-            "/exit".to_string(),
-        ];
-        if input == "/" {
-            all_commands
-        } else {
-            all_commands.into_iter().filter(|c| c.starts_with(&input)).collect()
-        }
-    }
-}
+    }  // end render_widgets
+}  // end impl App
 
 impl ratata::screen::Screen for App {
     fn render(&mut self, f: &mut ratatui::Frame) {
@@ -844,6 +787,311 @@ impl ratata::screen::Screen for App {
             _ => None,
         }
     }
+}
+
+
+// ── Layout helpers ──────────────────────────────────────────────────────────
+
+/// Fill an entire rect with a solid background color.
+fn fill_area(frame: &mut ratatui::Frame, area: Rect, color: Color) {
+    let style = Style::default().bg(color);
+    for y in area.y..area.y + area.height {
+        for x in area.x..area.x + area.width {
+            let cell = frame.buffer_mut().get_mut(x, y);
+            cell.set_bg(color);
+            cell.set_style(style);
+        }
+    }
+}
+
+/// Draw a horizontal rule line.
+
+
+/// Draw a vertical line (for glass sidebar edge).
+
+
+/// Render a glass-style bordered block helper: fills inner bg, draws box-drawing border.
+fn render_glass_block(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    inner_bg: Color,
+    border_color: Color,
+    title: &str,
+    title_color: Color,
+) -> Rect {
+    let inner_pad = 1u16;
+    let inner_area = if area.width > 2 && area.height > 2 {
+        Rect::new(
+            area.x + inner_pad,
+            area.y + inner_pad,
+            area.width.saturating_sub(inner_pad * 2),
+            area.height.saturating_sub(inner_pad * 2),
+        )
+    } else {
+        area
+    };
+
+    // Fill inner
+    fill_area(frame, inner_area, inner_bg);
+
+    // Draw border using box-drawing characters ┌─…─┐ │  │ └─…─┘
+    let _border_style = Style::default().fg(border_color);
+    let bw = area.width;
+    let bh = area.height;
+
+    // Top border ┌─ title ────────┐
+    let title_chars: Vec<char> = title.chars().collect();
+    let dash_count = bw.saturating_sub(title_chars.len() as u16).saturating_sub(4);
+    {
+        let y = area.y;
+        // ┌
+        frame.buffer_mut().get_mut(area.x, y).set_symbol("┌").set_fg(border_color);
+        // title
+        for (i, ch) in title_chars.iter().enumerate() {
+            let cx = area.x + 2 + i as u16;
+            if cx < area.x + bw {
+                frame.buffer_mut().get_mut(cx, y).set_char(*ch).set_fg(title_color);
+            }
+        }
+        // ─ fill
+        for i in 0..dash_count {
+            let cx = area.x + 2 + title_chars.len() as u16 + i;
+            if cx < area.x + bw - 1 {
+                frame.buffer_mut().get_mut(cx, y).set_symbol("─").set_fg(border_color);
+            }
+        }
+        // ┐
+        frame.buffer_mut().get_mut(area.x + bw - 1, y).set_symbol("┐").set_fg(border_color);
+    }
+
+    // Sides │ … │
+    for dy in 1..bh.saturating_sub(1) {
+        let y = area.y + dy;
+        frame.buffer_mut().get_mut(area.x, y).set_symbol("│").set_fg(border_color);
+        frame.buffer_mut().get_mut(area.x + bw - 1, y).set_symbol("│").set_fg(border_color);
+    }
+
+    // Bottom border └──────────────┘
+    {
+        let y = area.y + bh - 1;
+        frame.buffer_mut().get_mut(area.x, y).set_symbol("└").set_fg(border_color);
+        for i in 1..bw.saturating_sub(1) {
+            let cx = area.x + i;
+            frame.buffer_mut().get_mut(cx, y).set_symbol("─").set_fg(border_color);
+        }
+        frame.buffer_mut().get_mut(area.x + bw - 1, y).set_symbol("┘").set_fg(border_color);
+    }
+
+    inner_area
+}
+
+// ── Top system bar ──────────────────────────────────────────────────────────
+
+fn render_top_bar(frame: &mut ratatui::Frame, area: Rect, model: &str) {
+    if area.height < 1 || area.width < 30 { return; }
+
+    let left_spans = vec![
+        Span::styled(" OMEGA_AGENT ", Style::default().fg(theme::PRIMARY).add_modifier(Modifier::BOLD)),
+        Span::styled("v", theme::style_dim()),
+        Span::styled(env!("CARGO_PKG_VERSION"), theme::style_dim()),
+        Span::styled(" · ", theme::style_dim()),
+        Span::styled("SYS_STATUS: ", theme::style_dim()),
+        Span::styled("ONLINE", Style::default().fg(theme::PRIMARY)),
+        Span::styled(" · ", theme::style_dim()),
+        Span::styled("UPTIME: ", theme::style_dim()),
+        Span::styled(model, Style::default().fg(theme::SECONDARY)),
+    ];
+
+    let right_hint = format!(" [F1] HELP [F2] LOGS [F3] NET [F10] EXIT ");
+    let right_w = right_hint.len() as u16;
+    let left_w: u16 = left_spans.iter().map(|s| s.width() as u16).sum();
+    let fill = area.width.saturating_sub(left_w).saturating_sub(right_w);
+
+    let mut out = vec![];
+    out.extend(left_spans);
+    if fill > 0 { out.push(Span::raw(" ".repeat(fill as usize))); }
+    out.push(Span::styled(right_hint, theme::style_dim()));
+
+    let para = Paragraph::new(Line::from(out));
+    para.render(Rect::new(area.x, area.y, area.width, 1), frame.buffer_mut());
+
+    // separator rule under top bar
+    let _rule_y = area.y + area.height;
+    // actually draw it at the bottom of this area
+    if area.height > 1 {
+        for x in area.x..area.x + area.width {
+            let cell = frame.buffer_mut().get_mut(x, area.y + area.height - 1);
+            cell.set_symbol("─");
+            cell.set_fg(theme::OUTLINE);
+        }
+    }
+}
+
+// ── Metrics panel ────────────────────────────────────────────────────────────
+// Glass-bordered box: token gauge, model/context, active tool chips.
+
+fn render_metrics_panel(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    config: &providers::ProviderConfig,
+    _is_streaming: bool,
+) {
+    if area.height < 3 || area.width < 40 { return; }
+
+    let inner = render_glass_block(
+        frame, area, theme::SURFACE_LOW, theme::OUTLINE,
+        " SYSTEM METRICS & ACTIVE TOOLS ",
+        theme::PRIMARY,
+    );
+
+    // Row 0: token gauge
+    let gauge_y = inner.y;
+    let (tokens_in, tokens_out) = omega_core::commands::chat::session_token_counts();
+    let ctx_window = config.kind.context_window();
+    let total = tokens_in + tokens_out;
+    let pct = if ctx_window > 0 { ((total as f64 / ctx_window as f64) * 100.0).min(100.0) } else { 0.0 };
+    let gauge_w = 16u16.min(inner.width.saturating_sub(20));
+    let filled = (pct / 100.0 * gauge_w as f64).round() as u16;
+
+    let gauge_spans = vec![
+        Span::styled("TOKEN_USAGE ", theme::style_dim()),
+        Span::styled("[", theme::style_dim()),
+        Span::styled("|".repeat(filled as usize), Style::default().fg(theme::PRIMARY)),
+        Span::styled("-".repeat((gauge_w - filled) as usize), theme::style_dim()),
+        Span::styled("]", theme::style_dim()),
+        Span::styled(format!(" {:.0}% ", pct), theme::style_dim()),
+    ];
+    Paragraph::new(Line::from(gauge_spans))
+        .render(Rect::new(inner.x + 1, gauge_y, inner.width.saturating_sub(2), 1), frame.buffer_mut());
+
+    // Row 1: model / context
+    let row1_y = gauge_y + 1;
+    let model_str = config.model.clone();
+    let model_spans = vec![
+        Span::styled("MODEL ", theme::style_dim()),
+        Span::styled(model_str, Style::default().fg(theme::SECONDARY)),
+    ];
+    let ctx_spans = vec![
+        Span::styled("CONTEXT ", theme::style_dim()),
+        Span::styled(format!("{:.1}k / {}k", total as f64 / 1000.0, ctx_window / 1000), Style::default().fg(theme::PRIMARY)),
+    ];
+
+    // Split row: MODEL on left, CONTEXT on right
+    let mw: u16 = model_spans.iter().map(|s| s.width() as u16).sum();
+    let cw: u16 = ctx_spans.iter().map(|s| s.width() as u16).sum();
+    let fill = inner.width.saturating_sub(2).saturating_sub(mw).saturating_sub(cw);
+    let mut r1 = vec![];
+    r1.extend(model_spans);
+    if fill > 0 { r1.push(Span::raw(" ".repeat(fill as usize))); }
+    r1.extend(ctx_spans);
+    Paragraph::new(Line::from(r1)).render(Rect::new(inner.x + 1, row1_y, inner.width.saturating_sub(2), 1), frame.buffer_mut());
+
+    // Row 2: active tool chips
+    if inner.height > 2 {
+        let chips_y = row1_y + 1;
+        let chips = vec![
+            ("[ BROWSER ]", theme::TOOL_BROWSER),
+            ("[ SHELL ]", theme::TOOL_SHELL),
+            ("[ FILE_SYS ]", theme::TOOL_FILE_SYS),
+            ("[ SEARCH ]", theme::TOOL_SEARCH),
+        ];
+        let mut chip_spans: Vec<Span> = Vec::new();
+        for (i, (label, col)) in chips.iter().enumerate() {
+            if i > 0 { chip_spans.push(Span::raw(" ")); }
+            chip_spans.push(Span::styled(*label, Style::default().fg(*col)));
+        }
+        Paragraph::new(Line::from(chip_spans))
+            .alignment(Alignment::Right)
+            .render(Rect::new(inner.x + 1, chips_y, inner.width.saturating_sub(2), 1), frame.buffer_mut());
+    }
+}
+
+// ── Main process panel ───────────────────────────────────────────────────────
+
+fn render_process_panel(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    transcript: &mut Transcript,
+    _show_help: bool,
+) {
+    if area.height < 3 || area.width < 20 { return; }
+
+    let inner = render_glass_block(
+        frame, area, theme::BG, theme::OUTLINE,
+        " MAIN PROCESS ",
+        theme::PRIMARY,
+    );
+
+    // Transcript content
+    transcript.render(frame, inner);
+
+    // Bottom-right status label
+    let label = " Row: 1 Col: 1 | UTF-8 | Rust ";
+    let lb_w = label.len() as u16;
+    let lb_x = inner.right().saturating_sub(lb_w);
+    let lb_y = inner.bottom().saturating_sub(1);
+    Paragraph::new(Line::from(Span::styled(label, theme::style_dim())))
+        .render(Rect::new(lb_x, lb_y, lb_w, 1), frame.buffer_mut());
+}
+
+// ── Command input ────────────────────────────────────────────────────────────
+
+fn render_command_input(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    editor: &EditorState,
+    is_streaming: bool,
+) {
+    if area.height < 3 || area.width < 20 { return; }
+
+    let border_color = match editor.state {
+        EditorMode::Idle => theme::OUTLINE,
+        EditorMode::Thinking => theme::SECONDARY,
+        EditorMode::Streaming => theme::PRIMARY,
+        EditorMode::Error => theme::ERROR,
+        EditorMode::Confirm => theme::WARN,
+    };
+
+    let inner = render_glass_block(
+        frame, area, theme::RECESSED, border_color,
+        " COMMAND INPUT ",
+        theme::PRIMARY,
+    );
+
+    // λ prompt + text
+    let prompt_y = inner.y + inner.height.saturating_sub(3) / 2; // vertically center-ish
+    let prompt_x = inner.x + 1;
+
+    let input_width = inner.width.saturating_sub(4);
+
+    if editor.buffer.is_empty() && !is_streaming {
+        let ph = " Enter directive (e.g., 'sync --force', 'refactor-vibe')… ";
+        Paragraph::new(Line::from(vec![
+            Span::styled("λ ", Style::default().fg(theme::PRIMARY).add_modifier(Modifier::BOLD)),
+            Span::styled(ph, Style::default().fg(Color::Rgb(60, 60, 70))),
+        ]))
+        .render(Rect::new(prompt_x, prompt_y, input_width, 1), frame.buffer_mut());
+    } else if is_streaming && editor.buffer.is_empty() {
+        Paragraph::new(Line::from(vec![
+            Span::styled("λ ", Style::default().fg(theme::PRIMARY).add_modifier(Modifier::BOLD)),
+            Span::styled(" streaming… ", theme::style_dim()),
+        ]))
+        .render(Rect::new(prompt_x, prompt_y, input_width, 1), frame.buffer_mut());
+    } else {
+        let display = editor.buffer.as_str();
+        Paragraph::new(Line::from(vec![
+            Span::styled("λ ", Style::default().fg(theme::PRIMARY).add_modifier(Modifier::BOLD)),
+            Span::styled(display, Style::default().fg(theme::FG)),
+        ]))
+        .render(Rect::new(prompt_x, prompt_y, input_width, 1), frame.buffer_mut());
+    }
+
+    // Right hint
+    let hint = if is_streaming { " [^C] ABORT " } else { " [CR] COMMIT | [^C] ABORT " };
+    let hint_w = hint.len() as u16;
+    let hint_x = inner.right().saturating_sub(hint_w + 1);
+    Paragraph::new(Line::from(Span::styled(hint, theme::style_dim())))
+        .render(Rect::new(hint_x, prompt_y, hint_w, 1), frame.buffer_mut());
 }
 
 
@@ -965,7 +1213,11 @@ struct Cli {
 
 // entry point
 fn main() -> Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    // Full-screen TUI owns stdout/stderr via the alternate screen. Log output at
+    // `info` would write behind Ratatui and corrupt the layout, so default to
+    // `error` unless the caller explicitly exports RUST_LOG.
+    let default_filter = std::env::var("RUST_LOG").unwrap_or_else(|_| "error".to_string());
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(&default_filter)).init();
     let cli = Cli::parse();
     let config = load_provider_config(cli.provider, cli.model, cli.base_url);
 

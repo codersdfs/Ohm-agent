@@ -81,7 +81,19 @@ pub fn render_markdown(text: &str) -> Text<'static> {
                 flush_line(&mut lines, &mut current_line);
             }
             Event::End(TagEnd::CodeBlock) => {
-                let highlighted = highlight_code(&code_buf, Some(code_lang.as_str()).filter(|l| !l.is_empty()));
+                const MAX_CODE_LINES: usize = 12;
+                const MAX_CODE_CHARS: usize = 1200;
+                let mut display_buf = code_buf.clone();
+                let code_lines: Vec<&str> = code_buf.lines().collect();
+                if code_lines.len() > MAX_CODE_LINES {
+                    let omitted = code_lines.len() - MAX_CODE_LINES;
+                    display_buf = code_lines.iter().take(MAX_CODE_LINES).cloned().collect::<Vec<_>>().join("\n");
+                    display_buf.push_str(&format!("\n… {} more lines ({} total)", omitted, code_lines.len()));
+                } else if code_buf.chars().count() > MAX_CODE_CHARS {
+                    let truncated: String = code_buf.chars().take(MAX_CODE_CHARS).collect();
+                    display_buf = format!("{}…", truncated);
+                }
+                let highlighted = highlight_code(&display_buf, Some(code_lang.as_str()).filter(|l| !l.is_empty()));
                 lines.push(highlighted);
                 code_buf.clear();
                 code_lang.clear();
@@ -316,7 +328,7 @@ mod tests {
     #[test]
     fn test_bold_text() {
         let result = render_markdown("hello **world**");
-        let joined: String = result.lines.iter()
+        let _joined: String = result.lines.iter()
             .flat_map(|l| l.spans.iter().map(|s| format!("{:?}", s.style.add_modifier(Modifier::BOLD))))
             .collect();
         let has_bold = result.lines.iter()
