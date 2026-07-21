@@ -1,45 +1,30 @@
 use ratatui::style::{Modifier, Style};
 use super::theme;
 
-/// Cooking/action phrases that rotate for the status line — Claude Code inspired.
-const COOKING_PHRASES: &[&str] = &[
-    "cooking…",
-    "brewing…",
-    "simmering…",
-    "seasoning…",
-    "tasting…",
-    "plating…",
-    "stirring the pot…",
-    "fetching ingredients…",
-    "kneading…",
-    "grinding…",
-    "marinating…",
-    "braising…",
-    "roasting…",
-    "whisking…",
-    "sifting…",
-    "glazing…",
-    "steaming…",
-    "infusing…",
-    "caramelizing…",
-    "tempering…",
+/// Short, Claude Code-inspired activity words. The phrase changes slowly so
+/// it adds personality without making the status line visually noisy.
+const THINKING_PHRASES: &[&str] = &[
+    "Cooking…",
+    "Pondering…",
+    "Reasoning…",
+    "Planning…",
+    "Considering…",
 ];
 
-/// Error / problem phrases
-const BURNT_PHRASES: &[&str] = &[
-    "burnt toast…",
-    "spilled the pot…",
-    "overcooked…",
-    "broke a yolk…",
-    "burned the garlic…",
-    "curdled…",
-    "too salty…",
-    "fell on the floor…",
+const STREAMING_PHRASES: &[&str] = &[
+    "Writing…",
+    "Composing…",
+    "Shaping…",
 ];
 
-/// Ω spinner animation frames — the Omega symbol itself rotates through
-/// Unicode variations to create a unique spinning-Ω effect.
-const OMEGA_SPINNER_FRAMES: &[char] = &['Ω', '⍥', '⍟', '⍤', '⍥', '⍟'];
+const TOOL_PHRASES: &[&str] = &[
+    "Working…",
+    "Inspecting…",
+    "Gathering…",
+];
+
+/// Conventional terminal spinner frames.
+const SPINNER_FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 /// Agent state for the spinner.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -51,7 +36,7 @@ pub enum SpinnerState {
     Error,
 }
 
-/// The Omega spinner — a unique Ω-centric loading animation with cooking metaphors.
+/// Shared activity spinner for the TUI.
 pub struct OmegaSpinner {
     /// Current state of the spinner
     pub state: SpinnerState,
@@ -73,31 +58,26 @@ impl OmegaSpinner {
     /// Tick the spinner — advance the animation frame.
     pub fn tick(&mut self) {
         self.tick = self.tick.wrapping_add(1);
-        // Rotate phrase every 12 ticks (~1 second at 80ms tick rate)
-        if self.tick % 12 == 0 {
-            match self.state {
-                SpinnerState::Thinking | SpinnerState::Streaming | SpinnerState::ToolCall => {
-                    self.phrase_idx = (self.phrase_idx + 1) % COOKING_PHRASES.len();
-                }
-                SpinnerState::Error => {
-                    self.phrase_idx = (self.phrase_idx + 1) % BURNT_PHRASES.len();
-                }
-                SpinnerState::Idle => {
-                    self.phrase_idx = 0;
-                }
-            }
+        // Change the phrase about every two seconds at the 80ms tick rate.
+        if self.tick % 24 == 0 {
+            let phrase_count = match self.state {
+                SpinnerState::Thinking => THINKING_PHRASES.len(),
+                SpinnerState::Streaming => STREAMING_PHRASES.len(),
+                SpinnerState::ToolCall => TOOL_PHRASES.len(),
+                SpinnerState::Idle | SpinnerState::Error => 1,
+            };
+            self.phrase_idx = (self.phrase_idx + 1) % phrase_count;
         }
     }
 
-    /// Get the current Ω glyph based on state and tick.
+    /// Get the current conventional spinner glyph.
     pub fn current_glyph(&self) -> char {
-        let frame = (self.tick / 3) as usize % OMEGA_SPINNER_FRAMES.len();
         match self.state {
-            SpinnerState::Idle => 'Ω',
+            SpinnerState::Idle => ' ',
             SpinnerState::Thinking | SpinnerState::Streaming | SpinnerState::ToolCall => {
-                OMEGA_SPINNER_FRAMES[frame]
+                SPINNER_FRAMES[self.tick as usize % SPINNER_FRAMES.len()]
             }
-            SpinnerState::Error => '⍝',
+            SpinnerState::Error => '!',
         }
     }
 
@@ -105,29 +85,20 @@ impl OmegaSpinner {
     pub fn current_phrase(&self) -> &'static str {
         match self.state {
             SpinnerState::Idle => "",
-            SpinnerState::Thinking | SpinnerState::Streaming | SpinnerState::ToolCall => {
-                COOKING_PHRASES[self.phrase_idx % COOKING_PHRASES.len()]
-            }
-            SpinnerState::Error => {
-                BURNT_PHRASES[self.phrase_idx % BURNT_PHRASES.len()]
-            }
+            SpinnerState::Thinking => THINKING_PHRASES[self.phrase_idx % THINKING_PHRASES.len()],
+            SpinnerState::Streaming => STREAMING_PHRASES[self.phrase_idx % STREAMING_PHRASES.len()],
+            SpinnerState::ToolCall => TOOL_PHRASES[self.phrase_idx % TOOL_PHRASES.len()],
+            SpinnerState::Error => "Something went wrong",
         }
     }
 
     /// Get the accent style modifier for the current state.
     pub fn glyph_style(&self) -> Style {
-        let base = Style::default().fg(theme::ACCENT);
         match self.state {
-            SpinnerState::Idle => base.add_modifier(Modifier::DIM),
-            SpinnerState::Thinking => base.add_modifier(
-                if (self.tick / 4) % 2 == 0 { Modifier::BOLD } else { Modifier::empty() }
-            ),
-            SpinnerState::Streaming => base.add_modifier(
-                if (self.tick / 3) % 2 == 0 { Modifier::BOLD } else { Modifier::RAPID_BLINK }
-            ),
-            SpinnerState::ToolCall => base.add_modifier(
-                if (self.tick / 5) % 2 == 0 { Modifier::BOLD } else { Modifier::empty() }
-            ),
+            SpinnerState::Idle => Style::default().fg(theme::DIM),
+            SpinnerState::Thinking | SpinnerState::Streaming | SpinnerState::ToolCall => {
+                Style::default().fg(theme::PRIMARY_CONTAINER)
+            }
             SpinnerState::Error => Style::default().fg(theme::ERROR).add_modifier(Modifier::BOLD),
         }
     }
@@ -139,7 +110,43 @@ impl Default for OmegaSpinner {
     }
 }
 
-/// A compact Ω glyph renderer for inline use (status bar).
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn active_states_use_a_normal_spinner() {
+        let mut spinner = OmegaSpinner::new();
+        spinner.state = SpinnerState::Thinking;
+        assert_eq!(spinner.current_glyph(), '⠋');
+        spinner.tick();
+        assert_eq!(spinner.current_glyph(), '⠙');
+        assert!(SPINNER_FRAMES.contains(&spinner.current_glyph()));
+    }
+
+    #[test]
+    fn thinking_uses_activity_words_instead_of_thinking_label() {
+        let mut spinner = OmegaSpinner::new();
+        spinner.state = SpinnerState::Thinking;
+        assert_eq!(spinner.current_phrase(), "Cooking…");
+        for _ in 0..24 { spinner.tick(); }
+        assert_eq!(spinner.current_phrase(), "Pondering…");
+        assert!(!spinner.current_phrase().to_lowercase().contains("thinking"));
+    }
+
+    #[test]
+    fn state_changes_use_distinct_activity_vocabulary() {
+        let mut spinner = OmegaSpinner::new();
+        spinner.state = SpinnerState::Streaming;
+        assert_eq!(spinner.current_phrase(), "Writing…");
+        spinner.state = SpinnerState::ToolCall;
+        assert_eq!(spinner.current_phrase(), "Working…");
+        spinner.state = SpinnerState::Error;
+        assert_eq!(spinner.current_glyph(), '!');
+    }
+}
+
+/// A compact spinner renderer for inline use.
 pub struct CompactOmega {
     pub spinner: OmegaSpinner,
 }
@@ -149,7 +156,7 @@ impl CompactOmega {
         Self { spinner }
     }
 
-    /// Render the compact Ω and phrase into a string for the status bar.
+    /// Render the spinner and activity phrase into a string.
     pub fn render_inline(&self) -> (String, Style) {
         let glyph = self.spinner.current_glyph();
         let phrase = self.spinner.current_phrase();

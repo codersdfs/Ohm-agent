@@ -1,66 +1,65 @@
 use ratatui::style::{Color, Modifier, Style};
 
-/// Central style palette for the Omega TUI — cyber-noir / neon glassmorphism.
-/// Anchored in abyssal obsidian (#050505) with Omega Cyan (#00daf3) and
-/// Soft Violet (#d0bcff) accents. Glass panels via surface ladder.
+/// Central style palette for the Omega TUI.
+/// Dark charcoal surfaces and neutral greys keep the interface quiet and readable.
 
 // ── Core palette ─────────────────────────────────────────────────────────────
 // DESIGN.md tokens mapped to ratatui Color::Rgb
 
-pub const BG: Color = Color::Rgb(5, 5, 5);              // Space Black #050505
-pub const FG: Color = Color::Rgb(229, 226, 225);        // on-surface #e5e2e1
-pub const SURFACE: Color = Color::Rgb(26, 26, 26);      // #1a1a1a (glass panels)
-pub const SURFACE_HIGH: Color = Color::Rgb(38, 38, 38); // #262626 (modals)
-pub const SURFACE_LOW: Color = Color::Rgb(18, 18, 18);  // #121212
-pub const RECESSED: Color = Color::Rgb(10, 10, 10);     // #0a0a0a (input fields)
-pub const OUTLINE: Color = Color::Rgb(59, 73, 76);      // #3b494c
-pub const OUTLINE_VARIANT: Color = Color::Rgb(132, 147, 150); // on-surface-variant
-pub const PRIMARY: Color = Color::Rgb(0, 218, 243);     // Omega Cyan #00daf3
-pub const PRIMARY_CONTAINER: Color = Color::Rgb(0, 229, 255); // #00e5ff (brighter)
+pub const BG: Color = Color::Rgb(24, 24, 26);
+pub const FG: Color = Color::Rgb(234, 234, 236);
+pub const SURFACE: Color = Color::Rgb(40, 40, 43);
+pub const SURFACE_HIGH: Color = Color::Rgb(54, 54, 58);
+pub const SURFACE_LOW: Color = Color::Rgb(32, 32, 35);
+pub const RECESSED: Color = Color::Rgb(20, 20, 22);
+pub const OUTLINE: Color = Color::Rgb(94, 94, 101);
+pub const OUTLINE_VARIANT: Color = Color::Rgb(162, 162, 170);
+pub const PRIMARY: Color = Color::Rgb(198, 198, 205);
+pub const PRIMARY_CONTAINER: Color = Color::Rgb(242, 242, 244);
 pub const ACCENT: Color = PRIMARY; // backward compat alias
-pub const SECONDARY: Color = Color::Rgb(208, 188, 255); // Soft Violet #d0bcff
-pub const DIM: Color = Color::Rgb(186, 201, 204);       // on-surface-variant #bac9cc
-pub const ERROR: Color = Color::Rgb(255, 180, 171);     // #ffb4ab
-pub const SUCCESS: Color = Color::Rgb(0, 229, 255);     // cyan success
-pub const WARN: Color = Color::Rgb(255, 190, 70);       // warm amber
+pub const SECONDARY: Color = Color::Rgb(214, 214, 220);
+pub const DIM: Color = Color::Rgb(174, 174, 181);
+pub const ERROR: Color = Color::Rgb(230, 142, 142);
+pub const SUCCESS: Color = Color::Rgb(145, 194, 158);
+pub const WARN: Color = Color::Rgb(210, 177, 116);
 
 // ── Layout / component colors ────────────────────────────────────────────────
 
-pub const SIDEBAR_BG: Color = Color::Rgb(8, 8, 14);     // very dark sidebar
-pub const SIDEBAR_ACTIVE: Color = Color::Rgb(20, 20, 28); // active row bg
-pub const SIDEBAR_FG: Color = Color::Rgb(150, 150, 165);
+pub const SIDEBAR_BG: Color = Color::Rgb(28, 28, 31);
+pub const SIDEBAR_ACTIVE: Color = Color::Rgb(48, 48, 52);
+pub const SIDEBAR_FG: Color = Color::Rgb(172, 172, 180);
 pub const SIDEBAR_ACCENT: Color = PRIMARY_CONTAINER;
 pub const BORDER: Color = OUTLINE;
-pub const RULE: Color = Color::Rgb(42, 42, 50);
-pub const GLASS_BORDER: Color = Color::Rgb(255, 255, 255); // for 0.1 alpha simulation → use OUTLINE instead
+pub const RULE: Color = Color::Rgb(68, 68, 73);
+pub const GLASS_BORDER: Color = OUTLINE;
 pub const GLASS_BORDER_ACTIVE: Color = PRIMARY;
 
 // ── Diff colors ──────────────────────────────────────────────────────────────
 
-pub const DIFF_ADD: Color = Color::Rgb(0, 200, 80);
-pub const DIFF_REMOVE: Color = Color::Rgb(255, 90, 90);
+pub const DIFF_ADD: Color = Color::Rgb(130, 184, 143);
+pub const DIFF_REMOVE: Color = Color::Rgb(214, 132, 132);
 pub const DIFF_HEADER: Color = PRIMARY;
 
 // ── Role marker colors ───────────────────────────────────────────────────────
 
-pub const USER_MARKER: Color = PRIMARY;                  // cyan
-pub const AGENT_MARKER: Color = Color::Rgb(140, 140, 155);
-pub const TOOL_MARKER: Color = Color::Rgb(255, 190, 70);
+pub const USER_MARKER: Color = PRIMARY;
+pub const AGENT_MARKER: Color = Color::Rgb(140, 140, 148);
+pub const TOOL_MARKER: Color = WARN;
 pub const SYSTEM_MARKER: Color = OUTLINE;
 
 // ── Tool-specific colors ──────────────────────────────────────────────────────
 
-pub const TOOL_BROWSER: Color = PRIMARY;
-pub const TOOL_SHELL: Color = Color::Rgb(74, 222, 128);  // green
-pub const TOOL_FILE_SYS: Color = Color::Rgb(250, 204, 21); // amber
-pub const TOOL_SEARCH: Color = Color::Rgb(232, 121, 249); // magenta
+pub const TOOL_BROWSER: Color = Color::Rgb(180, 180, 188);
+pub const TOOL_SHELL: Color = Color::Rgb(156, 184, 163);
+pub const TOOL_FILE_SYS: Color = Color::Rgb(194, 174, 137);
+pub const TOOL_SEARCH: Color = Color::Rgb(174, 174, 184);
 pub const TOOL_READ: Color = PRIMARY;
 pub const TOOL_WRITE: Color = TOOL_SHELL;
 pub const TOOL_EDIT: Color = TOOL_FILE_SYS;
 pub const TOOL_BASH: Color = TOOL_SHELL;
 pub const TOOL_GLOB: Color = TOOL_SEARCH;
 pub const TOOL_GREP: Color = TOOL_SEARCH;
-pub const TOOL_TASK: Color = Color::Rgb(232, 121, 249);
+pub const TOOL_TASK: Color = Color::Rgb(174, 174, 184);
 pub const TOOL_WEB: Color = PRIMARY;
 pub const TOOL_LSP: Color = TOOL_SHELL;
 pub const TOOL_DEFAULT: Color = TOOL_FILE_SYS;
@@ -80,12 +79,12 @@ pub const TOOL_BOX_BORDER_RUNNING: Color = WARN;
 
 // ── Provider panel focus colors ──────────────────────────────────────────────
 
-/// Subtle glow effect for focused elements — a softer cyan for backgrounds.
-pub const FOCUS_GLOW: Color = Color::Rgb(0, 40, 50);
+/// Subtle neutral fill for focused elements.
+pub const FOCUS_GLOW: Color = Color::Rgb(64, 64, 69);
 /// Color for focused text field underlines.
-pub const FOCUS_UNDERLINE: Color = Color::Rgb(0, 218, 243);
+pub const FOCUS_UNDERLINE: Color = Color::Rgb(198, 198, 205);
 /// Accent color for focused container borders.
-pub const FOCUS_BORDER: Color = Color::Rgb(0, 229, 255);
+pub const FOCUS_BORDER: Color = Color::Rgb(224, 224, 229);
 
 pub fn style_tool_box_border() -> Style {
     Style::default().fg(TOOL_BOX_BORDER)
@@ -150,11 +149,11 @@ pub fn style_focused_field() -> Style {
         .add_modifier(Modifier::UNDERLINED)
 }
 
-/// Style for a focused button: bold, bright foreground, with glow accent.
+/// Style for a focused button: bold and high-contrast without animation.
 pub fn style_focused_button() -> Style {
     Style::default()
         .fg(PRIMARY_CONTAINER)
-        .add_modifier(Modifier::BOLD | Modifier::RAPID_BLINK)
+        .add_modifier(Modifier::BOLD)
 }
 
 /// Get the color associated with a tool name.
@@ -173,18 +172,18 @@ pub fn tool_color(name: &str) -> Color {
     }
 }
 
-/// Render a glass-panel border effect: top/left brighter than bottom/right.
+/// Render a subtle raised border using two neighbouring grey tones.
 /// Returns styles for the four borders.
 pub fn glass_border_styles(active: bool) -> (Style, Style, Style, Style) {
     let top_left = if active {
         Style::default().fg(PRIMARY_CONTAINER)
     } else {
-        Style::default().fg(Color::Rgb(80, 80, 85))
+        Style::default().fg(Color::Rgb(104, 104, 111))
     };
     let bottom_right = if active {
         Style::default().fg(PRIMARY)
     } else {
-        Style::default().fg(Color::Rgb(38, 38, 45))
+        Style::default().fg(Color::Rgb(62, 62, 67))
     };
     (top_left, top_left, bottom_right, bottom_right)
 }

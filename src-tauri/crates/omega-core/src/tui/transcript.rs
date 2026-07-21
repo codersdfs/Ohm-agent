@@ -7,6 +7,15 @@ use ratatui::widgets::{Block, Paragraph, Widget, Wrap};
 use super::markdown;
 use super::theme;
 
+const ACTIVITY_SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+const ACTIVITY_WORDS: &[&str] = &["Cooking…", "Pondering…", "Reasoning…", "Planning…", "Considering…"];
+
+fn activity_text(tick: u64) -> String {
+    let glyph = ACTIVITY_SPINNER[tick as usize % ACTIVITY_SPINNER.len()];
+    let word = ACTIVITY_WORDS[(tick as usize / 24) % ACTIVITY_WORDS.len()];
+    format!("  {glyph} {word} ")
+}
+
 /// A single entry in the conversation transcript.
 #[derive(Clone)]
 pub enum TranscriptEntry {
@@ -40,7 +49,7 @@ pub enum TranscriptEntry {
 
 impl TranscriptEntry {
     /// Render (or re-render) the entry's text content into ratatui Lines.
-    pub fn render_to_text(&mut self, _width: u16) -> Text<'static> {
+    pub fn render_to_text(&mut self, _width: u16, activity_tick: u64) -> Text<'static> {
         match self {
             TranscriptEntry::User { content } => {
                 let mut text = markdown::render_markdown(content);
@@ -55,16 +64,16 @@ impl TranscriptEntry {
             TranscriptEntry::Assistant { content, rendered, is_streaming, thinking } => {
                 let mut all = Vec::new();
 
-                // Agent marker: secondary violet diamond
-                all.push(Line::from(vec![
-                    Span::styled("◆ ", Style::default().fg(theme::SECONDARY).add_modifier(Modifier::BOLD)),
-                ]));
-
-                // Thinking/reasoning block (dimmed, before actual content)
-                if !thinking.is_empty() {
+                // Show activity directly, without a separate assistant marker.
+                if *is_streaming {
+                    let activity = activity_text(activity_tick);
                     all.push(Line::from(vec![
-                        Span::styled("  thinking… ", theme::style_dim()),
+                        Span::styled(activity.trim_start(), theme::style_dim()),
                     ]));
+                }
+
+                // Reasoning text remains below the activity line.
+                if !thinking.is_empty() {
                     let mut thinking_lines = markdown::render_markdown(thinking).lines;
                     for line in thinking_lines.iter_mut() {
                         let dimmed: Vec<Span> = line.spans.iter().map(|s| {
@@ -72,11 +81,6 @@ impl TranscriptEntry {
                         }).collect();
                         all.push(Line::from(dimmed));
                     }
-                } else if *is_streaming {
-                    // No thinking text yet — show static indicator
-                    all.push(Line::from(vec![
-                        Span::styled("  thinking… ", theme::style_dim()),
-                    ]));
                 }
 
                 // Actual response content. Render it both live (so streamed
@@ -86,10 +90,11 @@ impl TranscriptEntry {
                     all.append(&mut text.lines);
                 }
 
-                // Live streaming cursor — only while still streaming.
-                if *is_streaming {
+                // Live response cursor uses a conventional terminal spinner.
+                if *is_streaming && !content.is_empty() {
+                    let glyph = ACTIVITY_SPINNER[activity_tick as usize % ACTIVITY_SPINNER.len()];
                     all.push(Line::from(Span::styled(
-                        " ⍟",
+                        format!(" {glyph}"),
                         Style::default().fg(theme::PRIMARY),
                     )));
                 }
@@ -148,15 +153,18 @@ impl TranscriptEntry {
     }
 
     /// Get the rendered text, rendering if needed.
-    pub fn get_rendered(&mut self, width: u16) -> Text<'static> {
+    pub fn get_rendered(&mut self, width: u16, activity_tick: u64) -> Text<'static> {
         match self {
-            TranscriptEntry::Assistant { rendered, .. } => {
-                if let Some(r) = rendered.take() {
-                    return r;
+            TranscriptEntry::Assistant { rendered, is_streaming, .. } => {
+                // Streaming entries must be regenerated so the spinner advances.
+                if !*is_streaming {
+                    if let Some(r) = rendered.take() {
+                        return r;
+                    }
                 }
-                self.render_to_text(width)
+                self.render_to_text(width, activity_tick)
             }
-            _ => self.render_to_text(width),
+            _ => self.render_to_text(width, activity_tick),
         }
     }
 }
@@ -993,6 +1001,7 @@ pub fn render(
     buf: &mut Buffer,
     entries: &mut [TranscriptEntry],
     scroll: &mut ScrollState,
+    activity_tick: u64,
 ) {
     if area.height < 1 || area.width < 2 {
         return;
@@ -1001,7 +1010,7 @@ pub fn render(
     // Build the full rendered text from all entries
     let mut all_lines: Vec<Line<'static>> = Vec::new();
     for entry in entries.iter_mut() {
-        let rendered = entry.get_rendered(area.width);
+        let rendered = entry.get_rendered(area.width, activity_tick);
         all_lines.extend(rendered.lines);
     }
 
@@ -1077,6 +1086,7 @@ pub struct Transcript {
     pub stream_event_rx: Option<tokio::sync::mpsc::UnboundedReceiver<super::component::UiStreamEvent>>,
     pub streaming_fragment: String,
     pub tools_expanded: bool,
+    pub activity_tick: u64,
 }
 
 impl Transcript {
@@ -1088,7 +1098,12 @@ impl Transcript {
             stream_event_rx: None,
             streaming_fragment: String::new(),
             tools_expanded: false,
+            activity_tick: 0,
         }
+    }
+
+    pub fn tick_activity(&mut self) {
+        self.activity_tick = self.activity_tick.wrapping_add(1);
     }
 
     /// Globally expand or collapse all structured tool executions.
@@ -1263,7 +1278,7 @@ impl Component for Transcript {
     }
 
     fn render(&mut self, f: &mut ratatui::Frame, area: Rect) {
-        render(area, f.buffer_mut(), &mut self.entries, &mut self.scroll);
+        render(area, f.buffer_mut(), &mut self.entries, &mut self.scroll, self.activity_tick);
     }
 }
 
@@ -1277,6 +1292,22 @@ mod tests {
         t.lines.iter().map(|l| {
             l.spans.iter().map(|s| s.content.clone()).collect::<String>()
         }).collect::<Vec<_>>().join("\n")
+    }
+
+    #[test]
+    fn streaming_assistant_uses_activity_spinner_not_thinking_label() {
+        let mut entry = TranscriptEntry::Assistant {
+            content: String::new(),
+            rendered: None,
+            is_streaming: true,
+            thinking: String::new(),
+        };
+        let first = text_to_string(&entry.get_rendered(60, 0));
+        let second = text_to_string(&entry.get_rendered(60, 1));
+        assert!(first.contains("⠋ Cooking…"));
+        assert!(second.contains("⠙ Cooking…"));
+        assert!(!first.contains('◆'));
+        assert!(!first.to_lowercase().contains("thinking"));
     }
 
     #[test]
@@ -1322,7 +1353,7 @@ mod tests {
                 result: result_owned,
             };
             let mut entry_clone = entry.clone();
-            let rendered = entry_clone.get_rendered(80);
+            let rendered = entry_clone.get_rendered(80, 0);
             println!("→ {} {} {}", tool, args, result.unwrap_or("(running)"));
             println!("{}", text_to_string(&rendered));
             println!();
@@ -1345,7 +1376,7 @@ mod tests {
         assert_eq!(state.write_preview.as_ref().unwrap().lines.len(), 10);
         let mut entry = TranscriptEntry::ToolCallBox { state };
 
-        let rendered = entry.get_rendered(60);
+        let rendered = entry.get_rendered(60, 0);
         let output = text_to_string(&rendered);
         let lines: Vec<&str> = output.lines().collect();
 
@@ -1425,7 +1456,7 @@ mod tests {
         assert_eq!(preview.omitted_added, 2_000 - MAX_RETAINED_SOURCE_LINES);
 
         let mut entry = TranscriptEntry::ToolCallBox { state };
-        let rendered = entry.get_rendered(60);
+        let rendered = entry.get_rendered(60, 0);
         let output = text_to_string(&rendered);
         assert!(output.contains("edit  src/large.rs"));
         assert!(output.contains("RUNNING"));
@@ -1470,7 +1501,7 @@ mod tests {
             args: "cargo build --release".into(),
             result: Some("Compiling...\nFinished\n".into()),
         };
-        let rendered = entry.get_rendered(60);
+        let rendered = entry.get_rendered(60, 0);
         let s = text_to_string(&rendered);
         let lines: Vec<&str> = s.lines().collect();
 

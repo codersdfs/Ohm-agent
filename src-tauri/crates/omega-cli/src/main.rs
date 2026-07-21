@@ -19,7 +19,7 @@ use ratata::prelude::*;
 use omega_core::tui::component::{Action, Component, UiStreamEvent};
 use omega_core::tui::editor::{EditorMode, EditorState};
 use omega_core::tui::status::StatusState;
-use omega_core::tui::spinner::SpinnerState;
+use omega_core::tui::spinner::{OmegaSpinner, SpinnerState};
 use omega_core::tui::theme;
 use omega_core::tui::transcript::{self, TranscriptEntry, Transcript};
 use omega_core::{commands, AppState, ChatEmitter, default_db_path};
@@ -614,6 +614,7 @@ impl App {
     /// Advance the spinner animation.
     fn tick_spinner(&mut self) {
         self.status.tick_spinner();
+        self.transcript.tick_activity();
     }
 
     /// Poll the provider panel model-fetch channel.
@@ -685,7 +686,7 @@ impl App {
         }
     }
 
-    /// Render the full UI — cyber-noir reference layout:
+    /// Render the full UI using the dark neutral layout:
     /// top system bar, metrics panel, main process panel, command input, footer.
     fn render_widgets(&mut self, frame: &mut ratatui::Frame) {
         let area = frame.size();
@@ -728,7 +729,7 @@ impl App {
         render_process_panel(frame, process_area, &mut self.transcript, self.show_help);
 
         // ── Command input (glass-bordered) ───────────────────────────────
-        render_command_input(frame, editor_area, &self.editor, self.is_streaming);
+        render_command_input(frame, editor_area, &self.editor, self.is_streaming, &self.status.spinner);
 
         // ── Footer bar ──────────────────────────────────────────────────
         self.status.hint_text = Some("[CR] COMMIT | [^C] ABORT | ? help".into());
@@ -1045,6 +1046,7 @@ fn render_command_input(
     area: Rect,
     editor: &EditorState,
     is_streaming: bool,
+    spinner: &OmegaSpinner,
 ) {
     if area.height < 3 || area.width < 20 { return; }
 
@@ -1076,9 +1078,10 @@ fn render_command_input(
         ]))
         .render(Rect::new(prompt_x, prompt_y, input_width, 1), frame.buffer_mut());
     } else if is_streaming && editor.buffer.is_empty() {
+        let activity = format!(" {} {} ", spinner.current_glyph(), spinner.current_phrase());
         Paragraph::new(Line::from(vec![
             Span::styled("λ ", Style::default().fg(theme::PRIMARY).add_modifier(Modifier::BOLD)),
-            Span::styled(" streaming… ", theme::style_dim()),
+            Span::styled(activity, spinner.glyph_style()),
         ]))
         .render(Rect::new(prompt_x, prompt_y, input_width, 1), frame.buffer_mut());
     } else {
