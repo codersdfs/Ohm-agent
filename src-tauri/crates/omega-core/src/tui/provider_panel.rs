@@ -42,6 +42,7 @@ pub struct ProviderPanelState {
     pub models_error: Option<String>,
     pub show_dropdown: bool,
     pub selected_model: usize,
+    pub model_scroll: usize,
     pub models_rx: Option<tokio::sync::oneshot::Receiver<Result<Vec<String>, String>>>,
     /// Stashed config for Component rendering (API key display etc.).
     pub config: providers::ProviderConfig,
@@ -72,6 +73,7 @@ impl ProviderPanelState {
             models_error: None,
             show_dropdown: false,
             selected_model: 0,
+            model_scroll: 0,
             models_rx: None,
             config: config.clone(),
         }
@@ -93,15 +95,50 @@ impl ProviderPanelState {
 
 // ── Navigation helpers ──────────────────────────────────────────────────────
 
+fn select_provider(state: &mut ProviderPanelState, index: usize) {
+    let all = providers::ProviderKind::all();
+    let Some(kind) = all.get(index) else { return };
+    if state.selected_provider == index { return; }
+
+    let old_default = all.get(state.selected_provider).map(|k| k.default_base_url());
+    let should_update_url = state.url_buffer.is_empty()
+        || old_default.as_deref() == Some(state.url_buffer.as_str());
+
+    state.selected_provider = index;
+    state.needs_fetch = true;
+    state.models.clear();
+    state.models_error = None;
+    state.selected_model = 0;
+    state.model_scroll = 0;
+    state.show_dropdown = false;
+
+    // Preserve custom gateways, but replace a previous provider's default URL.
+    if should_update_url {
+        state.url_buffer = kind.default_base_url();
+        state.url_cursor = state.url_buffer.len();
+    }
+}
+
+fn ensure_model_visible(state: &mut ProviderPanelState) {
+    const VISIBLE_MODELS: usize = 6;
+    if state.models.is_empty() {
+        state.selected_model = 0;
+        state.model_scroll = 0;
+        return;
+    }
+    state.selected_model = state.selected_model.min(state.models.len() - 1);
+    if state.selected_model < state.model_scroll {
+        state.model_scroll = state.selected_model;
+    } else if state.selected_model >= state.model_scroll + VISIBLE_MODELS {
+        state.model_scroll = state.selected_model + 1 - VISIBLE_MODELS;
+    }
+}
+
 /// Move focus up within the current field or navigate the provider grid up.
 fn move_focus_up(state: &mut ProviderPanelState) {
     match state.focus {
-        PanelFocus::ProviderGrid if state.selected_provider > 0 => {
-            state.selected_provider -= 1;
-            state.needs_fetch = true;
-            if state.selected_provider < state.provider_scroll {
-                state.provider_scroll = state.provider_scroll.saturating_sub(1);
-            }
+        PanelFocus::ProviderGrid if state.selected_provider >= 3 => {
+            select_provider(state, state.selected_provider - 3);
         }
         PanelFocus::MaxTokens => state.max_tokens = state.max_tokens.saturating_add(512),
         PanelFocus::Temperature => state.temperature = (state.temperature + 0.1).min(2.0),
@@ -113,14 +150,8 @@ fn move_focus_up(state: &mut ProviderPanelState) {
 fn move_focus_down(state: &mut ProviderPanelState) {
     match state.focus {
         PanelFocus::ProviderGrid => {
-            let max = providers::ProviderKind::all().len() - 1;
-            if state.selected_provider < max {
-                state.selected_provider += 1;
-                state.needs_fetch = true;
-            }
-            if state.selected_provider >= state.provider_scroll + 5 {
-                state.provider_scroll = state.provider_scroll.saturating_add(1).min(max.saturating_sub(4));
-            }
+            let max = providers::ProviderKind::all().len().saturating_sub(1);
+            select_provider(state, (state.selected_provider + 3).min(max));
         }
         PanelFocus::MaxTokens => state.max_tokens = state.max_tokens.saturating_sub(512).max(1),
         PanelFocus::Temperature => state.temperature = (state.temperature - 0.1).max(0.0),
@@ -131,9 +162,11 @@ fn move_focus_down(state: &mut ProviderPanelState) {
 /// Move focus left: navigate provider grid columns or cursor left in text fields.
 fn move_focus_left(state: &mut ProviderPanelState) {
     match state.focus {
-        PanelFocus::ProviderGrid if state.selected_provider > 2 => {
-            state.selected_provider -= 3;
-            state.needs_fetch = true;
+        PanelFocus::ProviderGrid => {
+            let row_start = state.selected_provider / 3 * 3;
+            if state.selected_provider > row_start {
+                select_provider(state, state.selected_provider - 1);
+            }
         }
         PanelFocus::ModelField | PanelFocus::BaseUrlField => {
             let cursor = state.current_cursor();
@@ -152,10 +185,10 @@ fn move_focus_left(state: &mut ProviderPanelState) {
 fn move_focus_right(state: &mut ProviderPanelState) {
     match state.focus {
         PanelFocus::ProviderGrid => {
-            let max = providers::ProviderKind::all().len() - 1;
-            if state.selected_provider + 3 <= max {
-                state.selected_provider += 3;
-                state.needs_fetch = true;
+            let max = providers::ProviderKind::all().len().saturating_sub(1);
+            let row_end = ((state.selected_provider / 3) * 3 + 2).min(max);
+            if state.selected_provider < row_end {
+                select_provider(state, state.selected_provider + 1);
             }
         }
         PanelFocus::ModelField | PanelFocus::BaseUrlField => {
@@ -180,16 +213,7 @@ fn move_focus_right(state: &mut ProviderPanelState) {
 fn jump_to_provider_by_number(state: &mut ProviderPanelState, num: usize) {
     let max = providers::ProviderKind::all().len();
     if num >= 1 && num <= max {
-        let idx = num - 1;
-        state.selected_provider = idx;
-        state.needs_fetch = true;
-        // Adjust scroll so the selected provider is visible
-        let items_per_col = 5usize;
-        if idx < state.provider_scroll {
-            state.provider_scroll = idx;
-        } else if idx >= state.provider_scroll + items_per_col {
-            state.provider_scroll = idx.saturating_sub(items_per_col).saturating_add(1);
-        }
+        select_provider(state, num - 1);
     }
 }
 
@@ -221,14 +245,17 @@ pub fn handle_key(state: &mut ProviderPanelState, key: KeyEvent) -> PanelAction 
                 state.show_dropdown = false;
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                if state.selected_model > 0 {
-                    state.selected_model -= 1;
+                let len = state.models.len();
+                if len > 0 {
+                    state.selected_model = if state.selected_model == 0 { len - 1 } else { state.selected_model - 1 };
+                    ensure_model_visible(state);
                 }
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                let max = state.models.len().saturating_sub(1);
-                if state.selected_model < max {
-                    state.selected_model += 1;
+                let len = state.models.len();
+                if len > 0 {
+                    state.selected_model = (state.selected_model + 1) % len;
+                    ensure_model_visible(state);
                 }
             }
             KeyCode::Enter | KeyCode::Char(' ') => {
@@ -270,13 +297,11 @@ pub fn handle_key(state: &mut ProviderPanelState, key: KeyEvent) -> PanelAction 
             };
         }
 
-        // Vim-style navigation: j = down, k = up
-        KeyCode::Char('j') => move_focus_down(state),
-        KeyCode::Char('k') => move_focus_up(state),
-
-        // Vim-style navigation: h = left, l = right
-        KeyCode::Char('h') => move_focus_left(state),
-        KeyCode::Char('l') => move_focus_right(state),
+        // Vim bindings apply to controls, not editable text fields.
+        KeyCode::Char('j') if !matches!(state.focus, PanelFocus::ModelField | PanelFocus::BaseUrlField) => move_focus_down(state),
+        KeyCode::Char('k') if !matches!(state.focus, PanelFocus::ModelField | PanelFocus::BaseUrlField) => move_focus_up(state),
+        KeyCode::Char('h') if !matches!(state.focus, PanelFocus::ModelField | PanelFocus::BaseUrlField) => move_focus_left(state),
+        KeyCode::Char('l') if !matches!(state.focus, PanelFocus::ModelField | PanelFocus::BaseUrlField) => move_focus_right(state),
 
         // Arrow key navigation in all directions
         KeyCode::Up => move_focus_up(state),
@@ -656,23 +681,19 @@ pub fn render(
         );
         if dd_area.bottom() <= area.bottom() {
             let mut dd_lines: Vec<Line<'static>> = Vec::new();
-            let visible = state.models.iter().take(6);
-            for (i, model) in visible.enumerate() {
-                let style = if i == state.selected_model {
+            let start = state.model_scroll.min(state.models.len().saturating_sub(1));
+            let end = (start + 6).min(state.models.len());
+            for (i, model) in state.models[start..end].iter().enumerate() {
+                let index = start + i;
+                let style = if index == state.selected_model {
                     Style::default().fg(theme::PRIMARY_CONTAINER).add_modifier(Modifier::BOLD)
                 } else {
                     theme::style_dim()
                 };
-                let prefix = if i == state.selected_model { "▸ " } else { "  " };
+                let prefix = if index == state.selected_model { "▸ " } else { "  " };
                 dd_lines.push(Line::from(Span::styled(
                     format!("{}{}", prefix, model),
                     style,
-                )));
-            }
-            if state.models.len() > 6 {
-                dd_lines.push(Line::from(Span::styled(
-                    format!("  … {} more", state.models.len() - 6),
-                    theme::style_dim(),
                 )));
             }
             let dd = Paragraph::new(Text::from(dd_lines))
@@ -701,5 +722,85 @@ impl Component for ProviderPanelState {
 
     fn render(&mut self, f: &mut ratatui::Frame, area: ratatui::layout::Rect) {
         crate::tui::provider_panel::render(area, f.buffer_mut(), self, &self.config);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(kind: providers::ProviderKind, base_url: Option<&str>) -> providers::ProviderConfig {
+        providers::ProviderConfig {
+            kind,
+            api_key: Some("test-key".into()),
+            base_url: base_url.map(str::to_owned),
+            model: "current-model".into(),
+            max_tokens: 4096,
+            temperature: 0.7,
+        }
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn vim_letters_are_inserted_in_text_fields() {
+        for focus in [PanelFocus::ModelField, PanelFocus::BaseUrlField] {
+            let mut state = ProviderPanelState::from_config(&config(providers::ProviderKind::OpenAI, None));
+            state.focus = focus;
+            state.set_buffer(String::new());
+            state.set_cursor(0);
+            for c in ['h', 'j', 'k', 'l'] {
+                handle_key(&mut state, key(KeyCode::Char(c)));
+            }
+            assert_eq!(state.current_buffer(), "hjkl");
+        }
+    }
+
+    #[test]
+    fn provider_grid_uses_three_column_navigation() {
+        let mut state = ProviderPanelState::from_config(&config(providers::ProviderKind::Anthropic, None));
+        state.selected_provider = 0;
+        handle_key(&mut state, key(KeyCode::Right));
+        assert_eq!(state.selected_provider, 1);
+        handle_key(&mut state, key(KeyCode::Down));
+        assert_eq!(state.selected_provider, 4);
+        handle_key(&mut state, key(KeyCode::Left));
+        assert_eq!(state.selected_provider, 3);
+        handle_key(&mut state, key(KeyCode::Up));
+        assert_eq!(state.selected_provider, 0);
+    }
+
+    #[test]
+    fn provider_change_updates_default_url_but_preserves_custom_url() {
+        let mut default_state = ProviderPanelState::from_config(&config(providers::ProviderKind::OpenAI, None));
+        handle_key(&mut default_state, key(KeyCode::Down));
+        assert_eq!(default_state.url_buffer, providers::ProviderKind::XAI.default_base_url());
+
+        let mut custom_state = ProviderPanelState::from_config(&config(
+            providers::ProviderKind::OpenAI,
+            Some("https://gateway.example/v1"),
+        ));
+        handle_key(&mut custom_state, key(KeyCode::Down));
+        assert_eq!(custom_state.url_buffer, "https://gateway.example/v1");
+    }
+
+    #[test]
+    fn dropdown_wraps_scrolls_and_selects() {
+        let mut state = ProviderPanelState::from_config(&config(providers::ProviderKind::OpenAI, None));
+        state.focus = PanelFocus::ModelField;
+        state.models = (0..10).map(|i| format!("model-{i}")).collect();
+        state.show_dropdown = true;
+
+        handle_key(&mut state, key(KeyCode::Up));
+        assert_eq!((state.selected_model, state.model_scroll), (9, 4));
+        handle_key(&mut state, key(KeyCode::Down));
+        assert_eq!((state.selected_model, state.model_scroll), (0, 0));
+        for _ in 0..7 { handle_key(&mut state, key(KeyCode::Down)); }
+        assert_eq!((state.selected_model, state.model_scroll), (7, 2));
+        handle_key(&mut state, key(KeyCode::Enter));
+        assert_eq!(state.model_buffer, "model-7");
+        assert!(!state.show_dropdown);
     }
 }

@@ -622,6 +622,10 @@ impl App {
             match rx.try_recv() {
                 Ok(Ok(models)) => {
                     self.provider_panel_state.models = models;
+                    self.provider_panel_state.selected_model = self.provider_panel_state.selected_model
+                        .min(self.provider_panel_state.models.len().saturating_sub(1));
+                    self.provider_panel_state.model_scroll = self.provider_panel_state.model_scroll
+                        .min(self.provider_panel_state.models.len().saturating_sub(1));
                     self.provider_panel_state.models_loading = false;
                     self.provider_panel_state.models_rx = None;
                 }
