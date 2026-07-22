@@ -216,6 +216,11 @@ pub fn handle_key(state: &mut CommandPaletteState, key: KeyEvent) -> PaletteActi
             }
             PaletteAction::None
         }
+        // Crossterm reports Shift+Tab as BackTab on most terminals.
+        KeyCode::BackTab => {
+            state.move_sel(-1);
+            PaletteAction::None
+        }
         KeyCode::Backspace => {
             state.query.pop();
             state.recompute_filter();
@@ -251,7 +256,8 @@ pub fn render(area: Rect, buf: &mut Buffer, state: &CommandPaletteState) {
         }
     }
 
-    let popup_width = area.width.min(48).max(24);
+    // Prefer 48 cols, clamp to available width with a small margin; min 20.
+    let popup_width = area.width.saturating_sub(4).min(48).max(20).min(area.width);
     // chrome: borders + title + search line + optional description + empty/rows
     let row_count = if state.filtered.is_empty() {
         1usize
@@ -501,5 +507,15 @@ mod tests {
         handle_key(&mut s, press(KeyCode::Char('l')));
         assert_eq!(s.query, "cl");
         assert!(s.filtered.iter().any(|&i| COMMANDS[i].id == "/clear"));
+    }
+
+    #[test]
+    fn backtab_moves_selection_up() {
+        let mut s = CommandPaletteState::new();
+        s.open("");
+        s.selected = 1;
+        let action = handle_key(&mut s, press(KeyCode::BackTab));
+        assert_eq!(action, PaletteAction::None);
+        assert_eq!(s.selected, 0);
     }
 }
