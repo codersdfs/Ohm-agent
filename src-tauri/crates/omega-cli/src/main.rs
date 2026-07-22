@@ -928,7 +928,7 @@ impl App {
         );
 
         // ── Footer bar ──────────────────────────────────────────────────
-        self.status.hint_text = Some("[CR] COMMIT | [^C] ABORT | ? help".into());
+        self.status.hint_text = Some("[CR] COMMIT | [^C] ABORT | ^K cmds | ? help".into());
         let (tokens_in, tokens_out) = omega_core::commands::chat::session_token_counts();
         self.status.tokens_in = tokens_in;
         self.status.tokens_out = tokens_out;
@@ -941,6 +941,13 @@ impl App {
         // ── Overlays ────────────────────────────────────────────────────
         if self.show_help {
             omega_core::tui::help::render(area, frame.buffer_mut());
+        }
+        if self.show_command_palette {
+            omega_core::tui::command_palette::render(
+                area,
+                frame.buffer_mut(),
+                &self.command_palette,
+            );
         }
     } // end render_widgets
 } // end impl App
