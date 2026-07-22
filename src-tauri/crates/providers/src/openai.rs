@@ -37,6 +37,14 @@ struct OpenAIRequest {
     temperature: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<OpenAIToolDef>>,
+    /// Required for usage on streaming responses (OpenAI + many OpenAI-compatible APIs).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream_options: Option<OpenAIStreamOptions>,
+}
+
+#[derive(Serialize)]
+struct OpenAIStreamOptions {
+    include_usage: bool,
 }
 
 #[derive(Serialize)]
@@ -69,7 +77,9 @@ struct OpenAIResponse {
 
 #[derive(serde::Deserialize)]
 struct OpenAIUsage {
+    #[serde(default)]
     prompt_tokens: u32,
+    #[serde(default)]
     completion_tokens: u32,
 }
 
@@ -101,11 +111,13 @@ struct StreamDeltaToolCallFunction {
 #[derive(serde::Deserialize)]
 struct StreamChoice {
     delta: StreamDelta,
+    #[allow(dead_code)]
     finish_reason: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
 struct StreamEvent {
+    #[serde(default)]
     choices: Vec<StreamChoice>,
     model: Option<String>,
     usage: Option<OpenAIUsage>,
@@ -180,6 +192,13 @@ impl OpenAIProvider {
             max_tokens: request.config.max_tokens,
             temperature: request.config.temperature,
             tools,
+            stream_options: if request.stream {
+                Some(OpenAIStreamOptions {
+                    include_usage: true,
+                })
+            } else {
+                None
+            },
         }
     }
 
@@ -280,6 +299,8 @@ impl LlmProvider for OpenAIProvider {
         let stream = resp.bytes_stream();
         use futures_util::StreamExt;
         let mut buf = String::new();
+        let mut last_usage: Option<Usage> = None;
+        let mut last_model: Option<String> = None;
 
         tokio::pin!(stream);
         while let Some(chunk) = stream.next().await {
@@ -300,8 +321,8 @@ impl LlmProvider for OpenAIProvider {
                         content: String::new(),
                         thinking: String::new(),
                         done: true,
-                        model: None,
-                        usage: None,
+                        model: last_model.clone(),
+                        usage: last_usage.clone(),
                         delta_tool_calls: None,
                     });
                     return Ok(());
@@ -309,10 +330,24 @@ impl LlmProvider for OpenAIProvider {
 
                 if let Some(data) = line.strip_prefix("data: ") {
                     if let Ok(event) = serde_json::from_str::<StreamEvent>(data) {
+                        if let Some(u) = event.usage.as_ref() {
+                            last_usage = Some(Usage {
+                                input_tokens: u.prompt_tokens,
+                                output_tokens: u.completion_tokens,
+                            });
+                        }
+                        if event.model.is_some() {
+                            last_model = event.model.clone();
+                        }
+
+                        // Usage-only trailer (include_usage) has empty choices.
+                        if event.choices.is_empty() {
+                            continue;
+                        }
+
                         if let Some(choice) = event.choices.into_iter().next() {
                             let content = choice.delta.content.unwrap_or_default();
                             let thinking = choice.delta.reasoning_content.unwrap_or_default();
-                            let is_done = choice.finish_reason.is_some();
 
                             let delta_tool_calls = choice.delta.tool_calls.map(|calls| {
                                 calls
@@ -331,27 +366,31 @@ impl LlmProvider for OpenAIProvider {
                                     .collect()
                             });
 
-                            let usage = event.usage.as_ref().map(|u| crate::Usage {
-                                input_tokens: u.prompt_tokens,
-                                output_tokens: u.completion_tokens,
-                            });
+                            // Never mark done here — wait for [DONE] (or stream end)
+                            // so trailing usage from stream_options is captured first.
                             let _ = tx.send(StreamChunk {
                                 content,
                                 thinking,
-                                done: is_done,
-                                model: event.model.clone(),
-                                usage,
+                                done: false,
+                                model: last_model.clone(),
+                                usage: None,
                                 delta_tool_calls,
                             });
-                            if is_done {
-                                return Ok(());
-                            }
                         }
                     }
                 }
             }
         }
 
+        // Stream closed without [DONE]; still emit terminal chunk with best-effort usage.
+        let _ = tx.send(StreamChunk {
+            content: String::new(),
+            thinking: String::new(),
+            done: true,
+            model: last_model,
+            usage: last_usage,
+            delta_tool_calls: None,
+        });
         Ok(())
     }
 }

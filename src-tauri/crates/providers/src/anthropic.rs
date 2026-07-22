@@ -77,6 +77,9 @@ struct AnthropicStreamEvent {
     content_block: Option<AnthropicContentBlock>,
     #[serde(default)]
     message: Option<AnthropicStreamMessage>,
+    /// Present on `message_delta` events (not nested under `message`).
+    #[serde(default)]
+    usage: Option<AnthropicUsage>,
 }
 
 #[derive(serde::Deserialize)]
@@ -88,7 +91,9 @@ struct AnthropicStreamMessage {
 
 #[derive(serde::Deserialize)]
 struct AnthropicUsage {
+    #[serde(default)]
     input_tokens: u32,
+    #[serde(default)]
     output_tokens: u32,
 }
 
@@ -314,6 +319,7 @@ impl LlmProvider for AnthropicProvider {
         let mut tool_calls_map: std::collections::HashMap<String, (usize, String, String)> =
             std::collections::HashMap::new();
         let mut current_block_type = String::new();
+        let mut last_usage: Option<Usage> = None;
 
         tokio::pin!(stream);
         while let Some(chunk) = stream.next().await {
@@ -374,13 +380,20 @@ impl LlmProvider for AnthropicProvider {
                                 current_block_type.clear();
                             }
                             "message_delta" => {
-                                // Stream ended
-                                let usage = event.message.as_ref().and_then(|m| {
-                                    m.usage.as_ref().map(|u| Usage {
-                                        input_tokens: u.input_tokens,
-                                        output_tokens: u.output_tokens,
-                                    })
-                                });
+                                // Output tokens (and sometimes total) live on the event root.
+                                if let Some(ref u) = event.usage {
+                                    let mut merged = last_usage.unwrap_or(Usage {
+                                        input_tokens: 0,
+                                        output_tokens: 0,
+                                    });
+                                    if u.input_tokens > 0 {
+                                        merged.input_tokens = u.input_tokens;
+                                    }
+                                    if u.output_tokens > 0 {
+                                        merged.output_tokens = u.output_tokens;
+                                    }
+                                    last_usage = Some(merged);
+                                }
 
                                 // Convert accumulated tool calls to delta format
                                 if !tool_calls_map.is_empty() {
@@ -402,7 +415,7 @@ impl LlmProvider for AnthropicProvider {
                                         thinking: String::new(),
                                         done: true,
                                         model: None,
-                                        usage,
+                                        usage: last_usage.clone(),
                                         delta_tool_calls: Some(deltas),
                                     });
                                 } else {
@@ -411,14 +424,29 @@ impl LlmProvider for AnthropicProvider {
                                         thinking: String::new(),
                                         done: true,
                                         model: None,
-                                        usage,
+                                        usage: last_usage.clone(),
                                         delta_tool_calls: None,
                                     });
                                 }
                                 return Ok(());
                             }
                             "message_start" => {
-                                // Message started, continue
+                                // Input tokens arrive here nested under message.usage.
+                                if let Some(u) =
+                                    event.message.as_ref().and_then(|m| m.usage.as_ref())
+                                {
+                                    let mut merged = last_usage.unwrap_or(Usage {
+                                        input_tokens: 0,
+                                        output_tokens: 0,
+                                    });
+                                    if u.input_tokens > 0 {
+                                        merged.input_tokens = u.input_tokens;
+                                    }
+                                    if u.output_tokens > 0 {
+                                        merged.output_tokens = u.output_tokens;
+                                    }
+                                    last_usage = Some(merged);
+                                }
                             }
                             "ping" => {}
                             "error" => {
@@ -437,7 +465,7 @@ impl LlmProvider for AnthropicProvider {
             thinking: String::new(),
             done: true,
             model: None,
-            usage: None,
+            usage: last_usage,
             delta_tool_calls: None,
         });
         Ok(())

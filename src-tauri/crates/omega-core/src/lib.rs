@@ -135,6 +135,10 @@ pub struct AppState {
 
     /// Shared tool-execution pipeline, initialized once.
     pub tool_pipeline: OnceLock<tool_harness::ExecutionPipeline>,
+
+    /// Optional conversation session store (CLI / TUI sets this at startup).
+    /// Headless/API paths leave it empty so persistence is a no-op.
+    pub session_store: Mutex<Option<session::SessionStore>>,
 }
 
 impl AppState {
@@ -166,7 +170,40 @@ impl AppState {
             session_log: Mutex::new(vec![]),
             memory_store: Mutex::new(memory_store),
             permission_tx,
+            session_store: Mutex::new(None),
         }
+    }
+
+    /// Attach a conversation session store (CLI startup). Replaces any previous handle.
+    pub fn set_session_store(&self, store: session::SessionStore) {
+        *self.session_store.lock_guard() = Some(store);
+    }
+
+    /// Persist a conversation snapshot if a session store is attached.
+    /// Sync I/O under a short lock; never held across await points by callers.
+    pub fn persist_session(&self, messages: &[providers::ChatMessage]) -> Result<(), String> {
+        let mut guard = self.session_store.lock_guard();
+        match guard.as_mut() {
+            Some(store) => store.persist_messages(messages),
+            None => Ok(()),
+        }
+    }
+
+    /// Durably clear the attached session file (if any).
+    pub fn clear_session(&self) -> Result<(), String> {
+        let mut guard = self.session_store.lock_guard();
+        match guard.as_mut() {
+            Some(store) => store.clear(),
+            None => Ok(()),
+        }
+    }
+
+    /// Current session id, if a store is attached.
+    pub fn session_id(&self) -> Option<String> {
+        self.session_store
+            .lock_guard()
+            .as_ref()
+            .map(|s| s.id.clone())
     }
 }
 

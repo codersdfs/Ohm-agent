@@ -24,7 +24,6 @@ use omega_core::tui::status::StatusState;
 use omega_core::tui::theme;
 use omega_core::tui::transcript::{self, Transcript, TranscriptEntry};
 use omega_core::{commands, default_db_path, AppState, ChatEmitter};
-use std::sync::Mutex;
 
 // ── Event types for streaming ────────────────────────────────────────────────
 
@@ -112,9 +111,6 @@ struct App {
     session_tokens_out: u64,
     session_messages: u64,
 
-    // Persistent conversation session (JSONL)
-    session: Arc<Mutex<SessionStore>>,
-
     // Help overlay
     show_help: bool,
 
@@ -142,11 +138,14 @@ impl App {
             &default_db_path(),
             config.clone(),
         ));
+        // Single ownership: session lives on AppState (poison-safe Mutex).
+        // Chat loop flushes via AppState::persist_session; /clear uses clear_session.
+        let session_id = session.id.clone();
+        state.set_session_store(session);
         let _model = config.model.clone();
         let _kind = format!("{}", config.kind);
         let editor = EditorState::new();
         let status = StatusState::new();
-        let session_id = session.id.clone();
         let resumed = load.resumed;
         let msg_count = load.messages.len();
         let warnings = load.warnings.clone();
@@ -169,8 +168,6 @@ impl App {
             session_tokens_in: 0,
             session_tokens_out: 0,
             session_messages: 0,
-
-            session: Arc::new(Mutex::new(session)),
 
             show_help: false,
             show_provider_panel: false,
@@ -282,6 +279,7 @@ impl App {
                     let new_config = self.provider_panel_state.to_config(&self.config);
                     self.config = new_config.clone();
                     save_config(&self.config);
+                    save_api_key(self.config.api_key.as_deref());
                     self.transcript.entries.push(TranscriptEntry::Notice {
                         text: format!(
                             "Provider set to {} ({})",
@@ -487,6 +485,21 @@ impl App {
                 self.transcript.entries.clear();
                 self.transcript.messages.clear();
                 self.editor.buffer.clear();
+                match self.state.clear_session() {
+                    Ok(()) => {
+                        self.transcript.entries.push(TranscriptEntry::Notice {
+                            text: "Session cleared.".into(),
+                            is_error: false,
+                        });
+                    }
+                    Err(e) => {
+                        log::error!("session clear failed: {e}");
+                        self.transcript.entries.push(TranscriptEntry::Notice {
+                            text: format!("Failed to clear session file: {e}"),
+                            is_error: true,
+                        });
+                    }
+                }
             }
             "/tools" => match commands::tools::list_tools() {
                 Ok(tools) => {
@@ -583,7 +596,6 @@ impl App {
         // Shared message list for the task to modify
         let messages = Arc::new(tokio::sync::Mutex::new(self.transcript.messages.clone()));
         let cancel_flag = self.cancel_flag.clone();
-        let session = self.session.clone();
 
         let event_tx = tx.clone();
 
@@ -606,8 +618,13 @@ impl App {
                 max_tool_loops: None,
             };
 
+            let (tokens_in_before, tokens_out_before) =
+                omega_core::commands::chat::session_token_counts();
+
             let (result, saved_msgs) = {
                 let mut msgs = messages.lock().await;
+                // Session flushes happen inside stream_message_with_history_cancel
+                // (user msg, each tool round, final assistant) via AppState.
                 let r = commands::chat::stream_message_with_history_cancel(
                     &state,
                     request,
@@ -625,22 +642,19 @@ impl App {
                 return;
             }
 
-            // Persist completed turn (append-only; SessionStore skips already-written prefix).
-            if result.is_ok() {
-                if let Ok(mut store) = session.lock() {
-                    if let Err(e) = store.append_messages(&saved_msgs) {
-                        log::warn!("session append failed: {e}");
-                    }
-                }
-            }
+            // Delta recorded by chat::record_cost during the stream.
+            let (tokens_in_after, tokens_out_after) =
+                omega_core::commands::chat::session_token_counts();
+            let tokens_in = tokens_in_after.saturating_sub(tokens_in_before) as u32;
+            let tokens_out = tokens_out_after.saturating_sub(tokens_out_before) as u32;
 
             // Send done event with result
             match result {
                 Ok(full) => {
                     let _ = event_tx.send(UiStreamEvent::Done {
                         full,
-                        tokens_in: 0,
-                        tokens_out: 0,
+                        tokens_in,
+                        tokens_out,
                         messages: saved_msgs,
                     });
                 }
@@ -766,7 +780,9 @@ impl App {
             let kind = all.get(sel).cloned().unwrap_or(self.config.kind.clone());
             let fetch_config = providers::ProviderConfig {
                 kind,
-                api_key: self.config.api_key.clone(),
+                api_key: Some(self.provider_panel_state.key_buffer.clone())
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| self.config.api_key.clone()),
                 base_url: Some(self.provider_panel_state.url_buffer.clone())
                     .filter(|s| !s.is_empty()),
                 model: self.config.model.clone(),
@@ -1292,6 +1308,21 @@ fn save_config(config: &providers::ProviderConfig) {
     }
 }
 
+/// Persist API key to `~/.config/omega-agent/.env` (plain key body).
+/// Empty / None removes the file so load falls back to env-only.
+fn save_api_key(api_key: Option<&str>) {
+    let path = config_dir().join(".env");
+    let _ = std::fs::create_dir_all(config_dir());
+    match api_key.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(key) => {
+            let _ = std::fs::write(&path, format!("{key}\n"));
+        }
+        None => {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
 fn load_provider_config(
     override_provider: Option<String>,
     override_model: Option<String>,
@@ -1335,6 +1366,7 @@ fn load_provider_config(
             providers::ProviderKind::Anthropic => "claude-sonnet-4-20250514".into(),
             providers::ProviderKind::Google => "gemini-2.0-flash".into(),
             providers::ProviderKind::Local => "llama3.1:8b".into(),
+            providers::ProviderKind::Custom => "custom-model".into(),
             _ => "gpt-4o-mini".into(),
         });
 

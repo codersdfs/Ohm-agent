@@ -3,11 +3,15 @@
 //! Sessions live under the project config dir:
 //!   `<config_dir>/sessions/<session_id>.jsonl`
 //! with a `last-session` marker for default resume.
+//!
+//! Writes are atomic: full history is serialized to a temp file, then renamed
+//! over the active path. This avoids partial-line appends and duplicate records
+//! after a mid-write crash.
 
 use chrono::Utc;
 use providers::ChatMessage;
 use serde::{Deserialize, Serialize};
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
@@ -148,7 +152,7 @@ impl SessionStore {
             path,
             persisted_count: 0,
         };
-        // Count existing records so appends don't duplicate.
+        // Count existing records so no-op persists stay cheap.
         let loaded = store.load_messages()?;
         store.persisted_count = loaded.messages.len();
         Ok(store)
@@ -210,138 +214,148 @@ impl SessionStore {
         load_session_file(&self.path)
     }
 
-    /// Append only the messages not yet persisted (`messages[persisted_count..]`).
-    /// Rotates the file when it would exceed [`MAX_SESSION_BYTES`].
+    /// Durably clear the active session file and reset the in-memory cursor.
+    /// Keeps the same session id and last-session marker.
+    pub fn clear(&mut self) -> Result<(), String> {
+        self.atomic_write_body("", 0)?;
+        self.persisted_count = 0;
+        // Ensure marker still points at this (now empty) session.
+        Self::write_last_session_id(&self.id)?;
+        Ok(())
+    }
+
+    /// Persist the full conversation snapshot atomically.
+    ///
+    /// No-ops when `messages.len() == persisted_count` (already on disk).
+    /// Always rewrites the whole file via temp+rename so a crash cannot leave
+    /// partial lines or duplicate appends. Rotates to `.jsonl.1` when the
+    /// payload would exceed [`MAX_SESSION_BYTES`].
+    pub fn persist_messages(&mut self, messages: &[ChatMessage]) -> Result<(), String> {
+        if messages.len() == self.persisted_count && self.path.exists() {
+            // Already durable; still allow clear→empty and grow paths through.
+            if messages.is_empty() {
+                return Ok(());
+            }
+            // Cheap path: nothing new.
+            return Ok(());
+        }
+
+        // History shortened (e.g. /clear then new turns, or external reset).
+        // Always rewrite from the provided snapshot.
+        self.write_snapshot(messages)
+    }
+
+    /// Backward-compatible alias used by earlier integration points.
     pub fn append_messages(&mut self, messages: &[ChatMessage]) -> Result<(), String> {
-        if messages.len() < self.persisted_count {
-            // History was cleared/reset — rewrite from scratch.
-            self.persisted_count = 0;
-            self.rewrite_all(messages)?;
-            return Ok(());
-        }
-
-        let new_msgs = &messages[self.persisted_count..];
-        if new_msgs.is_empty() {
-            return Ok(());
-        }
-
-        // Rotate if current file is already over the cap (or would be after a large write).
-        if self.needs_rotation() {
-            self.rotate_and_compact(messages)?;
-            return Ok(());
-        }
-
-        self.append_records(new_msgs)?;
-        self.persisted_count = messages.len();
-
-        // Post-append rotation if we crossed the threshold.
-        if self.needs_rotation() {
-            self.rotate_and_compact(messages)?;
-        }
-        Ok(())
+        self.persist_messages(messages)
     }
 
-    fn needs_rotation(&self) -> bool {
-        fs::metadata(&self.path)
-            .map(|m| m.len() > MAX_SESSION_BYTES)
-            .unwrap_or(false)
+    fn write_snapshot(&mut self, messages: &[ChatMessage]) -> Result<(), String> {
+        let body = serialize_messages(messages, false)?;
+        let body_bytes = body.len() as u64;
+
+        if body_bytes > MAX_SESSION_BYTES || self.file_len() > MAX_SESSION_BYTES {
+            // Archive current active file (if any), then write a compacted snapshot.
+            self.rotate_current_to_backup()?;
+            let compact = serialize_messages(messages, true)?;
+            let marker = rotate_marker_line(&self.path)?;
+            let full = format!("{marker}{compact}");
+            self.atomic_write_body(&full, messages.len())?;
+            return Ok(());
+        }
+
+        self.atomic_write_body(&body, messages.len())
     }
 
-    /// Move current file to `.jsonl.1` and rewrite active file with compact history
-    /// (tool outputs truncated) plus a rotation marker.
-    fn rotate_and_compact(&mut self, messages: &[ChatMessage]) -> Result<(), String> {
+    fn file_len(&self) -> u64 {
+        fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0)
+    }
+
+    fn rotate_current_to_backup(&self) -> Result<(), String> {
+        if !self.path.exists() {
+            return Ok(());
+        }
         let backup = PathBuf::from(format!("{}.1", self.path.display()));
+        let _ = fs::remove_file(&backup);
+        // Best-effort: if rename fails because nothing is there, ignore.
+        match fs::rename(&self.path, &backup) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(format!("rotate session: {e}")),
+        }
+    }
+
+    /// Write `body` to `<path>.tmp` then rename over `path`. Only updates
+    /// `persisted_count` after a successful rename.
+    fn atomic_write_body(&mut self, body: &str, count: usize) -> Result<(), String> {
+        let tmp = self.tmp_path();
+        {
+            let mut file = File::create(&tmp).map_err(|e| format!("create session temp: {e}"))?;
+            file.write_all(body.as_bytes())
+                .map_err(|e| format!("write session temp: {e}"))?;
+            file.flush()
+                .map_err(|e| format!("flush session temp: {e}"))?;
+        }
+        // On Windows, rename over existing destination can fail; remove first.
         if self.path.exists() {
-            let _ = fs::remove_file(&backup);
-            fs::rename(&self.path, &backup).map_err(|e| format!("rotate session: {e}"))?;
+            let _ = fs::remove_file(&self.path);
         }
+        fs::rename(&tmp, &self.path).map_err(|e| {
+            // Leave tmp in place for debugging; do not bump persisted_count.
+            format!("atomic replace session: {e}")
+        })?;
+        self.persisted_count = count;
+        Ok(())
+    }
 
-        // Compact: truncate tool contents for the rewritten active file.
-        let compact: Vec<ChatMessage> = messages
-            .iter()
-            .map(|m| {
-                let mut m = m.clone();
-                if m.role == "tool" {
-                    m.content = truncate_tool_content(&m.content);
-                }
-                m
-            })
-            .collect();
+    fn tmp_path(&self) -> PathBuf {
+        let mut tmp = self.path.clone();
+        let name = self
+            .path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("session.jsonl");
+        tmp.set_file_name(format!("{name}.tmp"));
+        tmp
+    }
+}
 
-        // Write marker + compact history.
-        let mut file =
-            File::create(&self.path).map_err(|e| format!("create rotated session: {e}"))?;
-        let marker = SessionRecord {
-            role: ROTATE_MARKER_ROLE.into(),
-            content: format!(
-                "{ROTATE_MARKER_PREFIX} older history archived to {}.1",
-                self.path
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("session.jsonl")
-            ),
-            tool_calls: None,
-            tool_call_id: None,
-            name: None,
-            ts: Utc::now().to_rfc3339(),
+fn rotate_marker_line(path: &Path) -> Result<String, String> {
+    let marker = SessionRecord {
+        role: ROTATE_MARKER_ROLE.into(),
+        content: format!(
+            "{ROTATE_MARKER_PREFIX} older history archived to {}.1",
+            path.file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("session.jsonl")
+        ),
+        tool_calls: None,
+        tool_call_id: None,
+        name: None,
+        ts: Utc::now().to_rfc3339(),
+    };
+    Ok(format!(
+        "{}\n",
+        serde_json::to_string(&marker).map_err(|e| e.to_string())?
+    ))
+}
+
+fn serialize_messages(messages: &[ChatMessage], compact_tools: bool) -> Result<String, String> {
+    let mut body = String::new();
+    for msg in messages {
+        let mut owned;
+        let msg_ref = if compact_tools && msg.role == "tool" {
+            owned = msg.clone();
+            owned.content = truncate_tool_content(&owned.content);
+            &owned
+        } else {
+            msg
         };
-        writeln!(
-            file,
-            "{}",
-            serde_json::to_string(&marker).map_err(|e| e.to_string())?
-        )
-        .map_err(|e| format!("write rotate marker: {e}"))?;
-
-        for msg in &compact {
-            let rec = SessionRecord::from_message(msg);
-            writeln!(
-                file,
-                "{}",
-                serde_json::to_string(&rec).map_err(|e| e.to_string())?
-            )
-            .map_err(|e| format!("write session line: {e}"))?;
-        }
-        file.flush().map_err(|e| format!("flush session: {e}"))?;
-
-        // Marker is not part of LLM history; persisted_count tracks messages only.
-        self.persisted_count = messages.len();
-        Ok(())
+        let rec = SessionRecord::from_message(msg_ref);
+        body.push_str(&serde_json::to_string(&rec).map_err(|e| e.to_string())?);
+        body.push('\n');
     }
-
-    fn rewrite_all(&mut self, messages: &[ChatMessage]) -> Result<(), String> {
-        let mut file = File::create(&self.path).map_err(|e| format!("rewrite session: {e}"))?;
-        for msg in messages {
-            let rec = SessionRecord::from_message(msg);
-            writeln!(
-                file,
-                "{}",
-                serde_json::to_string(&rec).map_err(|e| e.to_string())?
-            )
-            .map_err(|e| format!("write session line: {e}"))?;
-        }
-        file.flush().map_err(|e| format!("flush session: {e}"))?;
-        self.persisted_count = messages.len();
-        Ok(())
-    }
-
-    fn append_records(&self, messages: &[ChatMessage]) -> Result<(), String> {
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)
-            .map_err(|e| format!("open session for append: {e}"))?;
-        for msg in messages {
-            let rec = SessionRecord::from_message(msg);
-            writeln!(
-                file,
-                "{}",
-                serde_json::to_string(&rec).map_err(|e| e.to_string())?
-            )
-            .map_err(|e| format!("append session line: {e}"))?;
-        }
-        file.flush().map_err(|e| format!("flush session: {e}"))?;
-        Ok(())
-    }
+    Ok(body)
 }
 
 /// Truncate tool content for load-time compaction.
@@ -547,10 +561,10 @@ mod tests {
         let dir = unique_dir();
         let mut store = store_at(&dir, "rt");
         let msgs = sample_messages();
-        store.append_messages(&msgs).unwrap();
+        store.persist_messages(&msgs).unwrap();
 
-        // Second append of the same list must not duplicate.
-        store.append_messages(&msgs).unwrap();
+        // Second persist of the same list must not duplicate.
+        store.persist_messages(&msgs).unwrap();
 
         let loaded = store.load_messages().unwrap();
         assert_eq!(loaded.messages.len(), 3);
@@ -563,6 +577,69 @@ mod tests {
         let raw = fs::read_to_string(&store.path).unwrap();
         let lines: Vec<_> = raw.lines().filter(|l| !l.trim().is_empty()).collect();
         assert_eq!(lines.len(), 3);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn durable_clear_empties_file_and_resets_count() {
+        let dir = unique_dir();
+        let mut store = store_at(&dir, "clr");
+        store.persist_messages(&sample_messages()).unwrap();
+        assert!(!fs::read_to_string(&store.path).unwrap().is_empty());
+        assert_eq!(store.persisted_count, 3);
+
+        store.clear().unwrap();
+        assert_eq!(store.persisted_count, 0);
+        let raw = fs::read_to_string(&store.path).unwrap();
+        assert!(
+            raw.trim().is_empty(),
+            "expected empty session file, got {raw:?}"
+        );
+        let loaded = store.load_messages().unwrap();
+        assert!(loaded.messages.is_empty());
+
+        // New messages after clear rewrite cleanly (no ghosts).
+        let again = vec![sample_messages()[1].clone()];
+        store.persist_messages(&again).unwrap();
+        let loaded = store.load_messages().unwrap();
+        assert_eq!(loaded.messages.len(), 1);
+        assert_eq!(loaded.messages[0].content, "Hello");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn atomic_rewrite_no_duplicates_on_repeated_persist() {
+        let dir = unique_dir();
+        let mut store = store_at(&dir, "atom");
+        let mut msgs = sample_messages();
+        store.persist_messages(&msgs).unwrap();
+
+        // Grow history one message at a time; each persist is a full rewrite.
+        msgs.push(ChatMessage {
+            role: "user".into(),
+            content: "Again".into(),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        });
+        store.persist_messages(&msgs).unwrap();
+        store.persist_messages(&msgs).unwrap(); // identical snapshot
+
+        let loaded = store.load_messages().unwrap();
+        assert_eq!(loaded.messages.len(), 4);
+        let raw = fs::read_to_string(&store.path).unwrap();
+        let lines: Vec<_> = raw.lines().filter(|l| !l.trim().is_empty()).collect();
+        assert_eq!(lines.len(), 4);
+        assert_eq!(
+            loaded
+                .messages
+                .iter()
+                .filter(|m| m.content == "Again")
+                .count(),
+            1
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -622,47 +699,51 @@ mod tests {
         let dir = unique_dir();
         let mut store = store_at(&dir, "rot");
 
-        // Write a large payload by directly stuffing the file past the limit,
-        // then append via the store API which should rotate.
-        {
-            let mut f = OpenOptions::new().append(true).open(&store.path).unwrap();
-            // Pad with comment-like junk that load skips, to inflate size cheaply.
-            // Use valid JSONL system messages so load still works.
-            let pad_content: String = "p".repeat(64 * 1024);
-            let mut written = 0u64;
-            while written <= MAX_SESSION_BYTES {
-                let rec = SessionRecord {
-                    role: "user".into(),
-                    content: pad_content.clone(),
-                    tool_calls: None,
-                    tool_call_id: None,
-                    name: None,
-                    ts: Utc::now().to_rfc3339(),
-                };
-                let line = serde_json::to_string(&rec).unwrap();
-                written += line.len() as u64 + 1;
-                writeln!(f, "{line}").unwrap();
-                store.persisted_count += 1;
-            }
+        // Build a snapshot larger than MAX_SESSION_BYTES so write_snapshot rotates.
+        let pad: String = "p".repeat(64 * 1024);
+        let mut huge = Vec::new();
+        let mut size = 0u64;
+        while size <= MAX_SESSION_BYTES {
+            huge.push(ChatMessage {
+                role: "user".into(),
+                content: pad.clone(),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            });
+            size += pad.len() as u64 + 32;
         }
 
-        assert!(store.needs_rotation());
+        // First persist should rotate (body > cap) and write compacted form.
+        // Compaction only shortens tool roles; user pads still huge, so we
+        // force the rotate path by pre-filling the active file over the limit.
+        {
+            let pad_body = serialize_messages(&huge[..3], false).unwrap();
+            // Write a small file first, then a huge snapshot.
+            store.atomic_write_body(&pad_body, 3).unwrap();
+        }
+        // Manually inflate file past limit so next persist rotates.
+        {
+            use std::io::Write;
+            let mut f = fs::OpenOptions::new()
+                .append(true)
+                .open(&store.path)
+                .unwrap();
+            let junk = "x".repeat((MAX_SESSION_BYTES as usize) + 64);
+            // Invalid JSON line — load will skip; size still counts for rotation.
+            writeln!(f, "{junk}").unwrap();
+        }
+        assert!(store.file_len() > MAX_SESSION_BYTES);
 
-        let new_msgs = sample_messages();
-        // Build full history as "already persisted pad count + new"
-        // append_messages with shorter list resets; give it just the new messages
-        // after we reset count to simulate post-rotation rewrite path.
-        let full = new_msgs.clone();
-        store.persisted_count = 0; // force rewrite path through append after detecting rotation
-                                   // needs_rotation is true → rotate_and_compact
-        store.append_messages(&full).unwrap();
+        let full = sample_messages();
+        store.persisted_count = 0;
+        store.persist_messages(&full).unwrap();
 
         let backup = PathBuf::from(format!("{}.1", store.path.display()));
         assert!(backup.exists(), "expected rotated backup .jsonl.1");
         assert!(store.path.exists());
 
         let loaded = store.load_messages().unwrap();
-        // Compact rewrite should have the three sample messages (marker skipped).
         assert_eq!(loaded.messages.len(), 3);
         assert_eq!(loaded.messages[1].content, "Hello");
 

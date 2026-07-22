@@ -30,6 +30,7 @@ pub enum PanelFocus {
     ProviderGrid,
     ModelSearch,
     BaseUrlField,
+    ApiKeyField,
     MaxTokens,
     Temperature,
     ApplyButton,
@@ -46,6 +47,8 @@ pub struct ProviderPanelState {
     pub search_cursor: usize,
     pub url_buffer: String,
     pub url_cursor: usize,
+    pub key_buffer: String,
+    pub key_cursor: usize,
     pub max_tokens: u32,
     pub temperature: f32,
     pub needs_fetch: bool,
@@ -77,6 +80,7 @@ impl ProviderPanelState {
             .base_url
             .clone()
             .unwrap_or_else(|| config.kind.default_base_url());
+        let key_seed = config.api_key.clone().unwrap_or_default();
         let mut state = Self {
             visible: true,
             // Temporary; `set_step` below sets the real step + focus.
@@ -89,6 +93,8 @@ impl ProviderPanelState {
             search_cursor: 0,
             url_buffer: default_url.clone(),
             url_cursor: default_url.len(),
+            key_buffer: key_seed.clone(),
+            key_cursor: key_seed.len(),
             max_tokens: config.max_tokens,
             temperature: config.temperature,
             needs_fetch: true,
@@ -114,7 +120,7 @@ impl ProviderPanelState {
             .unwrap_or(original.kind.clone());
         providers::ProviderConfig {
             kind,
-            api_key: original.api_key.clone(),
+            api_key: Some(self.key_buffer.clone()).filter(|s| !s.is_empty()),
             base_url: Some(self.url_buffer.clone()).filter(|s| !s.is_empty()),
             model: if self.model_buffer.is_empty() {
                 original.model.clone()
@@ -468,11 +474,14 @@ fn handle_step_model(state: &mut ProviderPanelState, key: KeyEvent) -> PanelActi
 
 fn handle_step_advanced(state: &mut ProviderPanelState, key: KeyEvent) -> PanelAction {
     let on_url = state.focus == PanelFocus::BaseUrlField;
+    let on_key = state.focus == PanelFocus::ApiKeyField;
+    let on_text = on_url || on_key;
 
     match key.code {
         KeyCode::Tab => {
             state.focus = match state.focus {
-                PanelFocus::BaseUrlField => PanelFocus::MaxTokens,
+                PanelFocus::BaseUrlField => PanelFocus::ApiKeyField,
+                PanelFocus::ApiKeyField => PanelFocus::MaxTokens,
                 PanelFocus::MaxTokens => PanelFocus::Temperature,
                 PanelFocus::Temperature => PanelFocus::ApplyButton,
                 PanelFocus::ApplyButton => PanelFocus::BaseUrlField,
@@ -483,7 +492,8 @@ fn handle_step_advanced(state: &mut ProviderPanelState, key: KeyEvent) -> PanelA
         KeyCode::BackTab => {
             state.focus = match state.focus {
                 PanelFocus::BaseUrlField => PanelFocus::ApplyButton,
-                PanelFocus::MaxTokens => PanelFocus::BaseUrlField,
+                PanelFocus::ApiKeyField => PanelFocus::BaseUrlField,
+                PanelFocus::MaxTokens => PanelFocus::ApiKeyField,
                 PanelFocus::Temperature => PanelFocus::MaxTokens,
                 PanelFocus::ApplyButton => PanelFocus::Temperature,
                 _ => PanelFocus::BaseUrlField,
@@ -501,40 +511,65 @@ fn handle_step_advanced(state: &mut ProviderPanelState, key: KeyEvent) -> PanelA
             }
             // Advance focus on Enter.
             state.focus = match state.focus {
-                PanelFocus::BaseUrlField => PanelFocus::MaxTokens,
+                PanelFocus::BaseUrlField => PanelFocus::ApiKeyField,
+                PanelFocus::ApiKeyField => PanelFocus::MaxTokens,
                 PanelFocus::MaxTokens => PanelFocus::Temperature,
                 PanelFocus::Temperature => PanelFocus::ApplyButton,
                 other => other,
             };
             PanelAction::None
         }
-        // URL editing
-        KeyCode::Char(c) if on_url && !key.modifiers.contains(KeyModifiers::CONTROL) => {
-            insert_char(&mut state.url_buffer, &mut state.url_cursor, c);
+        // Text field editing (URL / API key)
+        KeyCode::Char(c) if on_text && !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if on_url {
+                insert_char(&mut state.url_buffer, &mut state.url_cursor, c);
+            } else {
+                insert_char(&mut state.key_buffer, &mut state.key_cursor, c);
+            }
             PanelAction::None
         }
-        KeyCode::Backspace if on_url => {
-            backspace(&mut state.url_buffer, &mut state.url_cursor);
+        KeyCode::Backspace if on_text => {
+            if on_url {
+                backspace(&mut state.url_buffer, &mut state.url_cursor);
+            } else {
+                backspace(&mut state.key_buffer, &mut state.key_cursor);
+            }
             PanelAction::None
         }
-        KeyCode::Left if on_url => {
-            cursor_left(&state.url_buffer, &mut state.url_cursor);
+        KeyCode::Left if on_text => {
+            if on_url {
+                cursor_left(&state.url_buffer, &mut state.url_cursor);
+            } else {
+                cursor_left(&state.key_buffer, &mut state.key_cursor);
+            }
             PanelAction::None
         }
-        KeyCode::Right if on_url => {
-            cursor_right(&state.url_buffer, &mut state.url_cursor);
+        KeyCode::Right if on_text => {
+            if on_url {
+                cursor_right(&state.url_buffer, &mut state.url_cursor);
+            } else {
+                cursor_right(&state.key_buffer, &mut state.key_cursor);
+            }
             PanelAction::None
         }
-        KeyCode::Home if on_url => {
-            state.url_cursor = 0;
+        KeyCode::Home if on_text => {
+            if on_url {
+                state.url_cursor = 0;
+            } else {
+                state.key_cursor = 0;
+            }
             PanelAction::None
         }
-        KeyCode::End if on_url => {
-            state.url_cursor = state.url_buffer.len();
+        KeyCode::End if on_text => {
+            if on_url {
+                state.url_cursor = state.url_buffer.len();
+            } else {
+                state.key_cursor = state.key_buffer.len();
+            }
             PanelAction::None
         }
-        // Numeric adjustments when not on URL
-        KeyCode::Up | KeyCode::Right | KeyCode::Char('l') | KeyCode::Char('k') if !on_url => {
+        // Numeric adjustments when not on a text field
+        KeyCode::Up | KeyCode::Right | KeyCode::Char('l') | KeyCode::Char('k') if !on_text => {
             match state.focus {
                 PanelFocus::MaxTokens => {
                     state.max_tokens = state.max_tokens.saturating_add(512);
@@ -546,7 +581,7 @@ fn handle_step_advanced(state: &mut ProviderPanelState, key: KeyEvent) -> PanelA
             }
             PanelAction::None
         }
-        KeyCode::Down | KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('j') if !on_url => {
+        KeyCode::Down | KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('j') if !on_text => {
             match state.focus {
                 PanelFocus::MaxTokens => {
                     state.max_tokens = state.max_tokens.saturating_sub(512).max(1);
@@ -825,19 +860,19 @@ fn render_step_advanced(
     area: Rect,
     buf: &mut Buffer,
     state: &ProviderPanelState,
-    config: &providers::ProviderConfig,
+    _config: &providers::ProviderConfig,
 ) {
     if area.height < 6 {
         return;
     }
 
     let half = area.height / 2;
-    let conn_area = Rect::new(area.x, area.y, area.width, half.max(4));
+    let conn_area = Rect::new(area.x, area.y, area.width, half.max(5));
     let gen_area = Rect::new(
         area.x,
-        area.y + half.max(4),
+        area.y + half.max(5),
         area.width,
-        area.height.saturating_sub(half.max(4)),
+        area.height.saturating_sub(half.max(5)),
     );
 
     // Connection section
@@ -846,6 +881,7 @@ fn render_step_advanced(
     conn_block.render(conn_area, buf);
 
     let url_foc = state.focus == PanelFocus::BaseUrlField;
+    let key_foc = state.focus == PanelFocus::ApiKeyField;
     let url_label = if url_foc {
         "▸ Base URL"
     } else {
@@ -858,23 +894,41 @@ fn render_step_advanced(
     } else {
         theme::style_dim()
     };
-    let key_set = config
-        .api_key
-        .as_deref()
-        .filter(|k| !k.is_empty())
-        .is_some();
-    let key_display = if key_set {
-        "● ● ● ● ● ● ● ●  (set)"
+    let key_label = if key_foc { "▸ API key" } else { "  API key" };
+    let key_label_style = if key_foc {
+        Style::default()
+            .fg(theme::PRIMARY_CONTAINER)
+            .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
     } else {
-        "— not set —"
+        theme::style_dim()
+    };
+
+    let key_set = !state.key_buffer.is_empty();
+    let key_display = if key_set {
+        // Mask the secret; show length so users know something is set.
+        format!(
+            "{}  ({} chars)",
+            "●".repeat(state.key_buffer.chars().count().min(24)),
+            state.key_buffer.chars().count()
+        )
+    } else if key_foc {
+        "type to set API key...".into()
+    } else {
+        "— not set —".into()
     };
     let key_color = if key_set {
         theme::SUCCESS
+    } else if key_foc {
+        theme::FG
     } else {
         theme::ERROR
     };
 
-    let conn_lines = vec![
+    let is_custom = matches!(
+        providers::ProviderKind::all().get(state.selected_provider),
+        Some(providers::ProviderKind::Custom)
+    );
+    let mut conn_lines = vec![
         Line::from(Span::styled(url_label, url_style)),
         Line::from(Span::styled(
             format!("  {}", state.url_buffer),
@@ -887,11 +941,24 @@ fn render_step_advanced(
             },
         )),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("  API key  ", theme::style_dim()),
-            Span::styled(key_display, Style::default().fg(key_color)),
-        ]),
+        Line::from(Span::styled(key_label, key_label_style)),
+        Line::from(Span::styled(
+            format!("  {}", key_display),
+            if key_foc {
+                Style::default()
+                    .fg(key_color)
+                    .add_modifier(Modifier::UNDERLINED)
+            } else {
+                Style::default().fg(key_color)
+            },
+        )),
     ];
+    if is_custom {
+        conn_lines.push(Line::from(Span::styled(
+            "  custom = OpenAI-compatible endpoint; set base URL + key",
+            theme::style_dim(),
+        )));
+    }
     Paragraph::new(Text::from(conn_lines))
         .style(Style::default().bg(theme::SURFACE))
         .render(conn_inner, buf);
@@ -1179,6 +1246,8 @@ mod tests {
         set_step(&mut state, WizardStep::Advanced);
         assert_eq!(state.focus, PanelFocus::BaseUrlField);
         handle_key(&mut state, key(KeyCode::Tab));
+        assert_eq!(state.focus, PanelFocus::ApiKeyField);
+        handle_key(&mut state, key(KeyCode::Tab));
         assert_eq!(state.focus, PanelFocus::MaxTokens);
         handle_key(&mut state, key(KeyCode::Tab));
         assert_eq!(state.focus, PanelFocus::Temperature);
@@ -1214,6 +1283,42 @@ mod tests {
             handle_key(&mut state, key(KeyCode::Char(c)));
         }
         assert_eq!(state.url_buffer, "hjkl");
+    }
+
+    #[test]
+    fn api_key_field_accepts_input_and_to_config() {
+        let original = config(providers::ProviderKind::OpenAI, None);
+        let mut state = ProviderPanelState::from_config(&original);
+        set_step(&mut state, WizardStep::Advanced);
+        handle_key(&mut state, key(KeyCode::Tab)); // BaseUrl → ApiKey
+        assert_eq!(state.focus, PanelFocus::ApiKeyField);
+        state.key_buffer.clear();
+        state.key_cursor = 0;
+        for c in ['s', 'k', '-', '1', '2', '3'] {
+            handle_key(&mut state, key(KeyCode::Char(c)));
+        }
+        assert_eq!(state.key_buffer, "sk-123");
+        let cfg = state.to_config(&original);
+        assert_eq!(cfg.api_key.as_deref(), Some("sk-123"));
+    }
+
+    #[test]
+    fn custom_provider_is_in_list() {
+        let all = providers::ProviderKind::all();
+        assert!(all
+            .iter()
+            .any(|k| matches!(k, providers::ProviderKind::Custom)));
+        let state = ProviderPanelState::from_config(&config(providers::ProviderKind::Custom, None));
+        assert_eq!(
+            state.selected_provider,
+            all.iter()
+                .position(|k| matches!(k, providers::ProviderKind::Custom))
+                .unwrap()
+        );
+        assert_eq!(
+            state.url_buffer,
+            providers::ProviderKind::Custom.default_base_url()
+        );
     }
 
     #[test]
@@ -1285,12 +1390,13 @@ mod tests {
         state.max_tokens = 2048;
         state.temperature = 0.2;
         state.url_buffer = "https://custom".into();
+        state.key_buffer = "new-secret".into();
         // Keep OpenAI selected
         let cfg = state.to_config(&original);
         assert_eq!(cfg.model, "new-model");
         assert_eq!(cfg.max_tokens, 2048);
         assert!((cfg.temperature - 0.2).abs() < f32::EPSILON);
         assert_eq!(cfg.base_url.as_deref(), Some("https://custom"));
-        assert_eq!(cfg.api_key.as_deref(), Some("test-key"));
+        assert_eq!(cfg.api_key.as_deref(), Some("new-secret"));
     }
 }

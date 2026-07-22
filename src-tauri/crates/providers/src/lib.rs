@@ -38,6 +38,8 @@ pub enum ProviderKind {
     MiniMax,
     OpenRouter,
     Local,
+    /// OpenAI-compatible endpoint with a user-supplied base URL.
+    Custom,
 }
 
 impl std::fmt::Display for ProviderKind {
@@ -57,6 +59,7 @@ impl std::fmt::Display for ProviderKind {
             Self::MiniMax => "minimax",
             Self::OpenRouter => "openrouter",
             Self::Local => "local",
+            Self::Custom => "custom",
         };
         write!(f, "{}", s)
     }
@@ -80,6 +83,7 @@ impl ProviderKind {
             "openrouter" => Self::OpenRouter,
             "local" => Self::Local,
             "ollama" => Self::Local,
+            "custom" | "other" | "openai-compatible" => Self::Custom,
             _ => Self::OpenAI,
         }
     }
@@ -100,6 +104,7 @@ impl ProviderKind {
             Self::MiniMax,
             Self::OpenRouter,
             Self::Local,
+            Self::Custom,
         ]
     }
 
@@ -119,6 +124,7 @@ impl ProviderKind {
             Self::MiniMax => "https://api.minimax.chat/v1".into(),
             Self::OpenRouter => "https://openrouter.ai/api/v1".into(),
             Self::Local => "http://127.0.0.1:11434".into(),
+            Self::Custom => "https://your-endpoint/v1".into(),
         }
     }
 
@@ -136,6 +142,7 @@ impl ProviderKind {
                 | Self::Bedrock
                 | Self::HuggingFace
                 | Self::Mistral
+                | Self::Custom
         )
     }
 
@@ -154,6 +161,7 @@ impl ProviderKind {
                 | Self::HuggingFace
                 | Self::Mistral
                 | Self::Local
+                | Self::Custom
         )
     }
 
@@ -172,7 +180,8 @@ impl ProviderKind {
             | Self::Bedrock
             | Self::HuggingFace
             | Self::Mistral
-            | Self::Local => 128_000,
+            | Self::Local
+            | Self::Custom => 128_000,
             Self::Anthropic => 200_000,
             Self::Google => 1_048_576,
         }
@@ -320,7 +329,8 @@ pub fn create_provider(config: &ProviderConfig) -> Result<Box<dyn LlmProvider>, 
         | ProviderKind::Azure
         | ProviderKind::Bedrock
         | ProviderKind::HuggingFace
-        | ProviderKind::Mistral => {
+        | ProviderKind::Mistral
+        | ProviderKind::Custom => {
             let url = base_url.clone().unwrap_or_else(|| match config.kind {
                 ProviderKind::OpenAI => "https://api.openai.com/v1".into(),
                 ProviderKind::XAI => "https://api.x.ai/v1".into(),
@@ -333,6 +343,7 @@ pub fn create_provider(config: &ProviderConfig) -> Result<Box<dyn LlmProvider>, 
                 ProviderKind::Bedrock => "https://bedrock-runtime.YOUR_REGION.amazonaws.com".into(),
                 ProviderKind::HuggingFace => "https://api-inference.huggingface.co/v1".into(),
                 ProviderKind::Mistral => "https://api.mistral.ai/v1".into(),
+                ProviderKind::Custom => "https://your-endpoint/v1".into(),
                 _ => unreachable!(),
             });
             Ok(Box::new(openai::OpenAIProvider::new(api_key, url)))
@@ -774,6 +785,7 @@ mod tests {
     fn test_stream_chunk_with_delta_tool_calls() {
         let chunk = StreamChunk {
             content: String::new(),
+            thinking: String::new(),
             done: false,
             model: Some("gpt-4o".into()),
             usage: None,
