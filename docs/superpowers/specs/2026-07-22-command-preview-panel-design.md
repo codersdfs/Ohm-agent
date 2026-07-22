@@ -15,6 +15,7 @@ Ship a **command palette** (command preview panel) that:
 - Opens with **Ctrl+K**, or by typing **`/` when the editor buffer is empty**
 - Lists **existing slash commands only** (v1)
 - Shows **name + one-line description** for the selected/matching commands
+- Supports **keyword search** (multi-word AND over id, label, aliases, description, and extra keywords)
 - **Runs the selected command immediately** on Enter
 - Reuses the existing `handle_slash_command` execution path (single source of truth)
 
@@ -23,7 +24,7 @@ Ship a **command palette** (command preview panel) that:
 - Free-text args inside the palette (e.g. typing a model name after `/model`)
 - Agent tool browsing (read/write/bash as palette entries)
 - Mouse support
-- Fuzzy ranking, recents, or frequency sorting
+- Fuzzy ranking, recents, or frequency sorting (keyword AND-search only)
 - Merging the F1/`?` help overlay into the palette
 - Populating the old editor `suggestions` popup as the primary UX
 
@@ -70,6 +71,7 @@ pub struct CommandEntry {
     pub label: &'static str,        // short display name, e.g. "Clear session"
     pub aliases: &'static [&'static str],
     pub description: &'static str,  // one-line preview text
+    pub keywords: &'static [&'static str], // extra search terms (not shown in UI)
 }
 ```
 
@@ -98,18 +100,55 @@ pub struct CommandPaletteState {
 }
 ```
 
-### Filter
+### Filter (keyword search)
 
-- Case-insensitive substring match over `id`, `label`, each alias, and `description`
-- Empty query → all commands
+Goal: easy finding of commands by keywords, not only exact id prefixes.
+
+- Split `query` on whitespace into **keywords** (empty tokens dropped)
+- A command matches if **every** keyword is a case-insensitive substring of the command’s **search haystack**
+- Haystack for each command is the concatenation (with spaces) of:
+  - `id`
+  - `label`
+  - each alias
+  - `description`
+  - optional `keywords: &'static [&'static str]` on the entry (extra search terms not shown in the UI)
+- Empty query (or only whitespace) → all commands
+- Order of results: stable registry order (no fuzzy rank in v1)
 - After recompute, clamp `selected` to `filtered.len().saturating_sub(1)` (or 0 if empty)
+
+Examples:
+
+| Query | Matches |
+|-------|---------|
+| `cle` | `/clear` (label/id) |
+| `cls` | `/clear` (alias) |
+| `token cost` | `/cost` (both keywords hit description/label) |
+| `quit` | `/exit` (alias/description) |
+| `zzz` | none |
+
+### Registry keywords (v1)
+
+Each entry may declare extra search terms so natural language finds the command:
+
+| id | extra keywords |
+|----|----------------|
+| `/help` | `commands`, `usage`, `docs` |
+| `/clear` | `reset`, `new`, `session` |
+| `/tools` | `agent`, `capabilities` |
+| `/model` | `llm`, `gpt`, `claude`, `switch` |
+| `/provider` | `api`, `openai`, `anthropic`, `google`, `endpoint` |
+| `/cost` | `tokens`, `usage`, `billing` |
+| `/exit` | `quit`, `close`, `leave` |
+
+These keywords are search-only; the row still shows id + label + description.
 
 ### UI
 
 - Centered modal overlay on the main frame area
 - Approx width 48 columns (clamped to terminal width − 4)
-- Height: filtered rows + chrome (title/border), capped (~14 rows)
+- Height: filtered rows + chrome (title/border/search line), capped (~14 rows)
 - Title: ` commands ` (same family as existing suggestions popup)
+- **Search line** under the title border: shows current `query` with a cursor affordance (e.g. `> clear_`) so keyword search is obvious
 - Each row: `id` + `label`; selected row uses accent/bold; description shown for the selected row (inline second line or footer strip)
 - Empty filter: show `No matching commands`
 - Visual tokens: reuse `theme` colors (`PRIMARY`, `ACCENT`, `DIM`, `FG`, `SURFACE_HIGH` / `BG`) consistent with `help.rs` and `editor::render_suggestions`
@@ -189,10 +228,12 @@ Unit tests in `command_palette.rs` (or adjacent `#[cfg(test)]` module):
 1. `filter("")` returns all 7 commands  
 2. `filter("cle")` matches `/clear`  
 3. `filter("cls")` matches `/clear` via alias  
-4. `filter("zzz")` is empty  
-5. Selection clamps when filter shrinks  
-6. `handle_key(Enter)` with a selection returns `Select` with the correct id  
-7. `handle_key(Esc)` returns `Close`
+4. `filter("token cost")` multi-keyword match on `/cost`  
+5. `filter("quit")` matches `/exit` via alias or keywords  
+6. `filter("zzz")` is empty  
+7. Selection clamps when filter shrinks  
+8. `handle_key(Enter)` with a selection returns `Select` with the correct id  
+9. `handle_key(Esc)` returns `Close`
 
 Verification commands:
 
@@ -217,7 +258,8 @@ Optional later (not v1): wire editor `suggestions` as a lightweight fallback, or
 
 - [ ] Ctrl+K opens palette when idle
 - [ ] `/` on empty editor opens palette (does not leave a lone `/` in the buffer)
-- [ ] Filtering narrows the list; selection keyboard-navigable
+- [ ] Keyword search narrows the list (multi-word AND); selection keyboard-navigable
+- [ ] Search line shows the live query
 - [ ] Enter runs the same behavior as typing the slash command
 - [ ] Esc closes without side effects
 - [ ] Unit tests above pass; workspace still checks
