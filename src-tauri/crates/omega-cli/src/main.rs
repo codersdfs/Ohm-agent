@@ -118,6 +118,10 @@ struct App {
     show_provider_panel: bool,
     provider_panel_state: omega_core::tui::provider_panel::ProviderPanelState,
 
+    // Command palette
+    show_command_palette: bool,
+    command_palette: omega_core::tui::command_palette::CommandPaletteState,
+
     // Sidebar visibility
     show_sidebar: bool,
 
@@ -171,6 +175,8 @@ impl App {
 
             show_help: false,
             show_provider_panel: false,
+            show_command_palette: false,
+            command_palette: omega_core::tui::command_palette::CommandPaletteState::new(),
             show_sidebar: true,
             tool_output_expanded: false,
             provider_panel_state: omega_core::tui::provider_panel::ProviderPanelState::from_config(
@@ -253,6 +259,9 @@ impl App {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if self.is_streaming {
                     self.cancel_streaming();
+                } else if self.show_command_palette {
+                    self.command_palette.close();
+                    self.show_command_palette = false;
                 } else {
                     self.should_quit = true;
                 }
@@ -297,10 +306,37 @@ impl App {
             return;
         }
 
+        // Command palette takes over key handling
+        if self.show_command_palette {
+            let action = omega_core::tui::command_palette::handle_key(
+                &mut self.command_palette,
+                key,
+            );
+            match action {
+                omega_core::tui::command_palette::PaletteAction::Select(id) => {
+                    self.command_palette.close();
+                    self.show_command_palette = false;
+                    self.handle_slash_command(id);
+                }
+                omega_core::tui::command_palette::PaletteAction::Close => {
+                    self.command_palette.close();
+                    self.show_command_palette = false;
+                }
+                omega_core::tui::command_palette::PaletteAction::None => {}
+            }
+            return;
+        }
+
         // Toggle help overlay
         if key.code == KeyCode::Char('?') && !key.modifiers.contains(KeyModifiers::CONTROL) {
             self.show_help = !self.show_help;
             self.editor.suggestions.clear();
+            return;
+        }
+
+        // Ctrl+K: open command palette
+        if key.code == KeyCode::Char('k') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.open_command_palette("");
             return;
         }
 
@@ -315,6 +351,16 @@ impl App {
             self.tool_output_expanded = !self.tool_output_expanded;
             self.transcript
                 .set_tools_expanded(self.tool_output_expanded);
+            return;
+        }
+
+        // Empty-buffer `/` opens the command palette instead of inserting.
+        if key.code == KeyCode::Char('/')
+            && !key.modifiers.contains(KeyModifiers::CONTROL)
+            && !key.modifiers.contains(KeyModifiers::ALT)
+            && self.editor.buffer.is_empty()
+        {
+            self.open_command_palette("/");
             return;
         }
 
@@ -470,6 +516,15 @@ impl App {
 
         // Start streaming
         self.start_streaming(content);
+    }
+
+    fn open_command_palette(&mut self, seed_query: &str) {
+        if self.is_streaming || self.show_provider_panel {
+            return;
+        }
+        self.show_help = false;
+        self.command_palette.open(seed_query);
+        self.show_command_palette = true;
     }
 
     /// Handle a slash command.
