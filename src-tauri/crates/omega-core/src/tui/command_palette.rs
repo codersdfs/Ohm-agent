@@ -1,5 +1,14 @@
 //! Command palette — searchable list of slash commands.
 
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Alignment, Rect};
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span, Text};
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Widget, Wrap};
+
+use super::theme;
+
 /// One palette row / slash command.
 #[derive(Debug, Clone, Copy)]
 pub struct CommandEntry {
@@ -96,8 +105,6 @@ pub fn filter_commands(query: &str) -> Vec<usize> {
         .collect()
 }
 
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-
 /// Actions returned to the App key loop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaletteAction {
@@ -162,7 +169,7 @@ impl CommandPaletteState {
         self.selected = next;
     }
 
-    fn selected_id(&self) -> Option<&'static str> {
+    pub fn selected_id(&self) -> Option<&'static str> {
         self.filtered
             .get(self.selected)
             .and_then(|&i| COMMANDS.get(i))
@@ -227,6 +234,145 @@ pub fn handle_key(state: &mut CommandPaletteState, key: KeyEvent) -> PaletteActi
         }
         _ => PaletteAction::None,
     }
+}
+
+/// Render centered command palette overlay.
+pub fn render(area: Rect, buf: &mut Buffer, state: &CommandPaletteState) {
+    if !state.visible || area.width < 20 || area.height < 6 {
+        return;
+    }
+
+    // Dim full area (same approach as help overlay).
+    for cy in area.y..area.y + area.height {
+        for cx in area.x..area.x + area.width {
+            if let Some(cell) = theme::buf_cell_mut(buf, cx, cy) {
+                cell.set_style(Style::default().fg(theme::DIM));
+            }
+        }
+    }
+
+    let popup_width = area.width.min(48).max(24);
+    // chrome: borders + title + search line + optional description + empty/rows
+    let row_count = if state.filtered.is_empty() {
+        1usize
+    } else {
+        state.filtered.len().min(8)
+    };
+    // 2 border + 1 search + rows + 1 description footer
+    let popup_height = (row_count as u16)
+        .saturating_add(5)
+        .min(area.height.saturating_sub(2))
+        .max(6);
+    let x = area.x + (area.width.saturating_sub(popup_width)) / 2;
+    let y = area.y + (area.height.saturating_sub(popup_height)) / 2;
+    let popup_area = Rect::new(x, y, popup_width, popup_height);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Plain)
+        .border_style(Style::default().fg(theme::PRIMARY))
+        .title(Line::from(Span::styled(
+            " commands ",
+            Style::default().fg(theme::DIM),
+        )))
+        .style(Style::default().bg(theme::SURFACE_HIGH));
+    let inner = block.inner(popup_area);
+    block.render(popup_area, buf);
+
+    if inner.height < 2 || inner.width < 4 {
+        return;
+    }
+
+    // Search line: "> query█"
+    let search_display = format!("> {}_", state.query);
+    let search_line = Line::from(Span::styled(
+        truncate_to_width(&search_display, inner.width as usize),
+        Style::default().fg(theme::PRIMARY_CONTAINER),
+    ));
+    Paragraph::new(search_line)
+        .style(Style::default().bg(theme::SURFACE_HIGH))
+        .render(Rect::new(inner.x, inner.y, inner.width, 1), buf);
+
+    let list_y = inner.y + 1;
+    let list_h = inner.height.saturating_sub(2); // leave 1 for description
+    let list_area = Rect::new(inner.x, list_y, inner.width, list_h);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    if state.filtered.is_empty() {
+        lines.push(Line::from(Span::styled(
+            " No matching commands",
+            theme::style_dim(),
+        )));
+    } else {
+        // Scroll window so selected stays visible.
+        let max_rows = list_h as usize;
+        let sel = state.selected;
+        let start = if sel >= max_rows {
+            sel + 1 - max_rows
+        } else {
+            0
+        };
+        for (row_i, &cmd_i) in state
+            .filtered
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(max_rows)
+        {
+            let entry = &COMMANDS[cmd_i];
+            let is_sel = row_i == sel;
+            let style = if is_sel {
+                Style::default()
+                    .fg(theme::PRIMARY_CONTAINER)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme::FG)
+            };
+            let marker = if is_sel { "▸ " } else { "  " };
+            let text = format!("{}{}  {}", marker, entry.id, entry.label);
+            lines.push(Line::from(Span::styled(
+                truncate_to_width(&text, inner.width as usize),
+                style,
+            )));
+        }
+    }
+
+    Paragraph::new(Text::from(lines))
+        .alignment(Alignment::Left)
+        .wrap(Wrap { trim: false })
+        .style(Style::default().bg(theme::SURFACE_HIGH))
+        .render(list_area, buf);
+
+    // Description footer for selected row.
+    let desc = state
+        .selected_id()
+        .and_then(|id| COMMANDS.iter().find(|e| e.id == id))
+        .map(|e| e.description)
+        .unwrap_or("");
+    let desc_y = inner.y + inner.height.saturating_sub(1);
+    Paragraph::new(Line::from(Span::styled(
+        truncate_to_width(&format!(" {desc}"), inner.width as usize),
+        theme::style_dim(),
+    )))
+    .style(Style::default().bg(theme::SURFACE_HIGH))
+    .render(Rect::new(inner.x, desc_y, inner.width, 1), buf);
+}
+
+fn truncate_to_width(s: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let mut out = String::new();
+    let mut w = 0usize;
+    for ch in s.chars() {
+        let cw = if ch == '\t' { 1 } else { 1 };
+        if w + cw > width {
+            break;
+        }
+        out.push(ch);
+        w += cw;
+    }
+    out
 }
 
 #[cfg(test)]
