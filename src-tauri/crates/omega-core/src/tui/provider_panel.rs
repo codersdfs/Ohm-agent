@@ -2,10 +2,13 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Paragraph, Widget, Wrap};
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Widget, Wrap};
 
 use super::theme;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+
+const VISIBLE_MODELS: usize = 10;
+const PROVIDER_COLS: usize = 3;
 
 /// Actions the panel can return to the caller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,10 +18,18 @@ pub enum PanelAction {
     None,
 }
 
+/// Wizard step for the full-screen provider panel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WizardStep {
+    Provider,
+    Model,
+    Advanced,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PanelFocus {
     ProviderGrid,
-    ModelField,
+    ModelSearch,
     BaseUrlField,
     MaxTokens,
     Temperature,
@@ -27,24 +38,26 @@ pub enum PanelFocus {
 
 pub struct ProviderPanelState {
     pub visible: bool,
+    pub step: WizardStep,
     pub focus: PanelFocus,
     pub selected_provider: usize,
     pub model_buffer: String,
     pub model_cursor: usize,
+    pub search_buffer: String,
+    pub search_cursor: usize,
     pub url_buffer: String,
     pub url_cursor: usize,
     pub max_tokens: u32,
     pub temperature: f32,
-    pub provider_scroll: usize,
     pub needs_fetch: bool,
     pub models_loading: bool,
     pub models: Vec<String>,
     pub models_error: Option<String>,
-    pub show_dropdown: bool,
     pub selected_model: usize,
     pub model_scroll: usize,
+    /// Indices into `models` after filter/rank.
+    pub filtered: Vec<usize>,
     pub models_rx: Option<tokio::sync::oneshot::Receiver<Result<Vec<String>, String>>>,
-    /// Stashed config for Component rendering (API key display etc.).
     pub config: providers::ProviderConfig,
 }
 
@@ -55,41 +68,116 @@ impl ProviderPanelState {
             .iter()
             .position(|k| std::mem::discriminant(k) == std::mem::discriminant(&config.kind))
             .unwrap_or(0);
-        let default_url = config.base_url.clone().unwrap_or_else(|| config.kind.default_base_url());
-        Self {
+        let default_url = config
+            .base_url
+            .clone()
+            .unwrap_or_else(|| config.kind.default_base_url());
+        let mut state = Self {
             visible: true,
-            focus: PanelFocus::ProviderGrid,
+            // Model-first: open on model step with provider pre-selected.
+            step: WizardStep::Model,
+            focus: PanelFocus::ModelSearch,
             selected_provider: selected,
             model_buffer: config.model.clone(),
             model_cursor: config.model.len(),
+            search_buffer: String::new(),
+            search_cursor: 0,
             url_buffer: default_url.clone(),
             url_cursor: default_url.len(),
             max_tokens: config.max_tokens,
             temperature: config.temperature,
-            provider_scroll: 0,
             needs_fetch: true,
             models_loading: false,
             models: Vec::new(),
             models_error: None,
-            show_dropdown: false,
             selected_model: 0,
             model_scroll: 0,
+            filtered: Vec::new(),
             models_rx: None,
             config: config.clone(),
-        }
+        };
+        state.recompute_filter();
+        state
     }
 
     pub fn to_config(&self, original: &providers::ProviderConfig) -> providers::ProviderConfig {
         let all = providers::ProviderKind::all();
-        let kind = all.get(self.selected_provider).cloned().unwrap_or(original.kind.clone());
+        let kind = all
+            .get(self.selected_provider)
+            .cloned()
+            .unwrap_or(original.kind.clone());
         providers::ProviderConfig {
             kind,
             api_key: original.api_key.clone(),
             base_url: Some(self.url_buffer.clone()).filter(|s| !s.is_empty()),
-            model: if self.model_buffer.is_empty() { original.model.clone() } else { self.model_buffer.clone() },
+            model: if self.model_buffer.is_empty() {
+                original.model.clone()
+            } else {
+                self.model_buffer.clone()
+            },
             max_tokens: self.max_tokens,
             temperature: self.temperature,
         }
+    }
+
+    pub fn recompute_filter(&mut self) {
+        let query = self.search_buffer.to_lowercase();
+        let current = self.model_buffer.to_lowercase();
+
+        let mut ranked: Vec<(usize, i32)> = self
+            .models
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, name)| {
+                let lower = name.to_lowercase();
+                if !query.is_empty() && !lower.contains(&query) {
+                    return None;
+                }
+                let mut score = 0i32;
+                if lower == current {
+                    score += 1000;
+                }
+                if !query.is_empty() {
+                    if lower == query {
+                        score += 500;
+                    } else if lower.starts_with(&query) {
+                        score += 200;
+                    } else {
+                        score += 50;
+                    }
+                }
+                // Prefer shorter names when scores equal-ish.
+                score -= (lower.len() as i32) / 50;
+                Some((idx, score))
+            })
+            .collect();
+
+        ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        self.filtered = ranked.into_iter().map(|(i, _)| i).collect();
+
+        if self.filtered.is_empty() {
+            self.selected_model = 0;
+            self.model_scroll = 0;
+        } else {
+            // Prefer current model if still in filtered set.
+            if let Some(pos) = self
+                .filtered
+                .iter()
+                .position(|&i| self.models.get(i).map(|m| m.as_str()) == Some(self.model_buffer.as_str()))
+            {
+                self.selected_model = pos;
+            } else {
+                self.selected_model = self.selected_model.min(self.filtered.len() - 1);
+            }
+            ensure_model_visible(self);
+        }
+    }
+
+    fn provider_name(&self) -> String {
+        providers::ProviderKind::all()
+            .get(self.selected_provider)
+            .map(|k| k.to_string())
+            .unwrap_or_else(|| "unknown".into())
     }
 }
 
@@ -97,12 +185,18 @@ impl ProviderPanelState {
 
 fn select_provider(state: &mut ProviderPanelState, index: usize) {
     let all = providers::ProviderKind::all();
-    let Some(kind) = all.get(index) else { return };
-    if state.selected_provider == index { return; }
+    let Some(kind) = all.get(index).cloned() else {
+        return;
+    };
+    if state.selected_provider == index {
+        return;
+    }
 
-    let old_default = all.get(state.selected_provider).map(|k| k.default_base_url());
-    let should_update_url = state.url_buffer.is_empty()
-        || old_default.as_deref() == Some(state.url_buffer.as_str());
+    let old_default = all
+        .get(state.selected_provider)
+        .map(|k| k.default_base_url());
+    let should_update_url =
+        state.url_buffer.is_empty() || old_default.as_deref() == Some(state.url_buffer.as_str());
 
     state.selected_provider = index;
     state.needs_fetch = true;
@@ -110,9 +204,10 @@ fn select_provider(state: &mut ProviderPanelState, index: usize) {
     state.models_error = None;
     state.selected_model = 0;
     state.model_scroll = 0;
-    state.show_dropdown = false;
+    state.filtered.clear();
+    state.search_buffer.clear();
+    state.search_cursor = 0;
 
-    // Preserve custom gateways, but replace a previous provider's default URL.
     if should_update_url {
         state.url_buffer = kind.default_base_url();
         state.url_cursor = state.url_buffer.len();
@@ -120,13 +215,12 @@ fn select_provider(state: &mut ProviderPanelState, index: usize) {
 }
 
 fn ensure_model_visible(state: &mut ProviderPanelState) {
-    const VISIBLE_MODELS: usize = 6;
-    if state.models.is_empty() {
+    if state.filtered.is_empty() {
         state.selected_model = 0;
         state.model_scroll = 0;
         return;
     }
-    state.selected_model = state.selected_model.min(state.models.len() - 1);
+    state.selected_model = state.selected_model.min(state.filtered.len() - 1);
     if state.selected_model < state.model_scroll {
         state.model_scroll = state.selected_model;
     } else if state.selected_model >= state.model_scroll + VISIBLE_MODELS {
@@ -134,100 +228,135 @@ fn ensure_model_visible(state: &mut ProviderPanelState) {
     }
 }
 
-/// Move focus up within the current field or navigate the provider grid up.
-fn move_focus_up(state: &mut ProviderPanelState) {
-    match state.focus {
-        PanelFocus::ProviderGrid if state.selected_provider >= 3 => {
-            select_provider(state, state.selected_provider - 3);
+fn set_step(state: &mut ProviderPanelState, step: WizardStep) {
+    state.step = step;
+    state.focus = match step {
+        WizardStep::Provider => PanelFocus::ProviderGrid,
+        WizardStep::Model => PanelFocus::ModelSearch,
+        WizardStep::Advanced => PanelFocus::BaseUrlField,
+    };
+}
+
+fn go_next(state: &mut ProviderPanelState) -> PanelAction {
+    match state.step {
+        WizardStep::Provider => {
+            set_step(state, WizardStep::Model);
+            PanelAction::None
         }
-        PanelFocus::MaxTokens => state.max_tokens = state.max_tokens.saturating_add(512),
-        PanelFocus::Temperature => state.temperature = (state.temperature + 0.1).min(2.0),
-        _ => {}
+        WizardStep::Model => {
+            accept_model_selection(state);
+            set_step(state, WizardStep::Advanced);
+            PanelAction::None
+        }
+        WizardStep::Advanced => PanelAction::Apply,
     }
 }
 
-/// Move focus down within the current field or navigate the provider grid down.
-fn move_focus_down(state: &mut ProviderPanelState) {
-    match state.focus {
-        PanelFocus::ProviderGrid => {
-            let max = providers::ProviderKind::all().len().saturating_sub(1);
-            select_provider(state, (state.selected_provider + 3).min(max));
+fn go_back(state: &mut ProviderPanelState) -> PanelAction {
+    match state.step {
+        WizardStep::Provider => PanelAction::Close,
+        WizardStep::Model => {
+            set_step(state, WizardStep::Provider);
+            PanelAction::None
         }
-        PanelFocus::MaxTokens => state.max_tokens = state.max_tokens.saturating_sub(512).max(1),
-        PanelFocus::Temperature => state.temperature = (state.temperature - 0.1).max(0.0),
-        _ => {}
+        WizardStep::Advanced => {
+            set_step(state, WizardStep::Model);
+            PanelAction::None
+        }
     }
 }
 
-/// Move focus left: navigate provider grid columns or cursor left in text fields.
-fn move_focus_left(state: &mut ProviderPanelState) {
-    match state.focus {
-        PanelFocus::ProviderGrid => {
-            let row_start = state.selected_provider / 3 * 3;
-            if state.selected_provider > row_start {
-                select_provider(state, state.selected_provider - 1);
+fn accept_model_selection(state: &mut ProviderPanelState) {
+    if !state.filtered.is_empty() {
+        if let Some(&idx) = state.filtered.get(state.selected_model) {
+            if let Some(name) = state.models.get(idx) {
+                state.model_buffer = name.clone();
+                state.model_cursor = name.len();
+                return;
             }
         }
-        PanelFocus::ModelField | PanelFocus::BaseUrlField => {
-            let cursor = state.current_cursor();
-            if cursor > 0 {
-                let prev = state.current_buffer()[..cursor].char_indices().last().map(|(i, _)| i).unwrap_or(0);
-                state.set_cursor(prev);
-            }
-        }
-        PanelFocus::MaxTokens => state.max_tokens = state.max_tokens.saturating_sub(512).max(1),
-        PanelFocus::Temperature => state.temperature = (state.temperature - 0.1).max(0.0),
-        _ => {}
+    }
+    // No matches: accept search text as custom model id when non-empty.
+    if !state.search_buffer.is_empty() {
+        state.model_buffer = state.search_buffer.clone();
+        state.model_cursor = state.model_buffer.len();
     }
 }
 
-/// Move focus right: navigate provider grid columns or cursor right in text fields.
-fn move_focus_right(state: &mut ProviderPanelState) {
-    match state.focus {
-        PanelFocus::ProviderGrid => {
-            let max = providers::ProviderKind::all().len().saturating_sub(1);
-            let row_end = ((state.selected_provider / 3) * 3 + 2).min(max);
-            if state.selected_provider < row_end {
-                select_provider(state, state.selected_provider + 1);
+fn move_provider(state: &mut ProviderPanelState, code: KeyCode) {
+    let max = providers::ProviderKind::all().len().saturating_sub(1);
+    let cur = state.selected_provider;
+    let next = match code {
+        KeyCode::Up | KeyCode::Char('k') if cur >= PROVIDER_COLS => cur - PROVIDER_COLS,
+        KeyCode::Down | KeyCode::Char('j') => (cur + PROVIDER_COLS).min(max),
+        KeyCode::Left | KeyCode::Char('h') => {
+            let row_start = (cur / PROVIDER_COLS) * PROVIDER_COLS;
+            if cur > row_start {
+                cur - 1
+            } else {
+                cur
             }
         }
-        PanelFocus::ModelField | PanelFocus::BaseUrlField => {
-            let buf = state.current_buffer().to_string();
-            let cursor = state.current_cursor();
-            if cursor < buf.len() {
-                let next = buf[cursor..].char_indices().nth(1);
-                if let Some((i, _)) = next {
-                    state.set_cursor(cursor + i);
-                } else {
-                    state.set_cursor(buf.len());
-                }
+        KeyCode::Right | KeyCode::Char('l') => {
+            let row_end = ((cur / PROVIDER_COLS) * PROVIDER_COLS + (PROVIDER_COLS - 1)).min(max);
+            if cur < row_end {
+                cur + 1
+            } else {
+                cur
             }
         }
-        PanelFocus::MaxTokens => state.max_tokens = state.max_tokens.saturating_add(512),
-        PanelFocus::Temperature => state.temperature = (state.temperature + 0.1).min(2.0),
-        _ => {}
+        _ => cur,
+    };
+    if next != cur {
+        select_provider(state, next);
     }
 }
 
-/// Jump directly to a provider by number (1-indexed).
-fn jump_to_provider_by_number(state: &mut ProviderPanelState, num: usize) {
+fn jump_provider_number(state: &mut ProviderPanelState, num: usize) {
     let max = providers::ProviderKind::all().len();
     if num >= 1 && num <= max {
         select_provider(state, num - 1);
     }
 }
 
-/// Toggle the model dropdown open/closed.
-fn toggle_dropdown(state: &mut ProviderPanelState) {
-    if !state.models.is_empty() {
-        state.show_dropdown = !state.show_dropdown;
-        // Close: apply the currently selected model
-        if !state.show_dropdown {
-            if let Some(m) = state.models.get(state.selected_model) {
-                state.model_buffer = m.clone();
-                state.model_cursor = m.len();
-            }
-        }
+fn insert_char(buf: &mut String, cursor: &mut usize, c: char) {
+    let pos = (*cursor).min(buf.len());
+    buf.insert(pos, c);
+    *cursor = pos + c.len_utf8();
+}
+
+fn backspace(buf: &mut String, cursor: &mut usize) {
+    if *cursor == 0 {
+        return;
+    }
+    let prev = buf[..*cursor]
+        .char_indices()
+        .last()
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    buf.drain(prev..*cursor);
+    *cursor = prev;
+}
+
+fn cursor_left(buf: &str, cursor: &mut usize) {
+    if *cursor == 0 {
+        return;
+    }
+    *cursor = buf[..*cursor]
+        .char_indices()
+        .last()
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+}
+
+fn cursor_right(buf: &str, cursor: &mut usize) {
+    if *cursor >= buf.len() {
+        return;
+    }
+    if let Some((i, _)) = buf[*cursor..].char_indices().nth(1) {
+        *cursor += i;
+    } else {
+        *cursor = buf.len();
     }
 }
 
@@ -238,195 +367,222 @@ pub fn handle_key(state: &mut ProviderPanelState, key: KeyEvent) -> PanelAction 
         return PanelAction::None;
     }
 
-    // Dropdown mode: keys navigate the model list
-    if state.show_dropdown && state.focus == PanelFocus::ModelField {
-        match key.code {
-            KeyCode::Esc | KeyCode::Tab => {
-                state.show_dropdown = false;
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                let len = state.models.len();
-                if len > 0 {
-                    state.selected_model = if state.selected_model == 0 { len - 1 } else { state.selected_model - 1 };
-                    ensure_model_visible(state);
-                }
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                let len = state.models.len();
-                if len > 0 {
-                    state.selected_model = (state.selected_model + 1) % len;
-                    ensure_model_visible(state);
-                }
-            }
-            KeyCode::Enter | KeyCode::Char(' ') => {
-                if let Some(model) = state.models.get(state.selected_model) {
-                    state.model_buffer = model.clone();
-                    state.model_cursor = model.len();
-                    state.show_dropdown = false;
-                }
-            }
-            _ => {}
+    // Ctrl+Enter applies from any step.
+    if key.modifiers.contains(KeyModifiers::CONTROL)
+        && matches!(key.code, KeyCode::Enter | KeyCode::Char('\n'))
+    {
+        if state.step == WizardStep::Model {
+            accept_model_selection(state);
         }
-        return PanelAction::None;
+        return PanelAction::Apply;
     }
 
     match key.code {
-        KeyCode::Esc => return PanelAction::Close,
-
-        // Tab forward
-        KeyCode::Tab => {
-            state.focus = match state.focus {
-                PanelFocus::ProviderGrid => PanelFocus::ModelField,
-                PanelFocus::ModelField => PanelFocus::BaseUrlField,
-                PanelFocus::BaseUrlField => PanelFocus::MaxTokens,
-                PanelFocus::MaxTokens => PanelFocus::Temperature,
-                PanelFocus::Temperature => PanelFocus::ApplyButton,
-                PanelFocus::ApplyButton => PanelFocus::ProviderGrid,
-            };
-        }
-
-        // Tab backward (Shift+Tab)
-        KeyCode::BackTab => {
-            state.focus = match state.focus {
-                PanelFocus::ProviderGrid => PanelFocus::ApplyButton,
-                PanelFocus::ModelField => PanelFocus::ProviderGrid,
-                PanelFocus::BaseUrlField => PanelFocus::ModelField,
-                PanelFocus::MaxTokens => PanelFocus::BaseUrlField,
-                PanelFocus::Temperature => PanelFocus::MaxTokens,
-                PanelFocus::ApplyButton => PanelFocus::Temperature,
-            };
-        }
-
-        // Vim bindings apply to controls, not editable text fields.
-        KeyCode::Char('j') if !matches!(state.focus, PanelFocus::ModelField | PanelFocus::BaseUrlField) => move_focus_down(state),
-        KeyCode::Char('k') if !matches!(state.focus, PanelFocus::ModelField | PanelFocus::BaseUrlField) => move_focus_up(state),
-        KeyCode::Char('h') if !matches!(state.focus, PanelFocus::ModelField | PanelFocus::BaseUrlField) => move_focus_left(state),
-        KeyCode::Char('l') if !matches!(state.focus, PanelFocus::ModelField | PanelFocus::BaseUrlField) => move_focus_right(state),
-
-        // Arrow key navigation in all directions
-        KeyCode::Up => move_focus_up(state),
-        KeyCode::Down => move_focus_down(state),
-        KeyCode::Left => move_focus_left(state),
-        KeyCode::Right => move_focus_right(state),
-
-        // Number keys for direct provider selection (1-9, 0 for 10)
-        KeyCode::Char(c) if c.is_ascii_digit() && state.focus == PanelFocus::ProviderGrid => {
-            let num = if c == '0' { 10 } else { c.to_digit(10).unwrap_or(0) as usize };
-            jump_to_provider_by_number(state, num);
-        }
-
-        // Enter/Space to toggle dropdown or apply
-        KeyCode::Enter | KeyCode::Char(' ') => {
-            if key.modifiers.contains(KeyModifiers::CONTROL)
-                && (key.code == KeyCode::Enter || key.code == KeyCode::Char(' '))
-            {
-                return PanelAction::Apply;
-            }
-            match state.focus {
-                PanelFocus::ApplyButton => return PanelAction::Apply,
-                PanelFocus::ModelField if !state.models.is_empty() => {
-                    toggle_dropdown(state);
-                }
-                _ => {
-                    state.focus = match state.focus {
-                        PanelFocus::ProviderGrid => PanelFocus::ModelField,
-                        PanelFocus::ModelField => PanelFocus::BaseUrlField,
-                        PanelFocus::BaseUrlField => PanelFocus::MaxTokens,
-                        PanelFocus::MaxTokens => PanelFocus::Temperature,
-                        PanelFocus::Temperature => PanelFocus::ApplyButton,
-                        PanelFocus::ApplyButton => PanelFocus::ProviderGrid,
-                    };
-                }
-            }
-        }
-
-        KeyCode::Home => {
-            if matches!(state.focus, PanelFocus::ModelField | PanelFocus::BaseUrlField) {
-                state.set_cursor(0);
-            }
-        }
-        KeyCode::End => {
-            if matches!(state.focus, PanelFocus::ModelField | PanelFocus::BaseUrlField) {
-                state.set_cursor(state.current_buffer().len());
-            }
-        }
-        KeyCode::Backspace => {
-            if matches!(state.focus, PanelFocus::ModelField | PanelFocus::BaseUrlField) {
-                let cursor = state.current_cursor();
-                if cursor > 0 {
-                    let prev = state.current_buffer()[..cursor].char_indices().last().map(|(i, _)| i).unwrap_or(0);
-                    let mut s = state.current_buffer().to_string();
-                    s.drain(prev..cursor);
-                    state.set_buffer(s);
-                    state.set_cursor(prev);
-                }
-            }
-        }
-
-        // Regular character input for text fields
-        KeyCode::Char(c) => {
-            match state.focus {
-                PanelFocus::ModelField | PanelFocus::BaseUrlField => {
-                    let cursor = state.current_cursor();
-                    let mut s = state.current_buffer().to_string();
-                    s.insert(cursor, c);
-                    state.set_buffer(s);
-                    state.set_cursor(cursor + c.len_utf8());
-                }
-                _ => {}
-            }
-        }
+        KeyCode::Esc => return go_back(state),
         _ => {}
     }
 
-    PanelAction::None
+    match state.step {
+        WizardStep::Provider => handle_step_provider(state, key),
+        WizardStep::Model => handle_step_model(state, key),
+        WizardStep::Advanced => handle_step_advanced(state, key),
+    }
 }
 
-// ── Helper methods ─────────────────────────────────────────────────────────
-
-impl ProviderPanelState {
-    fn current_buffer(&self) -> &str {
-        match self.focus {
-            PanelFocus::ModelField | PanelFocus::ProviderGrid => &self.model_buffer,
-            PanelFocus::BaseUrlField => &self.url_buffer,
-            _ => "",
+fn handle_step_provider(state: &mut ProviderPanelState, key: KeyEvent) -> PanelAction {
+    match key.code {
+        KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Tab => go_next(state),
+        KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right => {
+            move_provider(state, key.code);
+            PanelAction::None
         }
-    }
-
-    fn current_cursor(&self) -> usize {
-        match self.focus {
-            PanelFocus::ModelField => self.model_cursor,
-            PanelFocus::BaseUrlField => self.url_cursor,
-            _ => 0,
+        KeyCode::Char('h') | KeyCode::Char('j') | KeyCode::Char('k') | KeyCode::Char('l') => {
+            move_provider(state, key.code);
+            PanelAction::None
         }
-    }
-
-    fn set_cursor(&mut self, pos: usize) {
-        match self.focus {
-            PanelFocus::ModelField => self.model_cursor = pos.min(self.model_buffer.len()),
-            PanelFocus::BaseUrlField => self.url_cursor = pos.min(self.url_buffer.len()),
-            _ => {}
+        KeyCode::Char(c) if c.is_ascii_digit() => {
+            let num = if c == '0' {
+                10
+            } else {
+                c.to_digit(10).unwrap_or(0) as usize
+            };
+            jump_provider_number(state, num);
+            PanelAction::None
         }
+        _ => PanelAction::None,
     }
+}
 
-    fn set_buffer(&mut self, buf: String) {
-        match self.focus {
-            PanelFocus::ModelField => {
-                let cursor = self.model_cursor.min(buf.len());
-                self.model_buffer = buf;
-                self.model_cursor = cursor;
+fn handle_step_model(state: &mut ProviderPanelState, key: KeyEvent) -> PanelAction {
+    match key.code {
+        KeyCode::Tab | KeyCode::Enter => go_next(state),
+        KeyCode::BackTab => go_back(state),
+        KeyCode::Up => {
+            if !state.filtered.is_empty() {
+                state.selected_model = if state.selected_model == 0 {
+                    state.filtered.len() - 1
+                } else {
+                    state.selected_model - 1
+                };
+                ensure_model_visible(state);
             }
-            PanelFocus::BaseUrlField => {
-                let cursor = self.url_cursor.min(buf.len());
-                self.url_buffer = buf;
-                self.url_cursor = cursor;
-            }
-            _ => {}
+            PanelAction::None
         }
+        KeyCode::Down => {
+            if !state.filtered.is_empty() {
+                state.selected_model = (state.selected_model + 1) % state.filtered.len();
+                ensure_model_visible(state);
+            }
+            PanelAction::None
+        }
+        KeyCode::Left => {
+            cursor_left(&state.search_buffer, &mut state.search_cursor);
+            PanelAction::None
+        }
+        KeyCode::Right => {
+            cursor_right(&state.search_buffer, &mut state.search_cursor);
+            PanelAction::None
+        }
+        KeyCode::Home => {
+            state.search_cursor = 0;
+            PanelAction::None
+        }
+        KeyCode::End => {
+            state.search_cursor = state.search_buffer.len();
+            PanelAction::None
+        }
+        KeyCode::Backspace => {
+            backspace(&mut state.search_buffer, &mut state.search_cursor);
+            state.recompute_filter();
+            PanelAction::None
+        }
+        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            // All printable chars (including h/j/k/l) go into search.
+            insert_char(&mut state.search_buffer, &mut state.search_cursor, c);
+            state.recompute_filter();
+            PanelAction::None
+        }
+        _ => PanelAction::None,
+    }
+}
+
+fn handle_step_advanced(state: &mut ProviderPanelState, key: KeyEvent) -> PanelAction {
+    let on_url = state.focus == PanelFocus::BaseUrlField;
+
+    match key.code {
+        KeyCode::Tab => {
+            state.focus = match state.focus {
+                PanelFocus::BaseUrlField => PanelFocus::MaxTokens,
+                PanelFocus::MaxTokens => PanelFocus::Temperature,
+                PanelFocus::Temperature => PanelFocus::ApplyButton,
+                PanelFocus::ApplyButton => PanelFocus::BaseUrlField,
+                _ => PanelFocus::BaseUrlField,
+            };
+            PanelAction::None
+        }
+        KeyCode::BackTab => {
+            state.focus = match state.focus {
+                PanelFocus::BaseUrlField => PanelFocus::ApplyButton,
+                PanelFocus::MaxTokens => PanelFocus::BaseUrlField,
+                PanelFocus::Temperature => PanelFocus::MaxTokens,
+                PanelFocus::ApplyButton => PanelFocus::Temperature,
+                _ => PanelFocus::BaseUrlField,
+            };
+            PanelAction::None
+        }
+        KeyCode::Enter | KeyCode::Char(' ') => {
+            if state.focus == PanelFocus::ApplyButton || key.code == KeyCode::Enter
+                && key.modifiers.contains(KeyModifiers::CONTROL)
+            {
+                return PanelAction::Apply;
+            }
+            if state.focus == PanelFocus::ApplyButton {
+                return PanelAction::Apply;
+            }
+            // Advance focus on Enter.
+            state.focus = match state.focus {
+                PanelFocus::BaseUrlField => PanelFocus::MaxTokens,
+                PanelFocus::MaxTokens => PanelFocus::Temperature,
+                PanelFocus::Temperature => PanelFocus::ApplyButton,
+                other => other,
+            };
+            PanelAction::None
+        }
+        // URL editing
+        KeyCode::Char(c) if on_url && !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            insert_char(&mut state.url_buffer, &mut state.url_cursor, c);
+            PanelAction::None
+        }
+        KeyCode::Backspace if on_url => {
+            backspace(&mut state.url_buffer, &mut state.url_cursor);
+            PanelAction::None
+        }
+        KeyCode::Left if on_url => {
+            cursor_left(&state.url_buffer, &mut state.url_cursor);
+            PanelAction::None
+        }
+        KeyCode::Right if on_url => {
+            cursor_right(&state.url_buffer, &mut state.url_cursor);
+            PanelAction::None
+        }
+        KeyCode::Home if on_url => {
+            state.url_cursor = 0;
+            PanelAction::None
+        }
+        KeyCode::End if on_url => {
+            state.url_cursor = state.url_buffer.len();
+            PanelAction::None
+        }
+        // Numeric adjustments when not on URL
+        KeyCode::Up | KeyCode::Right | KeyCode::Char('l') | KeyCode::Char('k') if !on_url => {
+            match state.focus {
+                PanelFocus::MaxTokens => {
+                    state.max_tokens = state.max_tokens.saturating_add(512);
+                }
+                PanelFocus::Temperature => {
+                    state.temperature = (state.temperature + 0.1).min(2.0);
+                }
+                _ => {}
+            }
+            PanelAction::None
+        }
+        KeyCode::Down | KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('j') if !on_url => {
+            match state.focus {
+                PanelFocus::MaxTokens => {
+                    state.max_tokens = state.max_tokens.saturating_sub(512).max(1);
+                }
+                PanelFocus::Temperature => {
+                    state.temperature = (state.temperature - 0.1).max(0.0);
+                }
+                _ => {}
+            }
+            PanelAction::None
+        }
+        _ => PanelAction::None,
     }
 }
 
 // ── Render ─────────────────────────────────────────────────────────────────
+
+fn dim_bg(area: Rect, buf: &mut Buffer) {
+    for y in area.y..area.y + area.height {
+        for x in area.x..area.x + area.width {
+            if let Some(cell) = theme::buf_cell_mut(buf, x, y) {
+                cell.set_style(Style::default().fg(theme::DIM).bg(theme::BG));
+            }
+        }
+    }
+}
+
+fn section_block(title: &str) -> Block<'static> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Plain)
+        .border_style(Style::default().fg(theme::OUTLINE))
+        .title(format!(" {} ", title))
+        .title_style(Style::default().fg(theme::PRIMARY))
+        .style(Style::default().bg(theme::BG))
+}
 
 pub fn render(
     area: Rect,
@@ -434,285 +590,396 @@ pub fn render(
     state: &ProviderPanelState,
     config: &providers::ProviderConfig,
 ) {
-    if area.width < 54 || area.height < 22 {
+    if area.width < 40 || area.height < 12 {
         return;
     }
 
-    let pw = area.width.min(58);
-    let ph = 20u16;
-    let x = area.x + (area.width.saturating_sub(pw)) / 2;
-    let y = area.y + (area.height.saturating_sub(ph)) / 2;
+    dim_bg(area, buf);
 
-    // Dim background
-    for cy in area.y..area.y + area.height {
-        for cx in area.x..area.x + area.width {
-            if let Some(cell) = theme::buf_cell_mut(buf, cx, cy) {
-                cell.set_style(Style::default().fg(theme::DIM));
-            }
-        }
+    // Outer frame
+    let title = match state.step {
+        WizardStep::Provider => " Provider / Model  ·  Step 1/3: Provider ",
+        WizardStep::Model => " Provider / Model  ·  Step 2/3: Model ",
+        WizardStep::Advanced => " Provider / Model  ·  Step 3/3: Advanced ",
+    };
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Plain)
+        .border_style(Style::default().fg(theme::OUTLINE))
+        .title(title)
+        .title_style(
+            Style::default()
+                .fg(theme::PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        )
+        .style(Style::default().bg(theme::BG));
+    let inner = outer.inner(area);
+    outer.render(area, buf);
+
+    if inner.height < 6 || inner.width < 20 {
+        return;
     }
 
-    // Available width inside block borders
-    let iw = (pw - 2) as usize; // inner width
+    // Header summary
+    let summary = format!(
+        " Current: {} · {} ",
+        state.provider_name(),
+        if state.model_buffer.is_empty() {
+            "—"
+        } else {
+            &state.model_buffer
+        }
+    );
+    Paragraph::new(Line::from(Span::styled(summary, theme::style_dim()))).render(
+        Rect::new(inner.x, inner.y, inner.width, 1),
+        buf,
+    );
 
-    // ── Build lines ─────────────────────────────────────────────────────
-    let mut lines: Vec<Line<'static>> = Vec::new();
+    // Body + footer
+    let body = Rect::new(
+        inner.x,
+        inner.y + 1,
+        inner.width,
+        inner.height.saturating_sub(3),
+    );
+    let footer = Rect::new(
+        inner.x,
+        inner.y + inner.height.saturating_sub(2),
+        inner.width,
+        1,
+    );
+
+    match state.step {
+        WizardStep::Provider => render_step_provider(body, buf, state),
+        WizardStep::Model => render_step_model(body, buf, state),
+        WizardStep::Advanced => render_step_advanced(body, buf, state, config),
+    }
+
+    let hints = match state.step {
+        WizardStep::Provider => {
+            " ↑↓←→/hjkl move · 1-9/0 jump · Enter next · Esc cancel · Ctrl+Enter apply "
+        }
+        WizardStep::Model => {
+            " type filter · ↑↓ wrap · Enter next · Esc providers · Ctrl+Enter apply "
+        }
+        WizardStep::Advanced => {
+            " Tab fields · Enter apply · Esc back · Ctrl+Enter apply "
+        }
+    };
+    Paragraph::new(Line::from(Span::styled(hints, theme::style_dim()))).render(footer, buf);
+}
+
+fn render_step_provider(area: Rect, buf: &mut Buffer, state: &ProviderPanelState) {
+    let block = section_block("Providers");
+    let inner = block.inner(area);
+    block.render(area, buf);
+
     let all = providers::ProviderKind::all();
-
-    // Blank + provider grid
-    lines.push(Line::from(""));
-    for chunk in all.chunks(3) {
-        let mut spans = vec![Span::raw(" ")];
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for chunk in all.chunks(PROVIDER_COLS) {
+        let mut spans = Vec::new();
         for (ci, kind) in chunk.iter().enumerate() {
-            let idx = all.iter()
+            let idx = all
+                .iter()
                 .position(|k| std::mem::discriminant(k) == std::mem::discriminant(kind))
                 .unwrap_or(0);
             let sel = idx == state.selected_provider;
-            let foc = state.focus == PanelFocus::ProviderGrid && sel;
-            let style = if foc {
+            let style = if sel {
                 Style::default()
                     .fg(theme::PRIMARY_CONTAINER)
                     .add_modifier(Modifier::BOLD)
-            } else if sel {
-                Style::default()
-                    .fg(theme::ACCENT)
             } else {
                 theme::style_dim()
             };
-            // Use ◉ (filled circle) for selected, ○ (open circle) otherwise.
-            // Focused + selected gets a filled circle with bright color;
-            // selected but not focused gets a filled circle with accent;
-            // unselected gets open circle.
-            let marker = if sel { "◉" } else { "○" };
+            let marker = if sel { "▸◉ " } else { " ○ " };
             let label = format!("{}{}", marker, kind);
             spans.push(Span::styled(label, style));
-            // Dim the provider index hint when not in provider grid focus
-            let number_hint_style = if state.focus == PanelFocus::ProviderGrid {
-                Style::default().fg(theme::DIM).add_modifier(Modifier::DIM)
-            } else {
-                Style::default().fg(theme::DIM)
-            };
             let num = idx + 1;
             let hint = if num <= 9 {
                 format!("[{}]", num)
             } else if num == 10 {
-                String::from("[0]")
+                "[0]".into()
             } else {
                 String::new()
             };
             if !hint.is_empty() {
-                spans.push(Span::styled(hint, number_hint_style));
+                spans.push(Span::styled(hint, theme::style_dim()));
             }
-            let kind_str = format!("{}", kind);
-            // Account for marker (1) + kind + hint (3) + 1 = kind_str.len() + 5
-            let pad = 20usize.saturating_sub(kind_str.len() + 5);
-            if ci < 2 {
-                spans.push(Span::raw(" ".repeat(pad)));
+            let pad = 18usize.saturating_sub(format!("{}", kind).len() + 6);
+            if ci + 1 < chunk.len() {
+                spans.push(Span::raw(" ".repeat(pad.max(1))));
             }
         }
         lines.push(Line::from(spans));
     }
-
-    // Model field — single line with enhanced focus indicator
     lines.push(Line::from(""));
-    let m_foc = state.focus == PanelFocus::ModelField;
-    let m_label = if m_foc { "▸ Model " } else { "  Model " };
-    let model_display = if state.model_buffer.is_empty() {
-        String::from("enter model name…")
-    } else {
-        state.model_buffer.clone()
-    };
-    let m_avail = iw.saturating_sub(m_label.chars().count() + 3); // space for ":" and cursor
-    let m_trunc: String = if model_display.chars().count() > m_avail {
-        // Char-safe tail truncation with leading ellipsis.
-        let keep = m_avail.saturating_sub(1).max(1) as usize;
-        let tail: String = model_display.chars().rev().take(keep).collect::<Vec<_>>().into_iter().rev().collect();
-        format!("…{}", tail)
-    } else {
-        model_display
-    };
-    let m_label_style = if m_foc {
-        Style::default().fg(theme::PRIMARY_CONTAINER).add_modifier(Modifier::BOLD)
-    } else {
-        theme::style_dim()
-    };
-    let m_span: Span<'static> = if m_foc {
-        Span::styled(m_trunc.clone(), theme::style_focused_field())
-    } else {
-        Span::styled(m_trunc, theme::style_dim())
-    };
-    // Model count indicator
-    let count_span = if state.models_loading {
-        Some(Span::styled(" ⟳", theme::style_dim()))
-    } else if !state.models.is_empty() {
-        Some(Span::styled(
-            format!(" ({})", state.models.len()),
+    lines.push(Line::from(Span::styled(
+        format!(" Selected: {} ", state.provider_name()),
+        theme::style_dim(),
+    )));
+    if let Some(kind) = all.get(state.selected_provider) {
+        lines.push(Line::from(Span::styled(
+            format!(" Default URL: {} ", kind.default_base_url()),
             theme::style_dim(),
-        ))
-    } else if let Some(ref err) = state.models_error {
-        // Char-safe truncation: byte slicing here would panic if the 20th
-        // byte lands inside a multibyte codepoint (e.g. localized errors).
-        let short: String = err.chars().take(20).collect();
-        Some(Span::styled(format!(" ⚠{}", short), Style::default().fg(theme::ERROR)))
-    } else {
-        None
-    };
-    let mut ml = vec![Span::styled(m_label, m_label_style), m_span];
-    if let Some(c) = count_span {
-        ml.push(c);
+        )));
     }
-    lines.push(Line::from(ml));
 
-    // URL field
-    let u_foc = state.focus == PanelFocus::BaseUrlField;
-    let u_label = if u_foc { "▸ URL " } else { "  URL " };
-    let url_text = if state.url_buffer.is_empty() {
-        "enter base URL…".to_string()
+    Paragraph::new(Text::from(lines))
+        .alignment(Alignment::Left)
+        .wrap(Wrap { trim: false })
+        .render(inner, buf);
+}
+
+fn render_step_model(area: Rect, buf: &mut Buffer, state: &ProviderPanelState) {
+    if area.height < 4 {
+        return;
+    }
+
+    // Search box (3 rows with border)
+    let search_h = 3u16.min(area.height);
+    let search_area = Rect::new(area.x, area.y, area.width, search_h);
+    let list_area = Rect::new(
+        area.x,
+        area.y + search_h,
+        area.width,
+        area.height.saturating_sub(search_h),
+    );
+
+    let search_block = section_block("Search");
+    let search_inner = search_block.inner(search_area);
+    search_block.render(search_area, buf);
+    let search_display = if state.search_buffer.is_empty() {
+        "type to filter models…".to_string()
     } else {
-        let u_avail = iw.saturating_sub(u_label.chars().count() + 3);
-        if state.url_buffer.chars().count() > u_avail {
-            // Char-safe tail truncation with leading ellipsis.
-            let keep = u_avail.saturating_sub(1).max(1) as usize;
-            let tail: String = state.url_buffer.chars().rev().take(keep).collect::<Vec<_>>().into_iter().rev().collect();
-            format!("…{}", tail)
-        } else {
-            state.url_buffer.clone()
-        }
+        state.search_buffer.clone()
     };
-    let u_label_style = if u_foc {
-        Style::default().fg(theme::PRIMARY_CONTAINER).add_modifier(Modifier::BOLD)
+    Paragraph::new(Line::from(Span::styled(
+        format!("▸ {}", search_display),
+        Style::default()
+            .fg(theme::FG)
+            .add_modifier(Modifier::UNDERLINED),
+    )))
+    .render(search_inner, buf);
+
+    let total = state.models.len();
+    let match_n = state.filtered.len();
+    let list_title = if state.models_loading {
+        "Models · loading…".to_string()
+    } else if let Some(ref err) = state.models_error {
+        let short: String = err.chars().take(40).collect();
+        format!("Models · error: {}", short)
+    } else {
+        format!("Models ({} match / {})", match_n, total)
+    };
+    let list_block = section_block(&list_title);
+    let list_inner = list_block.inner(list_area);
+    list_block.render(list_area, buf);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    if state.models_loading {
+        lines.push(Line::from(Span::styled(
+            "  ⠋ fetching models…",
+            theme::style_dim(),
+        )));
+    } else if state.filtered.is_empty() {
+        if total == 0 {
+            lines.push(Line::from(Span::styled(
+                "  no models yet — type a custom model id and press Enter",
+                theme::style_dim(),
+            )));
+        } else {
+            lines.push(Line::from(Span::styled(
+                "  no matches — Enter accepts search as custom model",
+                theme::style_dim(),
+            )));
+        }
+    } else {
+        let start = state.model_scroll.min(state.filtered.len().saturating_sub(1));
+        let end = (start + VISIBLE_MODELS).min(state.filtered.len());
+        for (vis_i, &model_idx) in state.filtered[start..end].iter().enumerate() {
+            let index = start + vis_i;
+            let name = state.models.get(model_idx).map(|s| s.as_str()).unwrap_or("?");
+            let is_sel = index == state.selected_model;
+            let is_current = name == state.model_buffer;
+            let style = if is_sel {
+                Style::default()
+                    .fg(theme::PRIMARY_CONTAINER)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                theme::style_dim()
+            };
+            let prefix = if is_sel { "▸ " } else { "  " };
+            let suffix = if is_current { "  ★ current" } else { "" };
+            lines.push(Line::from(Span::styled(
+                format!("{}{}{}", prefix, name, suffix),
+                style,
+            )));
+        }
+    }
+
+    Paragraph::new(Text::from(lines))
+        .alignment(Alignment::Left)
+        .render(list_inner, buf);
+}
+
+fn render_step_advanced(
+    area: Rect,
+    buf: &mut Buffer,
+    state: &ProviderPanelState,
+    config: &providers::ProviderConfig,
+) {
+    if area.height < 6 {
+        return;
+    }
+
+    let half = area.height / 2;
+    let conn_area = Rect::new(area.x, area.y, area.width, half.max(4));
+    let gen_area = Rect::new(
+        area.x,
+        area.y + half.max(4),
+        area.width,
+        area.height.saturating_sub(half.max(4)),
+    );
+
+    // Connection section
+    let conn_block = section_block("Connection");
+    let conn_inner = conn_block.inner(conn_area);
+    conn_block.render(conn_area, buf);
+
+    let url_foc = state.focus == PanelFocus::BaseUrlField;
+    let url_label = if url_foc { "▸ Base URL" } else { "  Base URL" };
+    let url_style = if url_foc {
+        Style::default()
+            .fg(theme::PRIMARY_CONTAINER)
+            .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
     } else {
         theme::style_dim()
     };
-    let u_span: Span<'static> = if u_foc {
-        Span::styled(url_text, theme::style_focused_field())
-    } else {
-        Span::styled(url_text, theme::style_dim())
-    };
-    lines.push(Line::from(vec![
-        Span::styled(u_label, u_label_style),
-        u_span,
-    ]));
-
-    // API key status + numeric fields (one line)
-    lines.push(Line::from(""));
-    let key_display = if config.api_key.as_deref().filter(|k| !k.is_empty()).is_some() {
-        "● ● ● ● ● ● ● ● ● ●"
+    let key_set = config
+        .api_key
+        .as_deref()
+        .filter(|k| !k.is_empty())
+        .is_some();
+    let key_display = if key_set {
+        "● ● ● ● ● ● ● ●  (set)"
     } else {
         "— not set —"
     };
-    let key_color = if config.api_key.as_deref().filter(|k| !k.is_empty()).is_some() {
+    let key_color = if key_set {
         theme::SUCCESS
     } else {
         theme::ERROR
     };
+
+    let conn_lines = vec![
+        Line::from(Span::styled(url_label, url_style)),
+        Line::from(Span::styled(
+            format!("  {}", state.url_buffer),
+            if url_foc {
+                Style::default().fg(theme::FG).add_modifier(Modifier::UNDERLINED)
+            } else {
+                theme::style_dim()
+            },
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  API key  ", theme::style_dim()),
+            Span::styled(key_display, Style::default().fg(key_color)),
+        ]),
+    ];
+    Paragraph::new(Text::from(conn_lines)).render(conn_inner, buf);
+
+    // Generation + Apply
+    let gen_block = section_block("Generation & Apply");
+    let gen_inner = gen_block.inner(gen_area);
+    gen_block.render(gen_area, buf);
+
     let tkn_foc = state.focus == PanelFocus::MaxTokens;
     let tmp_foc = state.focus == PanelFocus::Temperature;
-    let tkn_lbl = if tkn_foc { "▸" } else { " " };
-    let tmp_lbl = if tmp_foc { "▸" } else { " " };
+    let app_foc = state.focus == PanelFocus::ApplyButton;
 
-    // Max tokens value style
-    let tkn_val_style = if tkn_foc {
-        Style::default()
-            .fg(theme::PRIMARY_CONTAINER)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme::FG)
-    };
-    // Temperature value style
-    let tmp_val_style = if tmp_foc {
-        Style::default()
-            .fg(theme::PRIMARY_CONTAINER)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme::FG)
-    };
-
-    lines.push(Line::from(vec![
-        Span::styled("Key ", theme::style_dim()),
-        Span::styled(key_display, Style::default().fg(key_color)),
-        Span::raw("  "),
-        Span::styled(format!("{}Max:", tkn_lbl), if tkn_foc { Style::default().fg(theme::PRIMARY_CONTAINER).add_modifier(Modifier::BOLD) } else { theme::style_dim() }),
-        Span::styled(format!("{}", state.max_tokens), tkn_val_style),
-        Span::raw("  "),
-        Span::styled(format!("{}Temp:", tmp_lbl), if tmp_foc { Style::default().fg(theme::PRIMARY_CONTAINER).add_modifier(Modifier::BOLD) } else { theme::style_dim() }),
-        Span::styled(format!("{:.1}", state.temperature), tmp_val_style),
-    ]));
-
-    // Apply button + hints
-    lines.push(Line::from(""));
-    let b_foc = state.focus == PanelFocus::ApplyButton;
-    let (apply_label, apply_style) = if b_foc {
-        ("▸ [ Apply (Ctrl+Enter) ]", theme::style_focused_button())
-    } else {
-        ("  Apply (Ctrl+Enter)", theme::style_dim())
-    };
-    lines.push(Line::from(vec![
-        Span::styled(apply_label, apply_style),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("  Tab/↑↓ cycle · h/j/k/l navigate · #1-9 select · Esc cancel", theme::style_dim()),
-    ]));
-
-    // ── Render main popup ──────────────────────────────────────────────
-    let text = Text::from(lines);
-    let para = Paragraph::new(text)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme::ACCENT))
-                .title(" Provider ")
-                .title_style(Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD))
-                .style(Style::default().bg(theme::BG)),
-        )
-        .alignment(Alignment::Left)
-        .wrap(Wrap { trim: false });
-    para.render(Rect::new(x, y, pw, ph), buf);
-
-    // ── Model dropdown overlay ──────────────────────────────────────────
-    if state.show_dropdown && state.focus == PanelFocus::ModelField && !state.models.is_empty() {
-        let dd_top = y + 4 + 5 + 1 + 1; // top border + blank + 5 providers + blank + model label
-        let dd_height = state.models.len().min(6) as u16 + 2; // +2 for border
-        let dd_area = Rect::new(
-            x + 2,
-            dd_top,
-            pw.saturating_sub(4).min(40),
-            dd_height,
-        );
-        if dd_area.bottom() <= area.bottom() {
-            let mut dd_lines: Vec<Line<'static>> = Vec::new();
-            let start = state.model_scroll.min(state.models.len().saturating_sub(1));
-            let end = (start + 6).min(state.models.len());
-            for (i, model) in state.models[start..end].iter().enumerate() {
-                let index = start + i;
-                let style = if index == state.selected_model {
-                    Style::default().fg(theme::PRIMARY_CONTAINER).add_modifier(Modifier::BOLD)
+    let gen_lines = vec![
+        Line::from(vec![
+            Span::styled(
+                if tkn_foc { "▸ Max tokens  " } else { "  Max tokens  " },
+                if tkn_foc {
+                    Style::default()
+                        .fg(theme::PRIMARY_CONTAINER)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     theme::style_dim()
-                };
-                let prefix = if index == state.selected_model { "▸ " } else { "  " };
-                dd_lines.push(Line::from(Span::styled(
-                    format!("{}{}", prefix, model),
-                    style,
-                )));
-            }
-            let dd = Paragraph::new(Text::from(dd_lines))
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(theme::FOCUS_BORDER))
-                        .style(Style::default().bg(theme::SURFACE_HIGH)),
-                );
-            dd.render(dd_area, buf);
-        }
-    }
+                },
+            ),
+            Span::styled(
+                format!("[ {} ]", state.max_tokens),
+                if tkn_foc {
+                    Style::default()
+                        .fg(theme::PRIMARY_CONTAINER)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(theme::FG)
+                },
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                if tmp_foc {
+                    "▸ Temperature "
+                } else {
+                    "  Temperature "
+                },
+                if tmp_foc {
+                    Style::default()
+                        .fg(theme::PRIMARY_CONTAINER)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    theme::style_dim()
+                },
+            ),
+            Span::styled(
+                format!("[ {:.1} ]", state.temperature),
+                if tmp_foc {
+                    Style::default()
+                        .fg(theme::PRIMARY_CONTAINER)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(theme::FG)
+                },
+            ),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            if app_foc {
+                "▸ [ Apply ]  Enter / Ctrl+Enter"
+            } else {
+                "  [ Apply ]  Enter / Ctrl+Enter"
+            },
+            if app_foc {
+                Style::default()
+                    .fg(theme::PRIMARY_CONTAINER)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                theme::style_dim()
+            },
+        )),
+        Line::from(Span::styled(
+            format!(
+                "  Will set: {} · {}",
+                state.provider_name(),
+                state.model_buffer
+            ),
+            theme::style_dim(),
+        )),
+    ];
+    Paragraph::new(Text::from(gen_lines)).render(gen_inner, buf);
 }
+
+// ── Component impl ──────────────────────────────────────────────────────────
 
 use crate::tui::component::{Action, Component};
 
 impl Component for ProviderPanelState {
     fn handle_key(&mut self, key: crossterm::event::KeyEvent) -> Action {
-        use crate::tui::provider_panel::{handle_key, PanelAction};
         match handle_key(self, key) {
             PanelAction::Apply => Action::ProviderApply,
             PanelAction::Close => Action::ProviderClose,
@@ -721,9 +988,11 @@ impl Component for ProviderPanelState {
     }
 
     fn render(&mut self, f: &mut ratatui::Frame, area: ratatui::layout::Rect) {
-        crate::tui::provider_panel::render(area, f.buffer_mut(), self, &self.config);
+        render(area, f.buffer_mut(), self, &self.config);
     }
 }
+
+// ── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -744,23 +1013,183 @@ mod tests {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
 
+    fn ctrl_enter() -> KeyEvent {
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL)
+    }
+
     #[test]
-    fn vim_letters_are_inserted_in_text_fields() {
-        for focus in [PanelFocus::ModelField, PanelFocus::BaseUrlField] {
-            let mut state = ProviderPanelState::from_config(&config(providers::ProviderKind::OpenAI, None));
-            state.focus = focus;
-            state.set_buffer(String::new());
-            state.set_cursor(0);
-            for c in ['h', 'j', 'k', 'l'] {
-                handle_key(&mut state, key(KeyCode::Char(c)));
-            }
-            assert_eq!(state.current_buffer(), "hjkl");
+    fn from_config_opens_on_model_step() {
+        let state = ProviderPanelState::from_config(&config(providers::ProviderKind::OpenAI, None));
+        assert_eq!(state.step, WizardStep::Model);
+        assert_eq!(state.focus, PanelFocus::ModelSearch);
+        assert_eq!(
+            state.selected_provider,
+            providers::ProviderKind::all()
+                .iter()
+                .position(|k| matches!(k, providers::ProviderKind::OpenAI))
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn wizard_esc_back_then_close() {
+        let mut state =
+            ProviderPanelState::from_config(&config(providers::ProviderKind::OpenAI, None));
+        set_step(&mut state, WizardStep::Advanced);
+        assert_eq!(handle_key(&mut state, key(KeyCode::Esc)), PanelAction::None);
+        assert_eq!(state.step, WizardStep::Model);
+        assert_eq!(handle_key(&mut state, key(KeyCode::Esc)), PanelAction::None);
+        assert_eq!(state.step, WizardStep::Provider);
+        assert_eq!(
+            handle_key(&mut state, key(KeyCode::Esc)),
+            PanelAction::Close
+        );
+    }
+
+    #[test]
+    fn enter_on_provider_advances_to_model() {
+        let mut state =
+            ProviderPanelState::from_config(&config(providers::ProviderKind::OpenAI, None));
+        set_step(&mut state, WizardStep::Provider);
+        assert_eq!(
+            handle_key(&mut state, key(KeyCode::Enter)),
+            PanelAction::None
+        );
+        assert_eq!(state.step, WizardStep::Model);
+        assert_eq!(state.focus, PanelFocus::ModelSearch);
+    }
+
+    #[test]
+    fn enter_on_model_advances_to_advanced_and_selects() {
+        let mut state =
+            ProviderPanelState::from_config(&config(providers::ProviderKind::OpenAI, None));
+        state.models = vec!["a".into(), "b".into(), "c".into()];
+        state.recompute_filter();
+        state.selected_model = 1;
+        assert_eq!(
+            handle_key(&mut state, key(KeyCode::Enter)),
+            PanelAction::None
+        );
+        assert_eq!(state.step, WizardStep::Advanced);
+        assert_eq!(state.model_buffer, "b");
+    }
+
+    #[test]
+    fn enter_accepts_custom_model_when_no_matches() {
+        let mut state =
+            ProviderPanelState::from_config(&config(providers::ProviderKind::OpenAI, None));
+        state.models = vec!["alpha".into(), "beta".into()];
+        state.recompute_filter();
+        state.search_buffer = "custom-id".into();
+        state.search_cursor = state.search_buffer.len();
+        state.recompute_filter();
+        assert!(state.filtered.is_empty());
+        handle_key(&mut state, key(KeyCode::Enter));
+        assert_eq!(state.model_buffer, "custom-id");
+        assert_eq!(state.step, WizardStep::Advanced);
+    }
+
+    #[test]
+    fn filter_narrows_and_resets_selection() {
+        let mut state =
+            ProviderPanelState::from_config(&config(providers::ProviderKind::OpenAI, None));
+        state.models = vec![
+            "claude-opus".into(),
+            "claude-sonnet".into(),
+            "gpt-4o".into(),
+        ];
+        state.recompute_filter();
+        assert_eq!(state.filtered.len(), 3);
+        handle_key(&mut state, key(KeyCode::Char('g')));
+        handle_key(&mut state, key(KeyCode::Char('p')));
+        handle_key(&mut state, key(KeyCode::Char('t')));
+        assert_eq!(state.filtered.len(), 1);
+        assert_eq!(state.models[state.filtered[0]], "gpt-4o");
+    }
+
+    #[test]
+    fn current_model_ranked_first() {
+        let mut state =
+            ProviderPanelState::from_config(&config(providers::ProviderKind::OpenAI, None));
+        state.model_buffer = "gpt-4o".into();
+        state.models = vec![
+            "alpha".into(),
+            "gpt-4o".into(),
+            "beta".into(),
+        ];
+        state.recompute_filter();
+        assert_eq!(state.models[state.filtered[0]], "gpt-4o");
+    }
+
+    #[test]
+    fn model_list_wraps_scrolls_and_selects() {
+        let mut state =
+            ProviderPanelState::from_config(&config(providers::ProviderKind::OpenAI, None));
+        state.models = (0..15).map(|i| format!("model-{i}")).collect();
+        state.recompute_filter();
+        handle_key(&mut state, key(KeyCode::Up));
+        assert_eq!(state.selected_model, 14);
+        assert!(state.model_scroll >= 5);
+        handle_key(&mut state, key(KeyCode::Down));
+        assert_eq!(state.selected_model, 0);
+        assert_eq!(state.model_scroll, 0);
+    }
+
+    #[test]
+    fn ctrl_enter_applies_from_model_step() {
+        let mut state =
+            ProviderPanelState::from_config(&config(providers::ProviderKind::OpenAI, None));
+        assert_eq!(state.step, WizardStep::Model);
+        assert_eq!(handle_key(&mut state, ctrl_enter()), PanelAction::Apply);
+    }
+
+    #[test]
+    fn tab_cycles_advanced_fields() {
+        let mut state =
+            ProviderPanelState::from_config(&config(providers::ProviderKind::OpenAI, None));
+        set_step(&mut state, WizardStep::Advanced);
+        assert_eq!(state.focus, PanelFocus::BaseUrlField);
+        handle_key(&mut state, key(KeyCode::Tab));
+        assert_eq!(state.focus, PanelFocus::MaxTokens);
+        handle_key(&mut state, key(KeyCode::Tab));
+        assert_eq!(state.focus, PanelFocus::Temperature);
+        handle_key(&mut state, key(KeyCode::Tab));
+        assert_eq!(state.focus, PanelFocus::ApplyButton);
+        handle_key(&mut state, key(KeyCode::Tab));
+        assert_eq!(state.focus, PanelFocus::BaseUrlField);
+    }
+
+    #[test]
+    fn hjkl_not_nav_in_search() {
+        let mut state =
+            ProviderPanelState::from_config(&config(providers::ProviderKind::OpenAI, None));
+        state.models = vec!["a".into(), "b".into(), "c".into()];
+        state.recompute_filter();
+        let before = state.selected_model;
+        handle_key(&mut state, key(KeyCode::Char('j')));
+        handle_key(&mut state, key(KeyCode::Char('k')));
+        assert_eq!(state.search_buffer, "jk");
+        assert_eq!(state.selected_model, before);
+    }
+
+    #[test]
+    fn vim_letters_are_inserted_in_url_field() {
+        let mut state =
+            ProviderPanelState::from_config(&config(providers::ProviderKind::OpenAI, None));
+        set_step(&mut state, WizardStep::Advanced);
+        state.url_buffer.clear();
+        state.url_cursor = 0;
+        for c in ['h', 'j', 'k', 'l'] {
+            handle_key(&mut state, key(KeyCode::Char(c)));
         }
+        assert_eq!(state.url_buffer, "hjkl");
     }
 
     #[test]
     fn provider_grid_uses_three_column_navigation() {
-        let mut state = ProviderPanelState::from_config(&config(providers::ProviderKind::Anthropic, None));
+        let mut state =
+            ProviderPanelState::from_config(&config(providers::ProviderKind::Anthropic, None));
+        set_step(&mut state, WizardStep::Provider);
         state.selected_provider = 0;
         handle_key(&mut state, key(KeyCode::Right));
         assert_eq!(state.selected_provider, 1);
@@ -774,33 +1203,54 @@ mod tests {
 
     #[test]
     fn provider_change_updates_default_url_but_preserves_custom_url() {
-        let mut default_state = ProviderPanelState::from_config(&config(providers::ProviderKind::OpenAI, None));
+        let mut default_state =
+            ProviderPanelState::from_config(&config(providers::ProviderKind::OpenAI, None));
+        set_step(&mut default_state, WizardStep::Provider);
+        // OpenAI is index 1; Down moves +3 → index 4 (XAI)
         handle_key(&mut default_state, key(KeyCode::Down));
-        assert_eq!(default_state.url_buffer, providers::ProviderKind::XAI.default_base_url());
+        assert_eq!(
+            default_state.url_buffer,
+            providers::ProviderKind::XAI.default_base_url()
+        );
 
         let mut custom_state = ProviderPanelState::from_config(&config(
             providers::ProviderKind::OpenAI,
             Some("https://gateway.example/v1"),
         ));
+        set_step(&mut custom_state, WizardStep::Provider);
         handle_key(&mut custom_state, key(KeyCode::Down));
         assert_eq!(custom_state.url_buffer, "https://gateway.example/v1");
     }
 
     #[test]
-    fn dropdown_wraps_scrolls_and_selects() {
-        let mut state = ProviderPanelState::from_config(&config(providers::ProviderKind::OpenAI, None));
-        state.focus = PanelFocus::ModelField;
-        state.models = (0..10).map(|i| format!("model-{i}")).collect();
-        state.show_dropdown = true;
-
+    fn max_tokens_and_temperature_adjust() {
+        let mut state =
+            ProviderPanelState::from_config(&config(providers::ProviderKind::OpenAI, None));
+        set_step(&mut state, WizardStep::Advanced);
+        state.focus = PanelFocus::MaxTokens;
+        let before = state.max_tokens;
         handle_key(&mut state, key(KeyCode::Up));
-        assert_eq!((state.selected_model, state.model_scroll), (9, 4));
+        assert_eq!(state.max_tokens, before + 512);
+        state.focus = PanelFocus::Temperature;
+        state.temperature = 0.7;
         handle_key(&mut state, key(KeyCode::Down));
-        assert_eq!((state.selected_model, state.model_scroll), (0, 0));
-        for _ in 0..7 { handle_key(&mut state, key(KeyCode::Down)); }
-        assert_eq!((state.selected_model, state.model_scroll), (7, 2));
-        handle_key(&mut state, key(KeyCode::Enter));
-        assert_eq!(state.model_buffer, "model-7");
-        assert!(!state.show_dropdown);
+        assert!((state.temperature - 0.6).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn to_config_roundtrip_fields() {
+        let original = config(providers::ProviderKind::OpenAI, Some("https://x"));
+        let mut state = ProviderPanelState::from_config(&original);
+        state.model_buffer = "new-model".into();
+        state.max_tokens = 2048;
+        state.temperature = 0.2;
+        state.url_buffer = "https://custom".into();
+        // Keep OpenAI selected
+        let cfg = state.to_config(&original);
+        assert_eq!(cfg.model, "new-model");
+        assert_eq!(cfg.max_tokens, 2048);
+        assert!((cfg.temperature - 0.2).abs() < f32::EPSILON);
+        assert_eq!(cfg.base_url.as_deref(), Some("https://custom"));
+        assert_eq!(cfg.api_key.as_deref(), Some("test-key"));
     }
 }

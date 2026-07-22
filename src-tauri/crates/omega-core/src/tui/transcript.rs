@@ -68,7 +68,7 @@ impl TranscriptEntry {
                 if *is_streaming {
                     let activity = activity_text(activity_tick);
                     all.push(Line::from(vec![
-                        Span::styled(activity.trim_start(), theme::style_dim()),
+                        Span::styled(activity.trim_start().to_owned(), theme::style_dim()),
                     ]));
                 }
 

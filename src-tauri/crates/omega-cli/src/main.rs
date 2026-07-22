@@ -511,15 +511,17 @@ impl App {
                 system_prompt: Some(system_prompt),
                 permission_mode,
                 show_progress: false,
+                max_tool_loops: None,
             };
 
             let (result, saved_msgs) = {
                 let mut msgs = messages.lock().await;
-                let r = commands::chat::stream_message_with_history(
+                let r = commands::chat::stream_message_with_history_cancel(
                     &state,
                     request,
                     &emitter,
                     &mut msgs,
+                    Some(cancel_flag.clone()),
                 )
                 .await;
                 // Capture the updated conversation history before releasing the lock
@@ -623,10 +625,7 @@ impl App {
             match rx.try_recv() {
                 Ok(Ok(models)) => {
                     self.provider_panel_state.models = models;
-                    self.provider_panel_state.selected_model = self.provider_panel_state.selected_model
-                        .min(self.provider_panel_state.models.len().saturating_sub(1));
-                    self.provider_panel_state.model_scroll = self.provider_panel_state.model_scroll
-                        .min(self.provider_panel_state.models.len().saturating_sub(1));
+                    self.provider_panel_state.recompute_filter();
                     self.provider_panel_state.models_loading = false;
                     self.provider_panel_state.models_rx = None;
                 }
@@ -653,7 +652,9 @@ impl App {
             self.provider_panel_state.models_loading = true;
             self.provider_panel_state.models.clear();
             self.provider_panel_state.models_error = None;
-            self.provider_panel_state.show_dropdown = false;
+            self.provider_panel_state.filtered.clear();
+            self.provider_panel_state.selected_model = 0;
+            self.provider_panel_state.model_scroll = 0;
 
             let all = providers::ProviderKind::all();
             let sel = self.provider_panel_state.selected_provider;
@@ -691,16 +692,16 @@ impl App {
     fn render_widgets(&mut self, frame: &mut ratatui::Frame) {
         let area = frame.size();
 
-        // ── Full-screen background fill ─────────────────────────────────
+        // ── Full-screen background ──────────────────────────────────────
+        // Reset every cell so the canvas inherits the terminal background.
         fill_area(frame, area, theme::BG);
 
         // ── Layout: vertical stack ──────────────────────────────────────
         let top_bar_h = 1u16;
         let metrics_h = 3u16;  // 3 lines: token gauge + model/context row + tool chips
         let footer_h = 1u16;
-        let editor_min = 3u16;
-        let editor_lines = self.editor.buffer.lines().count().max(1).min(4) as u16;
-        let editor_h = editor_min + editor_lines.saturating_sub(1);
+        // Input is a fixed 3-row strip: top line, content, bottom line.
+        let editor_h = 3u16;
 
         let vert = Layout::default()
             .direction(Direction::Vertical)
@@ -737,11 +738,9 @@ impl App {
         self.status.tokens_in = tokens_in;
         self.status.tokens_out = tokens_out;
         self.status.messages_count = self.session_messages;
-        if self.is_streaming {
-            self.status.streaming_estimate = (self.transcript.streaming_fragment.len() / 4) as u64;
-        } else {
-            self.status.streaming_estimate = 0;
-        }
+        // Keep streaming estimates off the token display — only real provider
+        // usage counts should appear as input/output.
+        self.status.streaming_estimate = 0;
         frame.render_widget(&self.status, footer_area);
 
         // ── Overlays ────────────────────────────────────────────────────
@@ -933,7 +932,7 @@ fn render_top_bar(frame: &mut ratatui::Frame, area: Rect, model: &str) {
 }
 
 // ── Metrics panel ────────────────────────────────────────────────────────────
-// Glass-bordered box: token gauge, model/context, active tool chips.
+// Glass-bordered box: real token usage, model, active tool chips.
 
 fn render_metrics_panel(
     frame: &mut ratatui::Frame,
@@ -949,47 +948,26 @@ fn render_metrics_panel(
         theme::PRIMARY,
     );
 
-    // Row 0: token gauge
+    // Row 0: real session input/output usage (no fake context-window gauge)
     let gauge_y = inner.y;
     let (tokens_in, tokens_out) = omega_core::commands::chat::session_token_counts();
-    let ctx_window = config.kind.context_window();
-    let total = tokens_in + tokens_out;
-    let pct = if ctx_window > 0 { ((total as f64 / ctx_window as f64) * 100.0).min(100.0) } else { 0.0 };
-    let gauge_w = 16u16.min(inner.width.saturating_sub(20));
-    let filled = (pct / 100.0 * gauge_w as f64).round() as u16;
-
+    let usage = omega_core::tui::status::StatusState::format_token_usage(tokens_in, tokens_out);
     let gauge_spans = vec![
-        Span::styled("TOKEN_USAGE ", theme::style_dim()),
-        Span::styled("[", theme::style_dim()),
-        Span::styled("|".repeat(filled as usize), Style::default().fg(theme::PRIMARY)),
-        Span::styled("-".repeat((gauge_w - filled) as usize), theme::style_dim()),
-        Span::styled("]", theme::style_dim()),
-        Span::styled(format!(" {:.0}% ", pct), theme::style_dim()),
+        Span::styled("TOKENS ", theme::style_dim()),
+        Span::styled(usage, Style::default().fg(theme::PRIMARY)),
     ];
     Paragraph::new(Line::from(gauge_spans))
         .render(Rect::new(inner.x + 1, gauge_y, inner.width.saturating_sub(2), 1), frame.buffer_mut());
 
-    // Row 1: model / context
+    // Row 1: model only
     let row1_y = gauge_y + 1;
     let model_str = config.model.clone();
     let model_spans = vec![
         Span::styled("MODEL ", theme::style_dim()),
         Span::styled(model_str, Style::default().fg(theme::SECONDARY)),
     ];
-    let ctx_spans = vec![
-        Span::styled("CONTEXT ", theme::style_dim()),
-        Span::styled(format!("{:.1}k / {}k", total as f64 / 1000.0, ctx_window / 1000), Style::default().fg(theme::PRIMARY)),
-    ];
-
-    // Split row: MODEL on left, CONTEXT on right
-    let mw: u16 = model_spans.iter().map(|s| s.width() as u16).sum();
-    let cw: u16 = ctx_spans.iter().map(|s| s.width() as u16).sum();
-    let fill = inner.width.saturating_sub(2).saturating_sub(mw).saturating_sub(cw);
-    let mut r1 = vec![];
-    r1.extend(model_spans);
-    if fill > 0 { r1.push(Span::raw(" ".repeat(fill as usize))); }
-    r1.extend(ctx_spans);
-    Paragraph::new(Line::from(r1)).render(Rect::new(inner.x + 1, row1_y, inner.width.saturating_sub(2), 1), frame.buffer_mut());
+    Paragraph::new(Line::from(model_spans))
+        .render(Rect::new(inner.x + 1, row1_y, inner.width.saturating_sub(2), 1), frame.buffer_mut());
 
     // Row 2: active tool chips
     if inner.height > 2 {
@@ -1021,22 +999,9 @@ fn render_process_panel(
 ) {
     if area.height < 3 || area.width < 20 { return; }
 
-    let inner = render_glass_block(
-        frame, area, theme::BG, theme::OUTLINE,
-        " MAIN PROCESS ",
-        theme::PRIMARY,
-    );
-
-    // Transcript content
-    transcript.render(frame, inner);
-
-    // Bottom-right status label
-    let label = " Row: 1 Col: 1 | UTF-8 | Rust ";
-    let lb_w = label.len() as u16;
-    let lb_x = inner.right().saturating_sub(lb_w);
-    let lb_y = inner.bottom().saturating_sub(1);
-    Paragraph::new(Line::from(Span::styled(label, theme::style_dim())))
-        .render(Rect::new(lb_x, lb_y, lb_w, 1), frame.buffer_mut());
+    // No frame around the transcript — just the content on the terminal canvas.
+    fill_area(frame, area, theme::BG);
+    transcript.render(frame, area);
 }
 
 // ── Command input ────────────────────────────────────────────────────────────
@@ -1048,57 +1013,43 @@ fn render_command_input(
     is_streaming: bool,
     spinner: &OmegaSpinner,
 ) {
-    if area.height < 3 || area.width < 20 { return; }
+    if area.height < 3 || area.width < 4 { return; }
 
-    let border_color = match editor.state {
-        EditorMode::Idle => theme::OUTLINE,
-        EditorMode::Thinking => theme::SECONDARY,
-        EditorMode::Streaming => theme::PRIMARY,
-        EditorMode::Error => theme::ERROR,
-        EditorMode::Confirm => theme::WARN,
-    };
+    // Inherit the terminal background — no dark recessed fill.
+    fill_area(frame, area, theme::BG);
 
-    let inner = render_glass_block(
-        frame, area, theme::RECESSED, border_color,
-        " COMMAND INPUT ",
-        theme::PRIMARY,
-    );
+    let line_style = Style::default().fg(theme::OUTLINE);
+    let top_y = area.y;
+    let content_y = area.y + 1;
+    let bottom_y = area.y + 2;
 
-    // λ prompt + text
-    let prompt_y = inner.y + inner.height.saturating_sub(3) / 2; // vertically center-ish
-    let prompt_x = inner.x + 1;
-
-    let input_width = inner.width.saturating_sub(4);
-
-    if editor.buffer.is_empty() && !is_streaming {
-        let ph = " Enter directive (e.g., 'sync --force', 'refactor-vibe')… ";
-        Paragraph::new(Line::from(vec![
-            Span::styled("λ ", Style::default().fg(theme::PRIMARY).add_modifier(Modifier::BOLD)),
-            Span::styled(ph, Style::default().fg(Color::Rgb(60, 60, 70))),
-        ]))
-        .render(Rect::new(prompt_x, prompt_y, input_width, 1), frame.buffer_mut());
-    } else if is_streaming && editor.buffer.is_empty() {
-        let activity = format!(" {} {} ", spinner.current_glyph(), spinner.current_phrase());
-        Paragraph::new(Line::from(vec![
-            Span::styled("λ ", Style::default().fg(theme::PRIMARY).add_modifier(Modifier::BOLD)),
-            Span::styled(activity, spinner.glyph_style()),
-        ]))
-        .render(Rect::new(prompt_x, prompt_y, input_width, 1), frame.buffer_mut());
-    } else {
-        let display = editor.buffer.as_str();
-        Paragraph::new(Line::from(vec![
-            Span::styled("λ ", Style::default().fg(theme::PRIMARY).add_modifier(Modifier::BOLD)),
-            Span::styled(display, Style::default().fg(theme::FG)),
-        ]))
-        .render(Rect::new(prompt_x, prompt_y, input_width, 1), frame.buffer_mut());
+    // Top and bottom rules only — no side borders, no labels.
+    for x in area.x..area.x + area.width {
+        frame.buffer_mut().get_mut(x, top_y).set_symbol("─").set_style(line_style);
+        frame.buffer_mut().get_mut(x, bottom_y).set_symbol("─").set_style(line_style);
     }
 
-    // Right hint
-    let hint = if is_streaming { " [^C] ABORT " } else { " [CR] COMMIT | [^C] ABORT " };
-    let hint_w = hint.len() as u16;
-    let hint_x = inner.right().saturating_sub(hint_w + 1);
-    Paragraph::new(Line::from(Span::styled(hint, theme::style_dim())))
-        .render(Rect::new(hint_x, prompt_y, hint_w, 1), frame.buffer_mut());
+    let content_x = area.x + 1;
+    let content_w = area.width.saturating_sub(2);
+    if content_w == 0 { return; }
+
+    if is_streaming && editor.buffer.is_empty() {
+        let activity = format!("{} {}", spinner.current_glyph(), spinner.current_phrase());
+        Paragraph::new(Line::from(Span::styled(activity, spinner.glyph_style())))
+            .render(Rect::new(content_x, content_y, content_w, 1), frame.buffer_mut());
+    } else if !editor.buffer.is_empty() {
+        // Single-line display: keep the tail of multi-line text visible.
+        let display = editor.buffer.lines().last().unwrap_or("");
+        let shown = if display.chars().count() > content_w as usize {
+            let skip = display.chars().count().saturating_sub(content_w as usize);
+            display.chars().skip(skip).collect::<String>()
+        } else {
+            display.to_string()
+        };
+        Paragraph::new(Line::from(Span::styled(shown, Style::default().fg(theme::FG))))
+            .render(Rect::new(content_x, content_y, content_w, 1), frame.buffer_mut());
+    }
+    // Empty idle: just the two horizontal lines.
 }
 
 

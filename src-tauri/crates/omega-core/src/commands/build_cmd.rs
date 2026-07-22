@@ -12,6 +12,15 @@ pub async fn execute_build(
 ) -> Result<Vec<BuildSessionEntry>, String> {
     log::info!("execute_build: starting build pipeline");
 
+    // Hard guard at the command boundary as well as inside BuildAgent.
+    if !crate::pipeline::build::experimental_pipeline_enabled() {
+        return Err(format!(
+            "Build pipeline is experimental and disabled by default. \
+Use the chat agent for coding, or set {}=1 to enable. See ROADMAP.md P0-02 / P2-04.",
+            crate::pipeline::build::EXPERIMENTAL_PIPELINE_ENV
+        ));
+    }
+
     let plan = {
         let p = state.pipeline.lock().await;
         p.structured_plan.clone().ok_or_else(|| "No plan has been generated. Generate and approve a plan first.".to_string())?

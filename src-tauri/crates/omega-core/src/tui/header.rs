@@ -114,7 +114,7 @@ impl Widget for &HeaderState {
             .block(Block::default().style(Style::default().bg(theme::BG)));
         line2.render(Rect::new(area.x, bottom_line_y, area.width, 1), buf);
 
-        // ── Thin separator line below the two-line header ──────────────
+        // ── Thin separator line below the two-line header ━━━━━━━━━━━━━
         let rule_y = area.y + 2;
         if rule_y < area.y + area.height {
             for x in area.x..area.x + area.width {

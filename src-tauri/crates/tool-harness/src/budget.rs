@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-const MAX_RESULT_CHARS: usize = 30_000;
+const MAX_RESULT_CHARS: usize = 50_000;
 const PERSISTENCE_DIR: &str = "tool-results";
 
 /// Per-tool result budgeting
@@ -81,11 +81,20 @@ impl ResultBudget {
                 .map(|(i, c)| i + c.len_utf8())
                 .unwrap_or(0);
             let prefix = &trimmed[..byte_boundary];
+            let original_chars = trimmed.chars().count();
             let mut result = String::new();
             result.push_str(prefix);
-            result.push_str("\n\n[Output truncated. Full result persisted to file.]");
 
             let check = self.check_and_process(trimmed.to_string(), "").await;
+            let path_note = check
+                .persisted_path
+                .as_ref()
+                .map(|p| format!(" Full result saved to {}.", p.display()))
+                .unwrap_or_default();
+            result.push_str(&format!(
+                "\n\n...[truncated: kept first {} chars of {}; re-read with a narrower command, offset/limit, or open the persisted file.{}]",
+                self.max_chars, original_chars, path_note
+            ));
             (result, check)
         } else {
             (trimmed.to_string(), crate::BudgetCheck {
@@ -134,7 +143,7 @@ mod tests {
     #[test]
     fn test_result_budget_default() {
         let budget = ResultBudget::new();
-        assert_eq!(budget.max_chars, 30_000);
+        assert_eq!(budget.max_chars, 50_000);
     }
 
     #[tokio::test]
@@ -149,7 +158,7 @@ mod tests {
     #[tokio::test]
     async fn test_truncate_large_output() {
         let budget = ResultBudget::new();
-        let large = "x".repeat(35_000);
+        let large = "x".repeat(55_000);
         let (output, check) = budget.truncate(&large).await;
         assert!(check.truncated || output.len() < large.len());
     }
@@ -158,8 +167,8 @@ mod tests {
     async fn test_truncate_utf8_boundary_safe() {
         // A string with multi-byte UTF-8 characters where the byte boundary
         // would previously panic (3-byte emoji right at the limit edge).
-        // Build content: ~29_999 ASCII chars then a multi-byte char right at the boundary
-        let prefix = "a".repeat(29_990);
+        // Build content: ~49_999 ASCII chars then multi-byte chars past the limit
+        let prefix = "a".repeat(49_990);
         // 3-byte UTF-8 character (€ = U+20AC = E2 82 AC in UTF-8)
         let mut mixed = String::new();
         mixed.push_str(&prefix);
@@ -181,16 +190,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_truncate_all_utf8_characters() {
-        // Pure multi-byte content longer than max_chars (30K)
-        // Each '€' is 3 bytes but 1 char; 35_000 € chars = 105_000 bytes but 35_000 chars
-        let large: String = "€".repeat(35_000); // 35K chars, 105K bytes
+        // Pure multi-byte content longer than max_chars (50K)
+        // Each '€' is 3 bytes but 1 char; 55_000 € chars
+        let large: String = "€".repeat(55_000); // 55K chars
 
         let budget = ResultBudget::new();
         let (output, check) = budget.truncate(&large).await;
 
-        // Should truncate (45K bytes > 30K limit for chars count)
+        // Should truncate
         assert!(check.truncated, "Should have been truncated");
         assert!(std::str::from_utf8(output.as_bytes()).is_ok(),
             "Output must be valid UTF-8");
+        assert!(
+            output.contains("truncated"),
+            "truncation notice should mention truncated"
+        );
     }
 }

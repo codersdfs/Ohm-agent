@@ -6,7 +6,8 @@ use ratatui::style::{Color, Modifier, Style};
 // ── Core palette ─────────────────────────────────────────────────────────────
 // DESIGN.md tokens mapped to ratatui Color::Rgb
 
-pub const BG: Color = Color::Rgb(24, 24, 26);
+// Inherit the user's terminal background instead of painting a fixed RGB canvas.
+pub const BG: Color = Color::Reset;
 pub const FG: Color = Color::Rgb(234, 234, 236);
 pub const SURFACE: Color = Color::Rgb(40, 40, 43);
 pub const SURFACE_HIGH: Color = Color::Rgb(54, 54, 58);

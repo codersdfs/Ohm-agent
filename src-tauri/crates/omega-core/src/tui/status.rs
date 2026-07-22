@@ -15,7 +15,8 @@ pub struct StatusState {
     pub tokens_in: u64,
     pub tokens_out: u64,
     pub messages_count: u64,
-    /// Estimated tokens during streaming (fragment_len / 4), 0 otherwise
+    /// Estimated tokens during streaming. Kept for compatibility; the token
+    /// display intentionally ignores estimates and only shows provider usage.
     pub streaming_estimate: u64,
 }
 
@@ -48,14 +49,34 @@ impl StatusState {
         self.spinner.tick();
     }
 
-    fn format_tokens(count: u64) -> String {
+    /// Compact token count: raw, k, or M.
+    pub fn format_tokens(count: u64) -> String {
         if count >= 1_000_000 {
-            format!("{:.1}M", count as f64 / 1_000_000.0)
+            let m = count as f64 / 1_000_000.0;
+            if m.fract().abs() < f64::EPSILON {
+                format!("{:.0}M", m)
+            } else {
+                format!("{:.1}M", m)
+            }
         } else if count >= 1_000 {
-            format!("{:.1}k", count as f64 / 1_000.0)
+            let k = count as f64 / 1_000.0;
+            if k.fract().abs() < f64::EPSILON {
+                format!("{:.0}k", k)
+            } else {
+                format!("{:.1}k", k)
+            }
         } else {
             count.to_string()
         }
+    }
+
+    /// Real session usage: `input:↓1.2k  output:↑340`
+    pub fn format_token_usage(tokens_in: u64, tokens_out: u64) -> String {
+        format!(
+            "input:↓{}  output:↑{}",
+            Self::format_tokens(tokens_in),
+            Self::format_tokens(tokens_out),
+        )
     }
 }  // end impl StatusState
 
@@ -74,20 +95,11 @@ impl Widget for &StatusState {
         ];
         let left_w: u16 = left.iter().map(|s| s.width() as u16).sum();
 
-        // Right: latency, tokens, sigma
-        let total_in = self.tokens_in + self.streaming_estimate;
-        let total_out = self.tokens_out + self.streaming_estimate / 2;
-        let tok_str = if total_in > 0 || total_out > 0 {
-            format!("TOKENS: {} IN / {} OUT ", StatusState::format_tokens(total_in), StatusState::format_tokens(total_out))
-        } else {
-            String::new()
-        };
+        // Right: real input/output token counts (no fake latency / estimates)
+        let tok_str = StatusState::format_token_usage(self.tokens_in, self.tokens_out);
 
         let right_spans = vec![
-            Span::styled(" LTCY: 24MS ", theme::style_dim()),
-            Span::styled(tok_str.clone(), Style::default().fg(theme::SECONDARY)),
-            Span::styled(" SIGMA_LINK: ", theme::style_dim()),
-            Span::styled("ESTABLISHED", Style::default().fg(theme::PRIMARY)),
+            Span::styled(format!(" {} ", tok_str), Style::default().fg(theme::SECONDARY)),
         ];
         let right_w: u16 = right_spans.iter().map(|s| s.width() as u16).sum();
 
@@ -101,5 +113,26 @@ impl Widget for &StatusState {
         let para = Paragraph::new(Line::from(spans))
             .style(Style::default().bg(theme::BG));
         para.render(area, buf);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_tokens_uses_raw_k_and_m() {
+        assert_eq!(StatusState::format_tokens(42), "42");
+        assert_eq!(StatusState::format_tokens(1_200), "1.2k");
+        assert_eq!(StatusState::format_tokens(12_000), "12k");
+        assert_eq!(StatusState::format_tokens(1_500_000), "1.5M");
+    }
+
+    #[test]
+    fn format_token_usage_uses_input_output_arrows() {
+        assert_eq!(
+            StatusState::format_token_usage(1_200, 340),
+            "input:↓1.2k  output:↑340"
+        );
     }
 }

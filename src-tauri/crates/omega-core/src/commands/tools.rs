@@ -184,9 +184,22 @@ pub fn all_tool_metadata() -> Vec<ToolMetadata> {
 
 // ─── System Prompt ───────────────────────────────────────────────────────────
 
-pub const CHAT_SYSTEM_PROMPT: &str = r#"You are Omega Agent, an AI coding agent with FULL filesystem access. You CAN read, write, edit, and search files. You CAN run shell commands. You are NOT a standard chatbot — you are a tool-using agent.
+pub const CHAT_SYSTEM_PROMPT: &str = r#"You are Omega Agent — a tool-using coding agent with filesystem and shell access.
 
-When the user asks you to do something, call the right function immediately. You NEVER refuse file access. Respond with ONLY a JSON function call.
+## Operating rules
+1. Investigate before editing: use read/grep/glob to find real paths. Never invent file paths.
+2. Prefer `edit` over full-file `write` when a file already exists.
+3. Make the smallest correct change. Do not refactor unrelated code.
+4. After non-trivial edits, run relevant tests or `cargo check` / project build when possible.
+5. If a tool fails, read the error, adapt, and retry — do not stop after one failure.
+6. Be concise. Do not restate the whole task. Report what you changed and why.
+7. Never claim you cannot access files or run commands — use tools.
+8. Respect permission denials; explain what was blocked and offer alternatives.
+9. Do not use destructive shell commands (rm -rf /, format, force-push) unless the user explicitly asks.
+10. When output is truncated, re-query with a narrower path/pattern or offset/limit.
+
+## Tools
+Tools are provided via the native function-calling API. Call them through the API — do not invent a custom JSON protocol in plain text.
 "#;
 
 fn format_tool_help(def: &providers::ToolDefinition) -> String {
@@ -207,20 +220,44 @@ fn format_tool_help(def: &providers::ToolDefinition) -> String {
     }
 }
 
+/// Load optional project instructions (AGENTS.md / .omega/instructions.md), capped.
+fn project_instructions_snippet() -> Option<String> {
+    const CAP: usize = 8_000;
+    let candidates = ["AGENTS.md", ".omega/instructions.md", "CLAUDE.md"];
+    for path in candidates {
+        if let Ok(content) = std::fs::read_to_string(path) {
+            let trimmed = content.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let body: String = if trimmed.chars().count() > CAP {
+                let mut s: String = trimmed.chars().take(CAP).collect();
+                s.push_str("\n...[truncated project instructions]");
+                s
+            } else {
+                trimmed.to_string()
+            };
+            return Some(format!("\n\n=== PROJECT INSTRUCTIONS ({path}) ===\n{body}\n"));
+        }
+    }
+    None
+}
+
 pub fn default_system_prompt() -> String {
     let mut prompt = CHAT_SYSTEM_PROMPT.to_string();
     let tools = tool_definitions();
     if !tools.is_empty() {
-        prompt.push_str("\n\n=== TOOL DEFINITIONS ===\n");
+        prompt.push_str("\n\n=== AVAILABLE TOOLS ===\n");
         for t in &tools {
             prompt.push_str(&format_tool_help(t));
             prompt.push('\n');
         }
-        prompt.push_str("\n=== INSTRUCTIONS ===\n");
-        prompt.push_str("To call a tool, respond with EXACTLY this JSON format, no extra text:\n");
-        prompt.push_str("{\"name\": \"tool_name\", \"arguments\": {\"param1\": \"value1\"}}\n");
-        prompt.push_str("\nExample: to list files in the current directory respond with:\n");
-        prompt.push_str("{\"name\": \"glob\", \"arguments\": {\"pattern\": \"*\"}}\n");
+        prompt.push_str(
+            "\nUse the provider's native tool/function calling. Do not print raw tool JSON as your only response unless the model has no tool API.\n",
+        );
+    }
+    if let Some(project) = project_instructions_snippet() {
+        prompt.push_str(&project);
     }
     prompt
 }
@@ -243,9 +280,20 @@ mod tests {
     fn test_default_system_prompt_includes_tools() {
         let prompt = default_system_prompt();
         assert!(prompt.contains("read"), "prompt should include read tool");
-        assert!(prompt.contains("TOOL DEFINITIONS"), "prompt should list tools");
+        assert!(
+            prompt.contains("AVAILABLE TOOLS") || prompt.contains("TOOL"),
+            "prompt should list tools"
+        );
         assert!(prompt.contains("bash"), "prompt should include bash tool");
-        assert!(prompt.contains("\"name\""), "prompt should show JSON format");
-        assert!(prompt.contains("\"arguments\""), "prompt should show JSON arguments");
+        assert!(
+            prompt.contains("Investigate before editing")
+                || prompt.contains("tool-using coding agent"),
+            "prompt should include coding-agent rules"
+        );
+        // Native tool API — should NOT force the old raw JSON protocol as the only path.
+        assert!(
+            !prompt.contains("Respond with ONLY a JSON function call"),
+            "should not force raw JSON-only tool protocol"
+        );
     }
 }

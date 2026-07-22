@@ -2,7 +2,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Paragraph, Widget, Wrap};
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Widget, Wrap};
 
 use super::theme;
 
@@ -60,6 +60,7 @@ pub fn render(area: Rect, buf: &mut Buffer) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
+                .border_type(BorderType::Plain)
                 .border_style(Style::default().fg(theme::PRIMARY))
                 .style(Style::default().bg(theme::SURFACE_HIGH)),
         )

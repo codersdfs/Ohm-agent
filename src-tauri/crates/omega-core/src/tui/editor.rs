@@ -2,7 +2,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Style, Modifier};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Paragraph, Widget};
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Widget};
 
 use super::theme;
 
@@ -142,6 +142,7 @@ impl Widget for &EditorState {
 
         let block = Block::default()
             .borders(Borders::TOP)
+            .border_type(BorderType::Plain)
             .border_style(border_style)
             .title(Line::from(Span::styled(label, Style::default().fg(border_color).add_modifier(Modifier::DIM))))
             .style(Style::default().bg(theme::RECESSED));
@@ -200,6 +201,7 @@ pub fn render_suggestions(
         .block(
             Block::default()
                 .borders(Borders::ALL)
+                .border_type(BorderType::Plain)
                 .border_style(Style::default().fg(theme::DIM))
                 .title(" commands ")
                 .title_style(Style::default().fg(theme::DIM)),

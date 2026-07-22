@@ -1,4 +1,10 @@
-// Tool orchestrator - the main while-loop driver
+// Tool orchestrator — secondary/library helper.
+//
+// CANONICAL production agent loop lives in:
+//   omega_core::commands::chat::stream_message_with_history_cancel
+// Prefer that path for CLI/TUI. This orchestrator remains for library-style
+// embedding and tests; do not diverge permission/gate/cancel behavior without
+// also updating chat.rs.
 
 use crate::{ToolRegistry, ToolUseContext, ExecutionPipeline, ToolRequest};
 use providers::{ChatMessage, ToolCall, LlmProvider, ChatRequest, ProviderConfig};
