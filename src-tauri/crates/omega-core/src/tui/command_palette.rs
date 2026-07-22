@@ -96,9 +96,143 @@ pub fn filter_commands(query: &str) -> Vec<usize> {
         .collect()
 }
 
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+
+/// Actions returned to the App key loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaletteAction {
+    None,
+    Close,
+    /// Canonical command id, e.g. `"/clear"`.
+    Select(&'static str),
+}
+
+#[derive(Debug, Clone)]
+pub struct CommandPaletteState {
+    pub visible: bool,
+    pub query: String,
+    pub selected: usize,
+    pub filtered: Vec<usize>,
+}
+
+impl CommandPaletteState {
+    pub fn new() -> Self {
+        let mut s = Self {
+            visible: false,
+            query: String::new(),
+            selected: 0,
+            filtered: Vec::new(),
+        };
+        s.recompute_filter();
+        s
+    }
+
+    /// Open palette, optionally seeding the search query (e.g. `"/"`).
+    pub fn open(&mut self, seed_query: &str) {
+        self.visible = true;
+        self.query = seed_query.to_string();
+        self.selected = 0;
+        self.recompute_filter();
+    }
+
+    pub fn close(&mut self) {
+        self.visible = false;
+        self.query.clear();
+        self.selected = 0;
+        self.recompute_filter();
+    }
+
+    pub fn recompute_filter(&mut self) {
+        self.filtered = filter_commands(&self.query);
+        if self.filtered.is_empty() {
+            self.selected = 0;
+        } else {
+            self.selected = self.selected.min(self.filtered.len() - 1);
+        }
+    }
+
+    fn move_sel(&mut self, delta: isize) {
+        let n = self.filtered.len();
+        if n == 0 {
+            self.selected = 0;
+            return;
+        }
+        let cur = self.selected as isize;
+        let next = (cur + delta).rem_euclid(n as isize) as usize;
+        self.selected = next;
+    }
+
+    fn selected_id(&self) -> Option<&'static str> {
+        self.filtered
+            .get(self.selected)
+            .and_then(|&i| COMMANDS.get(i))
+            .map(|e| e.id)
+    }
+}
+
+impl Default for CommandPaletteState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Handle a key while the palette is open.
+pub fn handle_key(state: &mut CommandPaletteState, key: KeyEvent) -> PaletteAction {
+    if key.kind != KeyEventKind::Press {
+        return PaletteAction::None;
+    }
+
+    // Ctrl+C closes (App global quit only when palette is closed).
+    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        return PaletteAction::Close;
+    }
+
+    match key.code {
+        KeyCode::Esc => PaletteAction::Close,
+        KeyCode::Enter => match state.selected_id() {
+            Some(id) => PaletteAction::Select(id),
+            None => PaletteAction::None,
+        },
+        KeyCode::Up => {
+            state.move_sel(-1);
+            PaletteAction::None
+        }
+        KeyCode::Down => {
+            state.move_sel(1);
+            PaletteAction::None
+        }
+        KeyCode::Tab => {
+            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                state.move_sel(-1);
+            } else {
+                state.move_sel(1);
+            }
+            PaletteAction::None
+        }
+        KeyCode::Backspace => {
+            state.query.pop();
+            state.recompute_filter();
+            PaletteAction::None
+        }
+        KeyCode::Char(c) => {
+            // Ignore other control chords for typing.
+            if key.modifiers.contains(KeyModifiers::CONTROL)
+                || key.modifiers.contains(KeyModifiers::ALT)
+            {
+                return PaletteAction::None;
+            }
+            state.query.push(c);
+            state.recompute_filter();
+            PaletteAction::None
+        }
+        _ => PaletteAction::None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     #[test]
     fn filter_empty_returns_all() {
@@ -159,5 +293,67 @@ mod tests {
     #[test]
     fn filter_no_match() {
         assert!(filter_commands("zzz").is_empty());
+    }
+
+    fn press(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn open_seeds_query_and_filters() {
+        let mut s = CommandPaletteState::new();
+        s.open("/");
+        assert!(s.visible);
+        assert_eq!(s.query, "/");
+        assert!(!s.filtered.is_empty());
+        assert_eq!(s.selected, 0);
+    }
+
+    #[test]
+    fn selection_clamps_when_filter_shrinks() {
+        let mut s = CommandPaletteState::new();
+        s.open("");
+        s.selected = 6; // last of 7
+        s.query = "cle".into();
+        s.recompute_filter();
+        assert_eq!(s.filtered.len(), 1);
+        assert_eq!(s.selected, 0);
+    }
+
+    #[test]
+    fn enter_selects_current_command() {
+        let mut s = CommandPaletteState::new();
+        s.open("");
+        // move to /clear (index 1 in full list)
+        s.selected = 1;
+        let action = handle_key(&mut s, press(KeyCode::Enter));
+        assert_eq!(action, PaletteAction::Select("/clear"));
+    }
+
+    #[test]
+    fn enter_noop_when_empty_filter() {
+        let mut s = CommandPaletteState::new();
+        s.open("zzz");
+        assert!(s.filtered.is_empty());
+        let action = handle_key(&mut s, press(KeyCode::Enter));
+        assert_eq!(action, PaletteAction::None);
+    }
+
+    #[test]
+    fn esc_closes() {
+        let mut s = CommandPaletteState::new();
+        s.open("");
+        let action = handle_key(&mut s, press(KeyCode::Esc));
+        assert_eq!(action, PaletteAction::Close);
+    }
+
+    #[test]
+    fn typing_updates_query() {
+        let mut s = CommandPaletteState::new();
+        s.open("");
+        handle_key(&mut s, press(KeyCode::Char('c')));
+        handle_key(&mut s, press(KeyCode::Char('l')));
+        assert_eq!(s.query, "cl");
+        assert!(s.filtered.iter().any(|&i| COMMANDS[i].id == "/clear"));
     }
 }
