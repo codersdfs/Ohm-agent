@@ -1,6 +1,6 @@
 //! Conversation context utilities for token estimation and compaction
 
-use providers::{ChatMessage, ToolCall, ToolCallFunction};
+use providers::ChatMessage;
 
 /// Estimates tokens using characters/4 over messages and tool calls
 pub fn estimate_tokens(messages: &[ChatMessage]) -> usize {
@@ -9,7 +9,7 @@ pub fn estimate_tokens(messages: &[ChatMessage]) -> usize {
         count += msg.content.chars().count();
         if let Some(tc) = msg.tool_calls.as_deref() {
             for t in tc {
-                count += t.arguments.chars().count();
+                count += t.function.arguments.chars().count();
             }
         }
     }
@@ -30,7 +30,10 @@ pub fn compact(
     }
 
     // Step 1: Keep system prompt (first message if system)
-    let has_system = messages.first().map(|m| m.role == "system").unwrap_or(false);
+    let has_system = messages
+        .first()
+        .map(|m| m.role == "system")
+        .unwrap_or(false);
 
     // Step 2: Find all user/assistant message indices
     let mut ua_indices: Vec<usize> = vec![];
@@ -126,7 +129,7 @@ pub fn compact(
             insert_idx,
             ChatMessage {
                 role: "system".into(),
-                content: summary_text,
+                content: summary_text.clone(),
                 tool_calls: None,
                 tool_call_id: None,
                 name: None,
@@ -140,6 +143,7 @@ pub fn compact(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use providers::{ToolCall, ToolCallFunction};
 
     fn build_message(role: &str, content: &str) -> ChatMessage {
         ChatMessage {
@@ -250,8 +254,17 @@ mod tests {
     fn test_compact_large_fixture_no_panic() {
         let mut messages = vec![build_message("system", "You are helpful")];
         for i in 0..200 {
-            messages.push(build_message("user", &format!("User message number {} with some padding text to make it longer", i)));
-            messages.push(build_message("assistant", &format!("Assistant response number {}", i)));
+            messages.push(build_message(
+                "user",
+                &format!(
+                    "User message number {} with some padding text to make it longer",
+                    i
+                ),
+            ));
+            messages.push(build_message(
+                "assistant",
+                &format!("Assistant response number {}", i),
+            ));
         }
 
         // Use low model window to force threshold
@@ -272,7 +285,8 @@ mod tests {
             messages.push(build_message("assistant", "This is a very long assistant response with lots of content to fill up tokens and exceed the threshold for compaction"));
         }
 
-        let (result, summary) = compact(messages, 6, 100_000);
+        // ~5.5k estimated tokens; window 2000 → threshold 1400 forces compaction.
+        let (result, summary) = compact(messages, 6, 2_000);
 
         // Should have compacted
         assert!(!summary.is_empty());
@@ -311,8 +325,26 @@ mod tests {
             ));
         }
 
+        // Pad so estimate_tokens exceeds 70% of a small window (force compaction).
+        for i in 0..30 {
+            messages.push(build_message(
+                "user",
+                &format!(
+                    "Padding message {} with enough characters to push token estimate over the compaction threshold for this fixture",
+                    i
+                ),
+            ));
+            messages.push(build_message(
+                "assistant",
+                &format!(
+                    "Padding reply {} with enough characters to push token estimate over the compaction threshold for this fixture",
+                    i
+                ),
+            ));
+        }
+
         // Compact with keep_last_n=6 and low window to force compaction
-        let (result, _summary) = compact(messages, 6, 1000);
+        let (result, _summary) = compact(messages, 6, 500);
 
         // Verify: every retained tool message has its immediately preceding assistant tool_call
         let mut last_assistant_idx: Option<usize> = None;
