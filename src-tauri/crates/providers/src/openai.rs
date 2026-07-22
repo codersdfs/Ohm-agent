@@ -135,37 +135,47 @@ impl OpenAIProvider {
 
     fn build_request(&self, request: &ChatRequest) -> OpenAIRequest {
         let tools = request.tools.as_ref().map(|tools| {
-            tools.iter().map(|t| OpenAIToolDef {
-                tool_type: t.tool_type.clone(),
-                function: OpenAIToolFunctionDef {
-                    name: t.function.name.clone(),
-                    description: t.function.description.clone(),
-                    parameters: t.function.parameters.clone(),
-                },
-            }).collect()
+            tools
+                .iter()
+                .map(|t| OpenAIToolDef {
+                    tool_type: t.tool_type.clone(),
+                    function: OpenAIToolFunctionDef {
+                        name: t.function.name.clone(),
+                        description: t.function.description.clone(),
+                        parameters: t.function.parameters.clone(),
+                    },
+                })
+                .collect()
         });
 
         OpenAIRequest {
             model: request.config.model.clone(),
-            messages: request.messages.iter().map(|m| {
-                let tool_calls = m.tool_calls.as_ref().map(|calls| {
-                    calls.iter().map(|tc| OpenAIToolCall {
-                        id: tc.id.clone(),
-                        tool_type: tc.tool_type.clone(),
-                        function: OpenAIToolCallFunction {
-                            name: tc.function.name.clone(),
-                            arguments: tc.function.arguments.clone(),
-                        },
-                    }).collect()
-                });
-                OpenAIMessage {
-                    role: m.role.clone(),
-                    content: m.content.clone(),
-                    tool_calls,
-                    tool_call_id: m.tool_call_id.clone(),
-                    name: m.name.clone(),
-                }
-            }).collect(),
+            messages: request
+                .messages
+                .iter()
+                .map(|m| {
+                    let tool_calls = m.tool_calls.as_ref().map(|calls| {
+                        calls
+                            .iter()
+                            .map(|tc| OpenAIToolCall {
+                                id: tc.id.clone(),
+                                tool_type: tc.tool_type.clone(),
+                                function: OpenAIToolCallFunction {
+                                    name: tc.function.name.clone(),
+                                    arguments: tc.function.arguments.clone(),
+                                },
+                            })
+                            .collect()
+                    });
+                    OpenAIMessage {
+                        role: m.role.clone(),
+                        content: m.content.clone(),
+                        tool_calls,
+                        tool_call_id: m.tool_call_id.clone(),
+                        name: m.name.clone(),
+                    }
+                })
+                .collect(),
             stream: request.stream,
             max_tokens: request.config.max_tokens,
             temperature: request.config.temperature,
@@ -184,7 +194,8 @@ impl LlmProvider for OpenAIProvider {
         let client = reqwest::Client::new();
         let body = self.build_request(&request);
 
-        let resp = client.post(self.url())
+        let resp = client
+            .post(self.url())
             .header("Authorization", format!("Bearer {}", self.api_key))
             .json(&body)
             .send()
@@ -197,31 +208,39 @@ impl LlmProvider for OpenAIProvider {
             return Err(format!("API error {}: {}", status, text));
         }
 
-        let body_bytes = resp.bytes().await.map_err(|e| format!("failed to read response body: {}", e))?;
+        let body_bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| format!("failed to read response body: {}", e))?;
 
         // Some providers (OpenRouter, etc.) return 200 with an error body
         if let Ok(err_resp) = serde_json::from_slice::<OpenAIErrorResponse>(&body_bytes) {
             return Err(format!("API error: {}", err_resp.error.message));
         }
 
-        let data: OpenAIResponse = serde_json::from_slice(&body_bytes)
-            .map_err(|e| {
-                let preview = String::from_utf8_lossy(&body_bytes[..body_bytes.len().min(1000)]);
-                format!("parse failed: {} (body: {}...)", e, preview)
-            })?;
+        let data: OpenAIResponse = serde_json::from_slice(&body_bytes).map_err(|e| {
+            let preview = String::from_utf8_lossy(&body_bytes[..body_bytes.len().min(1000)]);
+            format!("parse failed: {} (body: {}...)", e, preview)
+        })?;
 
-        let choice = data.choices.into_iter().next()
+        let choice = data
+            .choices
+            .into_iter()
+            .next()
             .ok_or_else(|| "no choices returned".to_string())?;
 
         let tool_calls = choice.message.tool_calls.map(|calls| {
-            calls.into_iter().map(|tc| ToolCall {
-                id: tc.id,
-                tool_type: tc.tool_type,
-                function: crate::ToolCallFunction {
-                    name: tc.function.name,
-                    arguments: tc.function.arguments,
-                },
-            }).collect()
+            calls
+                .into_iter()
+                .map(|tc| ToolCall {
+                    id: tc.id,
+                    tool_type: tc.tool_type,
+                    function: crate::ToolCallFunction {
+                        name: tc.function.name,
+                        arguments: tc.function.arguments,
+                    },
+                })
+                .collect()
         });
 
         Ok(ChatResponse {
@@ -235,11 +254,16 @@ impl LlmProvider for OpenAIProvider {
         })
     }
 
-    async fn chat_stream(&self, request: ChatRequest, tx: tokio::sync::mpsc::UnboundedSender<StreamChunk>) -> Result<(), String> {
+    async fn chat_stream(
+        &self,
+        request: ChatRequest,
+        tx: tokio::sync::mpsc::UnboundedSender<StreamChunk>,
+    ) -> Result<(), String> {
         let client = reqwest::Client::new();
         let body = self.build_request(&request);
 
-        let resp = client.post(self.url())
+        let resp = client
+            .post(self.url())
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Accept", "text/event-stream")
             .json(&body)
@@ -291,15 +315,20 @@ impl LlmProvider for OpenAIProvider {
                             let is_done = choice.finish_reason.is_some();
 
                             let delta_tool_calls = choice.delta.tool_calls.map(|calls| {
-                                calls.into_iter().map(|tc| crate::DeltaToolCall {
-                                    index: tc.index,
-                                    id: tc.id,
-                                    tool_type: tc.tool_type,
-                                    function: tc.function.map(|f| crate::DeltaToolCallFunction {
-                                        name: f.name,
-                                        arguments: f.arguments,
-                                    }),
-                                }).collect()
+                                calls
+                                    .into_iter()
+                                    .map(|tc| crate::DeltaToolCall {
+                                        index: tc.index,
+                                        id: tc.id,
+                                        tool_type: tc.tool_type,
+                                        function: tc.function.map(|f| {
+                                            crate::DeltaToolCallFunction {
+                                                name: f.name,
+                                                arguments: f.arguments,
+                                            }
+                                        }),
+                                    })
+                                    .collect()
                             });
 
                             let usage = event.usage.as_ref().map(|u| crate::Usage {

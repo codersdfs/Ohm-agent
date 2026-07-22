@@ -1,12 +1,15 @@
 // Grep tool implementation
 
-use crate::{Tool, ToolInput, ToolResult, ToolError, ToolUseContext};
+use crate::metadata::{
+    CostCategory, CostHint, LatencyHint, ToolCategory, ToolErrorSpec, ToolExample, ToolMetadata,
+    ToolSource,
+};
 use crate::schema::string_param;
-use crate::metadata::{ToolMetadata, ToolCategory, LatencyHint, ToolErrorSpec, ToolExample, ToolSource, CostHint, CostCategory};
+use crate::{Tool, ToolError, ToolInput, ToolResult, ToolUseContext};
 use async_trait::async_trait;
 use regex::Regex;
-use walkdir::WalkDir;
 use std::path::PathBuf;
+use walkdir::WalkDir;
 
 pub struct GrepTool;
 
@@ -24,8 +27,12 @@ impl Default for GrepTool {
 
 #[async_trait]
 impl Tool for GrepTool {
-    fn name(&self) -> &str { "grep" }
-    fn description(&self) -> &str { "Search for a regex pattern across files in a directory. Returns matching lines with line numbers." }
+    fn name(&self) -> &str {
+        "grep"
+    }
+    fn description(&self) -> &str {
+        "Search for a regex pattern across files in a directory. Returns matching lines with line numbers."
+    }
 
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({
@@ -107,16 +114,19 @@ The pattern is a Rust regex — use standard regex syntax.".into()),
     }
 
     async fn call(&self, input: ToolInput, _ctx: &ToolUseContext) -> Result<ToolResult, ToolError> {
-        let pattern = input.args.get("pattern")
+        let pattern = input
+            .args
+            .get("pattern")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::new("Missing argument: pattern"))?;
 
-        let path = input.args.get("path")
+        let path = input
+            .args
+            .get("path")
             .and_then(|v| v.as_str())
             .unwrap_or(".");
 
-        let include = input.args.get("include")
-            .and_then(|v| v.as_str());
+        let include = input.args.get("include").and_then(|v| v.as_str());
 
         let re = Regex::new(pattern)
             .map_err(|e| ToolError::new(format!("Invalid regex pattern: {}", e)))?;
@@ -128,7 +138,11 @@ The pattern is a Rust regex — use standard regex syntax.".into()),
 
         let mut results = Vec::new();
 
-        for entry in WalkDir::new(&search_dir).max_depth(10).into_iter().filter_map(|e| e.ok()) {
+        for entry in WalkDir::new(&search_dir)
+            .max_depth(10)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
             if !entry.file_type().is_file() {
                 continue;
             }
@@ -146,7 +160,12 @@ The pattern is a Rust regex — use standard regex syntax.".into()),
             if let Ok(content) = tokio::fs::read_to_string(file_path).await {
                 for (i, line) in content.lines().enumerate() {
                     if re.is_match(line) {
-                        results.push(format!("{}:{}: {}", file_path.display(), i + 1, line.trim()));
+                        results.push(format!(
+                            "{}:{}: {}",
+                            file_path.display(),
+                            i + 1,
+                            line.trim()
+                        ));
                     }
                 }
             }
@@ -169,7 +188,9 @@ mod tests {
     async fn test_grep_tool_finds_pattern() {
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("test.txt");
-        tokio::fs::write(&file_path, "hello\nworld\nhello again").await.unwrap();
+        tokio::fs::write(&file_path, "hello\nworld\nhello again")
+            .await
+            .unwrap();
 
         let tool = GrepTool::new();
         let input = ToolInput {

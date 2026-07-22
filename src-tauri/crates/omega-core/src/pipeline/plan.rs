@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::{AppState, MutexExt};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanStep {
@@ -54,11 +54,17 @@ Rules:
 
 impl StructuredPlan {
     pub fn from_json(json: &str) -> Result<Self, String> {
-        let cleaned: String = json.chars()
+        let cleaned: String = json
+            .chars()
             .filter(|c| c.is_ascii_graphic() || c.is_ascii_whitespace())
             .collect();
-        serde_json::from_str(&cleaned)
-            .map_err(|e| format!("Failed to parse plan JSON: {} — raw: {}", e, json.chars().take(200).collect::<String>()))
+        serde_json::from_str(&cleaned).map_err(|e| {
+            format!(
+                "Failed to parse plan JSON: {} — raw: {}",
+                e,
+                json.chars().take(200).collect::<String>()
+            )
+        })
     }
 
     pub fn step_count(&self) -> usize {
@@ -120,8 +126,13 @@ impl PlanAgent {
         let response = provider.chat(chat_request).await?;
         let raw = response.content.clone();
 
-        let plan = StructuredPlan::from_json(&raw)
-            .map_err(|e| format!("Plan parsing error: {}. Raw output: {}", e, raw.chars().take(300).collect::<String>()))?;
+        let plan = StructuredPlan::from_json(&raw).map_err(|e| {
+            format!(
+                "Plan parsing error: {}. Raw output: {}",
+                e,
+                raw.chars().take(300).collect::<String>()
+            )
+        })?;
 
         log::info!(
             "PlanAgent: generated plan with {} steps, {} files, ~{} lines",

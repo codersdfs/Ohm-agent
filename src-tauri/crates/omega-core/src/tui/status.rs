@@ -4,8 +4,8 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
-use super::theme;
 use super::spinner::{OmegaSpinner, SpinnerState};
+use super::theme;
 
 /// Status line state — what to show in the single-line footer.
 pub struct StatusState {
@@ -78,7 +78,7 @@ impl StatusState {
             Self::format_tokens(tokens_out),
         )
     }
-}  // end impl StatusState
+} // end impl StatusState
 
 impl Widget for &StatusState {
     fn render(self, area: Rect, buf: &mut Buffer) {
@@ -98,20 +98,22 @@ impl Widget for &StatusState {
         // Right: real input/output token counts (no fake latency / estimates)
         let tok_str = StatusState::format_token_usage(self.tokens_in, self.tokens_out);
 
-        let right_spans = vec![
-            Span::styled(format!(" {} ", tok_str), Style::default().fg(theme::SECONDARY)),
-        ];
+        let right_spans = vec![Span::styled(
+            format!(" {} ", tok_str),
+            Style::default().fg(theme::SECONDARY),
+        )];
         let right_w: u16 = right_spans.iter().map(|s| s.width() as u16).sum();
 
         // Fill
         let fill = area.width.saturating_sub(left_w).saturating_sub(right_w);
 
         spans.extend(left);
-        if fill > 0 { spans.push(Span::raw(" ".repeat(fill as usize))); }
+        if fill > 0 {
+            spans.push(Span::raw(" ".repeat(fill as usize)));
+        }
         spans.extend(right_spans);
 
-        let para = Paragraph::new(Line::from(spans))
-            .style(Style::default().bg(theme::BG));
+        let para = Paragraph::new(Line::from(spans)).style(Style::default().bg(theme::BG));
         para.render(area, buf);
     }
 }

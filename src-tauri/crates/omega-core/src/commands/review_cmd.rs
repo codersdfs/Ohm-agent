@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
+use crate::pipeline::review::{CombinedReviewOutput, ReviewAgent};
+use crate::pipeline::review_score::{PromotionStats, ScoreBreakdown};
 use crate::{AppState, MutexExt};
-use crate::pipeline::review::{ReviewAgent, CombinedReviewOutput};
-use crate::pipeline::review_score::{ScoreBreakdown, PromotionStats};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ReviewRequest {
@@ -22,7 +22,11 @@ pub async fn run_review(
     state: &AppState,
     request: ReviewRequest,
 ) -> Result<CombinedReviewOutput, String> {
-    log::info!("run_review: code_len={}, context={:?}", request.code.len(), request.context.chars().take(50).collect::<String>());
+    log::info!(
+        "run_review: code_len={}, context={:?}",
+        request.code.len(),
+        request.context.chars().take(50).collect::<String>()
+    );
 
     {
         let mut p = state.pipeline.lock().await;
@@ -69,9 +73,7 @@ pub async fn run_review(
     Ok(output)
 }
 
-pub async fn get_score_breakdown(
-    state: &AppState,
-) -> Result<ScoreResponse, String> {
+pub async fn get_score_breakdown(state: &AppState) -> Result<ScoreResponse, String> {
     let p = state.pipeline.lock().await;
     Ok(ScoreResponse {
         score_breakdown: p.score_breakdown.clone(),
@@ -82,23 +84,17 @@ pub async fn get_score_breakdown(
     })
 }
 
-pub async fn get_promotion_stats(
-    state: &AppState,
-) -> Result<PromotionStats, String> {
+pub async fn get_promotion_stats(state: &AppState) -> Result<PromotionStats, String> {
     let stats = ReviewAgent::get_promotion_stats(state);
     Ok(stats)
 }
 
-pub async fn demote_stale_rules(
-    state: &AppState,
-) -> Result<usize, String> {
+pub async fn demote_stale_rules(state: &AppState) -> Result<usize, String> {
     let count = ReviewAgent::demote_stale_rules(state);
     Ok(count)
 }
 
-pub async fn reset_retry_count(
-    state: &AppState,
-) -> Result<String, String> {
+pub async fn reset_retry_count(state: &AppState) -> Result<String, String> {
     let mut p = state.pipeline.lock().await;
     p.retry_count = 0;
     Ok("Retry count reset".into())

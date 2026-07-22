@@ -1,7 +1,7 @@
-use std::thread;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
+use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyEventKind};

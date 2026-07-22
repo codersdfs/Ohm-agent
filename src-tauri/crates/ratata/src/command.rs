@@ -1,6 +1,6 @@
+use std::any::TypeId;
 use std::fmt;
 use std::io;
-use std::any::TypeId;
 
 use crate::screen::Screen;
 
@@ -33,7 +33,8 @@ impl Command {
 
     #[inline(always)]
     pub fn crossterm<C>(command: C) -> Command
-        where C: crossterm::Command + 'static,
+    where
+        C: crossterm::Command + 'static,
     {
         Self::Crossterm(ObjectSafeCrosstermCommand(Box::new(command)))
     }
@@ -57,9 +58,7 @@ impl crossterm::Command for ObjectSafeCrosstermCommand {
     }
 
     #[cfg(windows)]
-    fn execute_winapi(
-        &self,
-    ) -> Result<(), io::Error> {
+    fn execute_winapi(&self) -> Result<(), io::Error> {
         // Object-safe wrapper can't forward winapi — fallible only on Windows
         // where the calling code expects an ansi-capable backend.
         Ok(())

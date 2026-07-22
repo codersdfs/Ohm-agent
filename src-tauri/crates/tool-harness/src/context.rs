@@ -1,8 +1,8 @@
 // Tool execution context
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
-use std::collections::HashMap;
 
 /// LRU cache entry for file state tracking
 #[derive(Debug, Clone)]
@@ -53,7 +53,10 @@ impl ToolUseContext {
         self
     }
 
-    pub fn with_gate_check_fn(mut self, cb: Arc<dyn Fn(&str) -> GateCheckResult + Send + Sync>) -> Self {
+    pub fn with_gate_check_fn(
+        mut self,
+        cb: Arc<dyn Fn(&str) -> GateCheckResult + Send + Sync>,
+    ) -> Self {
         self.gate_check_fn = Some(cb);
         self
     }

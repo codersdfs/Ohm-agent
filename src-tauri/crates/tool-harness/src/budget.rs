@@ -38,7 +38,7 @@ impl ResultBudget {
             // Persist to file
             let hash = format!("{:016x}", md5::compute(trimmed.as_bytes()));
             let file_path = self.persisted_dir.join(format!("{}.txt", hash));
-            
+
             // Create directory if needed
             if let Err(e) = std::fs::create_dir_all(&self.persisted_dir) {
                 log::warn!("Failed to create persistence directory: {}", e);
@@ -97,11 +97,14 @@ impl ResultBudget {
             ));
             (result, check)
         } else {
-            (trimmed.to_string(), crate::BudgetCheck {
-                within_limit: true,
-                truncated: false,
-                persisted_path: None,
-            })
+            (
+                trimmed.to_string(),
+                crate::BudgetCheck {
+                    within_limit: true,
+                    truncated: false,
+                    persisted_path: None,
+                },
+            )
         }
     }
 }
@@ -181,11 +184,15 @@ mod tests {
         let (output, check) = budget.truncate(&mixed).await;
 
         // Should NOT panic. Output should be truncated.
-        assert!(check.truncated || output.len() < mixed.len(),
-            "Truncation should have occurred");
+        assert!(
+            check.truncated || output.len() < mixed.len(),
+            "Truncation should have occurred"
+        );
         // Output must be valid UTF-8 (no panic = it's safe)
-        assert!(std::str::from_utf8(output.as_bytes()).is_ok(),
-            "Output must be valid UTF-8");
+        assert!(
+            std::str::from_utf8(output.as_bytes()).is_ok(),
+            "Output must be valid UTF-8"
+        );
     }
 
     #[tokio::test]
@@ -199,8 +206,10 @@ mod tests {
 
         // Should truncate
         assert!(check.truncated, "Should have been truncated");
-        assert!(std::str::from_utf8(output.as_bytes()).is_ok(),
-            "Output must be valid UTF-8");
+        assert!(
+            std::str::from_utf8(output.as_bytes()).is_ok(),
+            "Output must be valid UTF-8"
+        );
         assert!(
             output.contains("truncated"),
             "truncation notice should mention truncated"

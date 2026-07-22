@@ -1,11 +1,11 @@
-pub mod markdown;
-pub mod provider_panel;
-pub mod theme;
-pub mod header;
-pub mod transcript;
+pub mod component;
 pub mod editor;
+pub mod header;
 pub mod help;
+pub mod markdown;
 pub mod omega_mark;
+pub mod provider_panel;
 pub mod spinner;
 pub mod status;
-pub mod component;
+pub mod theme;
+pub mod transcript;

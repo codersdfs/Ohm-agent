@@ -1,8 +1,11 @@
 // Edit tool implementation
 
-use crate::{Tool, ToolInput, ToolResult, ToolError, ToolUseContext};
-use crate::schema::{string_param, boolean_param};
-use crate::metadata::{ToolMetadata, ToolCategory, LatencyHint, ToolErrorSpec, ToolExample, ToolSource, CostHint, CostCategory};
+use crate::metadata::{
+    CostCategory, CostHint, LatencyHint, ToolCategory, ToolErrorSpec, ToolExample, ToolMetadata,
+    ToolSource,
+};
+use crate::schema::{boolean_param, string_param};
+use crate::{Tool, ToolError, ToolInput, ToolResult, ToolUseContext};
 use async_trait::async_trait;
 
 pub struct EditTool;
@@ -21,8 +24,12 @@ impl Default for EditTool {
 
 #[async_trait]
 impl Tool for EditTool {
-    fn name(&self) -> &str { "edit" }
-    fn description(&self) -> &str { "Edit a file by finding and replacing a specific string. For replacing substrings within a file." }
+    fn name(&self) -> &str {
+        "edit"
+    }
+    fn description(&self) -> &str {
+        "Edit a file by finding and replacing a specific string. For replacing substrings within a file."
+    }
 
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({
@@ -113,19 +120,27 @@ For large files, make sure oldString is unique enough to avoid unintended replac
     }
 
     async fn call(&self, input: ToolInput, _ctx: &ToolUseContext) -> Result<ToolResult, ToolError> {
-        let path = input.args.get("filePath")
+        let path = input
+            .args
+            .get("filePath")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::new("Missing argument: filePath"))?;
 
-        let old_string = input.args.get("oldString")
+        let old_string = input
+            .args
+            .get("oldString")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::new("Missing argument: oldString"))?;
 
-        let new_string = input.args.get("newString")
+        let new_string = input
+            .args
+            .get("newString")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::new("Missing argument: newString"))?;
 
-        let replace_all = input.args.get("replaceAll")
+        let replace_all = input
+            .args
+            .get("replaceAll")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 

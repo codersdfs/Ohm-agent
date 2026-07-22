@@ -1,30 +1,38 @@
 // Tool Harness — Production-ready tool calling framework for Omega Agent
 
-mod types;
-mod traits;
-mod context;
-mod registry;
-mod permission;
 mod budget;
+mod context;
 mod hooks;
-mod schema;
 mod metadata;
-mod pipeline;
 mod orchestrator;
+mod permission;
+mod pipeline;
+mod registry;
+mod schema;
+mod traits;
+mod types;
 
-pub mod tools;
-pub mod box_; // Tool Calling Box modules (phased)
+pub mod box_;
+pub mod tools; // Tool Calling Box modules (phased)
 
-pub use types::{ToolError, ToolErrorKind, ToolResult, ToolInput, ToolRequest, ExecutionOutcome, PermissionResult, BudgetCheck, GateCheckResult, GateViolationInfo};
-pub use traits::Tool;
+pub use budget::{ConversationBudget, ResultBudget};
 pub use context::ToolUseContext;
-pub use registry::ToolRegistry;
-pub use permission::{PermissionMode, PermissionRule, PermissionResolver};
-pub use budget::{ResultBudget, ConversationBudget};
-pub use hooks::{PreToolUseHook, PostToolUseHook, HooksRegistry};
-pub use pipeline::ExecutionPipeline;
+pub use hooks::{HooksRegistry, PostToolUseHook, PreToolUseHook};
+pub use metadata::{
+    CostCategory, CostHint, DeprecationInfo, LatencyHint, ParamConstraints, ParamSummary,
+    ToolCategory, ToolErrorSpec, ToolExample, ToolMetadata, ToolRef, ToolSource,
+};
 pub use orchestrator::ToolOrchestrator;
-pub use metadata::{ToolMetadata, ToolCategory, ToolRef, ParamSummary, LatencyHint, ToolErrorSpec, ToolExample, CostHint, CostCategory, ToolSource, DeprecationInfo, ParamConstraints};
+pub use permission::{PermissionMode, PermissionResolver, PermissionRule};
+pub use pipeline::ExecutionPipeline;
+pub use registry::ToolRegistry;
+pub use traits::Tool;
+pub use types::{
+    BudgetCheck, ExecutionOutcome, GateCheckResult, GateViolationInfo, PermissionResult, ToolError,
+    ToolErrorKind, ToolInput, ToolRequest, ToolResult,
+};
 
 // Re-export types from providers that tool-harness depends on
-pub use providers::{ToolDefinition, ToolCall, ChatMessage, ChatRequest, ChatResponse, LlmProvider};
+pub use providers::{
+    ChatMessage, ChatRequest, ChatResponse, LlmProvider, ToolCall, ToolDefinition,
+};

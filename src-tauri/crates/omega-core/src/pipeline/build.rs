@@ -1,7 +1,7 @@
-use crate::AppState;
-use crate::commands::tools::{ToolRequest, ToolResult, GateViolationInfo};
+use crate::commands::tools::{GateViolationInfo, ToolRequest, ToolResult};
 use crate::pipeline::plan::StructuredPlan;
-use crate::{PermissionEvent, MutexExt};
+use crate::AppState;
+use crate::{MutexExt, PermissionEvent};
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
@@ -129,10 +129,7 @@ See ROADMAP.md tickets P0-02 / P2-04.",
                     id: uuid::Uuid::new_v4().to_string(),
                     tool: tool_name.into(),
                     args: perm_args,
-                    reason: format!(
-                        "Step #{}: {} — {}",
-                        step.id, step.action, step.description
-                    ),
+                    reason: format!("Step #{}: {} — {}", step.id, step.action, step.description),
                     step_id: step.id,
                     step_description: step.description.clone(),
                 };
@@ -291,7 +288,10 @@ See ROADMAP.md tickets P0-02 / P2-04.",
                         if let Some(obj) = args.as_object_mut() {
                             obj.insert(
                                 "_error_feedback".into(),
-                                serde_json::Value::String(format!("Previous attempt failed: {}", e)),
+                                serde_json::Value::String(format!(
+                                    "Previous attempt failed: {}",
+                                    e
+                                )),
                             );
                         }
                         continue;
@@ -508,10 +508,7 @@ See ROADMAP.md tickets P0-02 / P2-04.",
         let deadline = Instant::now() + Duration::from_secs(300);
         loop {
             if Instant::now() > deadline {
-                log::warn!(
-                    "BuildAgent: permission timeout for request {}",
-                    perm_req.id
-                );
+                log::warn!("BuildAgent: permission timeout for request {}", perm_req.id);
                 return false;
             }
             tokio::time::sleep(Duration::from_millis(100)).await;

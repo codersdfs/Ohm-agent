@@ -4,12 +4,12 @@
 // Provides the AI-facing tool metadata layer that enriches LLM
 // tool definitions with category, tags, examples, and error specs.
 
+use crate::{AppState, MutexExt};
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
-use crate::{AppState, MutexExt};
 
 // Re-export core types from tool-harness
-pub use tool_harness::{ToolRequest, ToolCategory, ToolRef, ToolMetadata};
+pub use tool_harness::{ToolCategory, ToolMetadata, ToolRef, ToolRequest};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResult {
@@ -21,10 +21,20 @@ pub struct ToolResult {
 
 impl ToolResult {
     pub fn ok(output: String, gate_result: Option<GateCheckResult>) -> Self {
-        Self { success: true, output, error: None, gate_result }
+        Self {
+            success: true,
+            output,
+            error: None,
+            gate_result,
+        }
     }
     pub fn err(error: String) -> Self {
-        Self { success: false, output: String::new(), error: Some(error), gate_result: None }
+        Self {
+            success: false,
+            output: String::new(),
+            error: Some(error),
+            gate_result: None,
+        }
     }
 }
 
@@ -48,12 +58,16 @@ impl GateCheckResult {
         Self {
             passed: g.passed,
             score: g.score,
-            violations: g.violations.iter().map(|v| GateViolationInfo {
-                category: format!("{:?}", v.category),
-                message: v.message.clone(),
-                tool_hint: v.tool_hint.clone(),
-                line: v.line,
-            }).collect(),
+            violations: g
+                .violations
+                .iter()
+                .map(|v| GateViolationInfo {
+                    category: format!("{:?}", v.category),
+                    message: v.message.clone(),
+                    tool_hint: v.tool_hint.clone(),
+                    line: v.line,
+                })
+                .collect(),
         }
     }
 }
@@ -64,7 +78,11 @@ async fn run_gate(state: &AppState, content: &str) -> GateCheckResult {
     let violations = db.check_content(content, &lang);
 
     if violations.is_empty() {
-        return GateCheckResult { passed: true, score: 100, violations: vec![] };
+        return GateCheckResult {
+            passed: true,
+            score: 100,
+            violations: vec![],
+        };
     }
 
     let gate_result = harness::scoring::calculate_score(&violations);
@@ -87,21 +105,27 @@ pub async fn execute_tool_inner(
 
     let pipeline = state.tool_pipeline.get_or_init(|| {
         let registry = tool_harness::tools::default_tool_registry();
-        tool_harness::ExecutionPipeline::new()
-            .with_registry(registry)
+        tool_harness::ExecutionPipeline::new().with_registry(registry)
     });
 
     let ctx = tool_harness::ToolUseContext::new("omega-core");
 
-    let (result, _budget) = pipeline.execute(&tool_name, tool_input, &ctx)
+    let (result, _budget) = pipeline
+        .execute(&tool_name, tool_input, &ctx)
         .await
         .map_err(|e| e.message)?;
 
     // Gate check for write/edit operations
     let gate_result = if matches!(tool_name.as_str(), "write" | "edit") {
         let content_to_check = match tool_name.as_str() {
-            "write" => request.args.get("content").and_then(|v| v.as_str()).unwrap_or(""),
-            "edit" => request.args.get("newText")
+            "write" => request
+                .args
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or(""),
+            "edit" => request
+                .args
+                .get("newText")
                 .or_else(|| request.args.get("newString"))
                 .and_then(|v| v.as_str())
                 .unwrap_or(""),
@@ -133,14 +157,16 @@ pub async fn execute_tool_inner(
     if result.success {
         Ok(ToolResult::ok(result.output, gate_result))
     } else {
-        Ok(ToolResult { success: false, output: String::new(), error: result.error, gate_result })
+        Ok(ToolResult {
+            success: false,
+            output: String::new(),
+            error: result.error,
+            gate_result,
+        })
     }
 }
 
-pub async fn execute_tool(
-    state: &AppState,
-    request: ToolRequest,
-) -> Result<ToolResult, String> {
+pub async fn execute_tool(state: &AppState, request: ToolRequest) -> Result<ToolResult, String> {
     execute_tool_inner(state, request).await
 }
 
@@ -149,9 +175,7 @@ pub async fn execute_tool(
 static CACHED_REGISTRY: OnceLock<tool_harness::ToolRegistry> = OnceLock::new();
 
 fn registry() -> &'static tool_harness::ToolRegistry {
-    CACHED_REGISTRY.get_or_init(|| {
-        tool_harness::tools::default_tool_registry()
-    })
+    CACHED_REGISTRY.get_or_init(|| tool_harness::tools::default_tool_registry())
 }
 
 // ─── Tool Listing ────────────────────────────────────────────────────────────
@@ -203,20 +227,30 @@ Tools are provided via the native function-calling API. Call them through the AP
 "#;
 
 fn format_tool_help(def: &providers::ToolDefinition) -> String {
-    let params: Vec<String> = def.function.parameters
+    let params: Vec<String> = def
+        .function
+        .parameters
         .get("properties")
         .and_then(|p| p.as_object())
         .map(|props| {
-            props.iter().map(|(name, info)| {
-                let ptype = info.get("type").and_then(|v| v.as_str()).unwrap_or("any");
-                format!("{}: {}", name, ptype)
-            }).collect()
+            props
+                .iter()
+                .map(|(name, info)| {
+                    let ptype = info.get("type").and_then(|v| v.as_str()).unwrap_or("any");
+                    format!("{}: {}", name, ptype)
+                })
+                .collect()
         })
         .unwrap_or_default();
     if params.is_empty() {
         format!("- {}: {}", def.function.name, def.function.description)
     } else {
-        format!("- {}({}): {}", def.function.name, params.join(", "), def.function.description)
+        format!(
+            "- {}({}): {}",
+            def.function.name,
+            params.join(", "),
+            def.function.description
+        )
     }
 }
 
@@ -237,7 +271,9 @@ fn project_instructions_snippet() -> Option<String> {
             } else {
                 trimmed.to_string()
             };
-            return Some(format!("\n\n=== PROJECT INSTRUCTIONS ({path}) ===\n{body}\n"));
+            return Some(format!(
+                "\n\n=== PROJECT INSTRUCTIONS ({path}) ===\n{body}\n"
+            ));
         }
     }
     None
@@ -265,11 +301,13 @@ pub fn default_system_prompt() -> String {
 static CACHED_TOOL_DEFINITIONS: OnceLock<Vec<providers::ToolDefinition>> = OnceLock::new();
 
 pub fn tool_definitions() -> Vec<providers::ToolDefinition> {
-    CACHED_TOOL_DEFINITIONS.get_or_init(|| {
-        let mut defs = registry().tool_definitions();
-        defs.extend(crate::commands::mcp::tool_definitions());
-        defs
-    }).clone()
+    CACHED_TOOL_DEFINITIONS
+        .get_or_init(|| {
+            let mut defs = registry().tool_definitions();
+            defs.extend(crate::commands::mcp::tool_definitions());
+            defs
+        })
+        .clone()
 }
 
 #[cfg(test)]

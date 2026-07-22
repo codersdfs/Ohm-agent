@@ -1,8 +1,10 @@
 // Read tool implementation
 
-use crate::{Tool, ToolInput, ToolResult, ToolError, ToolUseContext};
+use crate::metadata::{
+    LatencyHint, ToolCategory, ToolErrorSpec, ToolExample, ToolMetadata, ToolSource,
+};
 use crate::schema::string_param;
-use crate::metadata::{ToolMetadata, ToolCategory, LatencyHint, ToolErrorSpec, ToolExample, ToolSource};
+use crate::{Tool, ToolError, ToolInput, ToolResult, ToolUseContext};
 use async_trait::async_trait;
 
 pub struct ReadTool;
@@ -21,8 +23,12 @@ impl Default for ReadTool {
 
 #[async_trait]
 impl Tool for ReadTool {
-    fn name(&self) -> &str { "read" }
-    fn description(&self) -> &str { "Read the contents of a file at the given path" }
+    fn name(&self) -> &str {
+        "read"
+    }
+    fn description(&self) -> &str {
+        "Read the contents of a file at the given path"
+    }
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
@@ -49,9 +55,12 @@ impl Tool for ReadTool {
             name: "read".into(),
             label: "Read File".into(),
             description: "Read the contents of a file at the given path".into(),
-            doc: Some("Returns file contents as a string up to max_result_chars (default 50KB). 
+            doc: Some(
+                "Returns file contents as a string up to max_result_chars (default 50KB). 
 For binary files, returns a hex dump. Use offset/limit to read specific line ranges.
-Respects project allowlists for safe paths.".into()),
+Respects project allowlists for safe paths."
+                    .into(),
+            ),
             category: ToolCategory::FileOperations,
             subcategory: Some("read".into()),
             tags: vec!["file".into(), "view".into(), "cat".into(), "content".into()],
@@ -116,7 +125,9 @@ Respects project allowlists for safe paths.".into()),
     }
 
     async fn call(&self, input: ToolInput, _ctx: &ToolUseContext) -> Result<ToolResult, ToolError> {
-        let path = input.args.get("filePath")
+        let path = input
+            .args
+            .get("filePath")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::new("Missing argument: filePath"))?;
 

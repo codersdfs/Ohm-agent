@@ -58,7 +58,12 @@ impl Widget for &HeaderState {
         let label = format!(" omega v{} ", self.app_version);
 
         let left_spans = vec![
-            Span::styled("Ω ", Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Ω ",
+                Style::default()
+                    .fg(theme::ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(label, theme::style_dim_bold()),
         ];
 
@@ -72,15 +77,15 @@ impl Widget for &HeaderState {
                 .chain(std::iter::repeat('░').take((bar_width - filled) as usize))
                 .collect();
             let pct_text = format!(" {:.0}% ", pct * 100.0);
-            Span::styled(
-                format!("{} {}", bar, pct_text),
-                Style::default().fg(color),
-            )
+            Span::styled(format!("{} {}", bar, pct_text), Style::default().fg(color))
         });
 
         let left_width: u16 = left_spans.iter().map(|s| s.width() as u16).sum();
         let right_width = right_gauge.as_ref().map(|s| s.width() as u16).unwrap_or(0);
-        let fill = area.width.saturating_sub(left_width).saturating_sub(right_width + 1);
+        let fill = area
+            .width
+            .saturating_sub(left_width)
+            .saturating_sub(right_width + 1);
 
         let mut line1_spans = left_spans;
         if fill > 0 {

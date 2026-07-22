@@ -1,8 +1,8 @@
 // Tool trait definition
 
+use crate::metadata::{LatencyHint, ToolCategory, ToolMetadata};
+use crate::{PermissionResult, ToolError, ToolInput, ToolResult, ToolUseContext};
 use async_trait::async_trait;
-use crate::{ToolInput, ToolResult, ToolError, PermissionResult, ToolUseContext};
-use crate::metadata::{ToolMetadata, ToolCategory, LatencyHint};
 
 /// The core Tool trait that all tools must implement
 #[async_trait]

@@ -1,5 +1,5 @@
-use crate::Language;
 use crate::rules::RulesDatabase;
+use crate::Language;
 use std::collections::HashMap;
 
 /// Tracks repeated pattern occurrences and auto-promotes at frequency ≥ 3.
@@ -10,17 +10,29 @@ pub struct RepeatedPatternTracker {
 
 impl RepeatedPatternTracker {
     pub fn new() -> Self {
-        Self { already_promoted: std::collections::HashSet::new() }
+        Self {
+            already_promoted: std::collections::HashSet::new(),
+        }
     }
 
     /// Promote violations into the rules database.
     /// Returns the count of rules newly promoted.
-    pub fn promote_to_db(&mut self, db: &mut RulesDatabase, lang: &Language, violations: &[crate::Violation]) -> u32 {
+    pub fn promote_to_db(
+        &mut self,
+        db: &mut RulesDatabase,
+        lang: &Language,
+        violations: &[crate::Violation],
+    ) -> u32 {
         let mut promoted = 0u32;
 
         for v in violations {
             let cat = format!("{:?}", v.category).to_lowercase();
-            let pattern = v.message.rsplit(": ").next().unwrap_or(&v.message).to_string();
+            let pattern = v
+                .message
+                .rsplit(": ")
+                .next()
+                .unwrap_or(&v.message)
+                .to_string();
             let key = (lang.to_key(), pattern.clone());
 
             // Always promote_or_increment — this is an idempotent database operation
@@ -61,8 +73,13 @@ pub fn find_repeated_patterns(content: &str, lang: &Language) -> Vec<crate::Viol
                     if *count >= 4 {
                         violations.push(crate::Violation {
                             category: crate::ViolationCategory::Repeated,
-                            message: format!("Type `{}` has {} impl blocks: consider combining or using macros", name, count),
-                            tool_hint: Some("Merge related impl blocks or use derive macros".into()),
+                            message: format!(
+                                "Type `{}` has {} impl blocks: consider combining or using macros",
+                                name, count
+                            ),
+                            tool_hint: Some(
+                                "Merge related impl blocks or use derive macros".into(),
+                            ),
                             line: None,
                         });
                     }
@@ -75,7 +92,10 @@ pub fn find_repeated_patterns(content: &str, lang: &Language) -> Vec<crate::Viol
                 if variant_count > 8 {
                     violations.push(crate::Violation {
                         category: crate::ViolationCategory::Repeated,
-                        message: format!("Error enum has {} variants: consider grouping into sub-enums", variant_count + 1),
+                        message: format!(
+                            "Error enum has {} variants: consider grouping into sub-enums",
+                            variant_count + 1
+                        ),
                         tool_hint: Some("Split large error enums into nested enums".into()),
                         line: None,
                     });
@@ -89,8 +109,14 @@ pub fn find_repeated_patterns(content: &str, lang: &Language) -> Vec<crate::Viol
                 if count > 6 {
                     violations.push(crate::Violation {
                         category: crate::ViolationCategory::Repeated,
-                        message: format!("{} interface declarations: consider extracting shared types", count),
-                        tool_hint: Some("Use `type` intersections or base interfaces to reduce duplication".into()),
+                        message: format!(
+                            "{} interface declarations: consider extracting shared types",
+                            count
+                        ),
+                        tool_hint: Some(
+                            "Use `type` intersections or base interfaces to reduce duplication"
+                                .into(),
+                        ),
                         line: None,
                     });
                 }
@@ -113,8 +139,13 @@ pub fn find_repeated_patterns(content: &str, lang: &Language) -> Vec<crate::Viol
             if try_count > 5 {
                 violations.push(crate::Violation {
                     category: crate::ViolationCategory::Repeated,
-                    message: format!("{} try/except blocks: consider a context manager or wrapper", try_count),
-                    tool_hint: Some("Extract error handling into a decorator or context manager".into()),
+                    message: format!(
+                        "{} try/except blocks: consider a context manager or wrapper",
+                        try_count
+                    ),
+                    tool_hint: Some(
+                        "Extract error handling into a decorator or context manager".into(),
+                    ),
                     line: None,
                 });
             }
@@ -128,21 +159,28 @@ pub fn find_repeated_patterns(content: &str, lang: &Language) -> Vec<crate::Viol
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Language;
     use crate::rules::RulesDatabase;
+    use crate::Language;
 
     #[test]
     fn test_repeated_impl_blocks() {
         let content = "impl Foo {}\nimpl Foo {}\nimpl Foo {}\nimpl Foo {}\nimpl Foo {}";
         let violations = find_repeated_patterns(content, &Language::Rust);
-        let impl_v = violations.iter().find(|v| v.message.contains("impl blocks"));
-        assert!(impl_v.is_some(), "Should flag repeated impl blocks: {:?}", violations);
+        let impl_v = violations
+            .iter()
+            .find(|v| v.message.contains("impl blocks"));
+        assert!(
+            impl_v.is_some(),
+            "Should flag repeated impl blocks: {:?}",
+            violations
+        );
     }
 
     #[test]
     fn test_long_if_else_chain() {
         // `} else if ` on same lines so `.matches("} else if ")` works
-        let content = "if (a) {} else if (b) {} else if (c) {} else if (d) {} else if (e) {} else if (f) {}";
+        let content =
+            "if (a) {} else if (b) {} else if (c) {} else if (d) {} else if (e) {} else if (f) {}";
         let violations = find_repeated_patterns(content, &Language::TypeScript);
         let if_v = violations.iter().find(|v| v.message.contains("if-else"));
         assert!(if_v.is_some(), "Should flag long if-else chain");
@@ -153,7 +191,11 @@ mod tests {
         let content = "try:\n    pass\ntry:\n    pass\ntry:\n    pass\ntry:\n    pass\ntry:\n    pass\ntry:\n    pass";
         let violations = find_repeated_patterns(content, &Language::Python);
         let try_v = violations.iter().find(|v| v.message.contains("try/except"));
-        assert!(try_v.is_some(), "Should flag repeated try blocks: {:?}", violations);
+        assert!(
+            try_v.is_some(),
+            "Should flag repeated try blocks: {:?}",
+            violations
+        );
     }
 
     #[test]
@@ -193,7 +235,10 @@ mod tests {
     fn test_clean_code_no_repeated_violations() {
         let content = "fn foo() {}\nfn bar() {}";
         let violations = find_repeated_patterns(content, &Language::Rust);
-        assert!(violations.is_empty(), "Should not flag clean code: {:?}", violations);
+        assert!(
+            violations.is_empty(),
+            "Should not flag clean code: {:?}",
+            violations
+        );
     }
 }
-

@@ -16,13 +16,15 @@ use ratatui::widgets::{Paragraph, Widget};
 
 use ratata::prelude::*;
 
+use omega_core::session::SessionStore;
 use omega_core::tui::component::{Action, Component, UiStreamEvent};
 use omega_core::tui::editor::{EditorMode, EditorState};
-use omega_core::tui::status::StatusState;
 use omega_core::tui::spinner::{OmegaSpinner, SpinnerState};
+use omega_core::tui::status::StatusState;
 use omega_core::tui::theme;
-use omega_core::tui::transcript::{self, TranscriptEntry, Transcript};
-use omega_core::{commands, AppState, ChatEmitter, default_db_path};
+use omega_core::tui::transcript::{self, Transcript, TranscriptEntry};
+use omega_core::{commands, default_db_path, AppState, ChatEmitter};
+use std::sync::Mutex;
 
 // ── Event types for streaming ────────────────────────────────────────────────
 
@@ -57,7 +59,12 @@ impl ChatEmitter for ChannelEmitter {
         });
         Ok(())
     }
-    fn emit_tool_result(&self, name: &str, success: bool, output: &str) -> std::result::Result<(), String> {
+    fn emit_tool_result(
+        &self,
+        name: &str,
+        success: bool,
+        output: &str,
+    ) -> std::result::Result<(), String> {
         let _ = self.tx.send(UiStreamEvent::ToolResult {
             name: name.to_string(),
             success,
@@ -105,6 +112,9 @@ struct App {
     session_tokens_out: u64,
     session_messages: u64,
 
+    // Persistent conversation session (JSONL)
+    session: Arc<Mutex<SessionStore>>,
+
     // Help overlay
     show_help: bool,
 
@@ -123,12 +133,23 @@ struct App {
 }
 
 impl App {
-    fn new(config: providers::ProviderConfig) -> Self {
-        let state = Arc::new(AppState::new_with_provider_config(&default_db_path(), config.clone()));
+    fn new(
+        config: providers::ProviderConfig,
+        session: SessionStore,
+        load: omega_core::session::SessionLoad,
+    ) -> Self {
+        let state = Arc::new(AppState::new_with_provider_config(
+            &default_db_path(),
+            config.clone(),
+        ));
         let _model = config.model.clone();
         let _kind = format!("{}", config.kind);
         let editor = EditorState::new();
         let status = StatusState::new();
+        let session_id = session.id.clone();
+        let resumed = load.resumed;
+        let msg_count = load.messages.len();
+        let warnings = load.warnings.clone();
 
         let cfg_for_panel = config.clone();
         let mut app = Self {
@@ -149,20 +170,53 @@ impl App {
             session_tokens_out: 0,
             session_messages: 0,
 
+            session: Arc::new(Mutex::new(session)),
+
             show_help: false,
             show_provider_panel: false,
             show_sidebar: true,
             tool_output_expanded: false,
-            provider_panel_state: omega_core::tui::provider_panel::ProviderPanelState::from_config(&cfg_for_panel),
+            provider_panel_state: omega_core::tui::provider_panel::ProviderPanelState::from_config(
+                &cfg_for_panel,
+            ),
 
             should_quit: false,
         };
 
         // Welcome notice
         app.transcript.entries.push(TranscriptEntry::Notice {
-            text: format!("Ω v{} — {} ({}). Type a message to start.", env!("CARGO_PKG_VERSION"), app.config.model, app.config.kind),
+            text: format!(
+                "Ω v{} — {} ({}). Type a message to start.",
+                env!("CARGO_PKG_VERSION"),
+                app.config.model,
+                app.config.kind
+            ),
             is_error: false,
         });
+
+        // Session resume / new notice
+        if resumed {
+            app.transcript.entries.push(TranscriptEntry::Notice {
+                text: format!(
+                    "Resumed session {} ({} messages)",
+                    &session_id[..session_id.len().min(8)],
+                    msg_count
+                ),
+                is_error: false,
+            });
+            app.transcript.load_from_session(load.messages);
+        } else {
+            app.transcript.entries.push(TranscriptEntry::Notice {
+                text: format!("New session {}", &session_id[..session_id.len().min(8)]),
+                is_error: false,
+            });
+        }
+        for w in warnings {
+            app.transcript.entries.push(TranscriptEntry::Notice {
+                text: format!("Session load: {w}"),
+                is_error: true,
+            });
+        }
 
         // Show setup hint when API key is needed for cloud providers
         let is_local = matches!(app.config.kind, providers::ProviderKind::Local);
@@ -221,16 +275,18 @@ impl App {
 
         // Provider panel takes over all key handling
         if self.show_provider_panel {
-            let action = omega_core::tui::provider_panel::handle_key(
-                &mut self.provider_panel_state, key,
-            );
+            let action =
+                omega_core::tui::provider_panel::handle_key(&mut self.provider_panel_state, key);
             match action {
                 omega_core::tui::provider_panel::PanelAction::Apply => {
                     let new_config = self.provider_panel_state.to_config(&self.config);
                     self.config = new_config.clone();
                     save_config(&self.config);
                     self.transcript.entries.push(TranscriptEntry::Notice {
-                        text: format!("Provider set to {} ({})", self.config.model, self.config.kind),
+                        text: format!(
+                            "Provider set to {} ({})",
+                            self.config.model, self.config.kind
+                        ),
                         is_error: false,
                     });
                     self.show_provider_panel = false;
@@ -259,7 +315,8 @@ impl App {
         // Ctrl+E: globally expand/collapse bounded write and edit previews.
         if key.code == KeyCode::Char('e') && key.modifiers.contains(KeyModifiers::CONTROL) {
             self.tool_output_expanded = !self.tool_output_expanded;
-            self.transcript.set_tools_expanded(self.tool_output_expanded);
+            self.transcript
+                .set_tools_expanded(self.tool_output_expanded);
             return;
         }
 
@@ -278,13 +335,21 @@ impl App {
             }
             KeyCode::Down => {
                 self.recall_history_down();
-                transcript::scroll_down(&mut self.transcript.scroll, self.transcript.entries.len(), 3);
+                transcript::scroll_down(
+                    &mut self.transcript.scroll,
+                    self.transcript.entries.len(),
+                    3,
+                );
             }
             KeyCode::PageUp => {
                 transcript::scroll_up(&mut self.transcript.scroll, 10);
             }
             KeyCode::PageDown => {
-                transcript::scroll_down(&mut self.transcript.scroll, self.transcript.entries.len(), 10);
+                transcript::scroll_down(
+                    &mut self.transcript.scroll,
+                    self.transcript.entries.len(),
+                    10,
+                );
             }
             _ => {}
         }
@@ -305,7 +370,11 @@ impl App {
 
         // Mark the pending assistant entry as stopped
         for entry in self.transcript.entries.iter_mut().rev() {
-            if let TranscriptEntry::Assistant { ref mut is_streaming, .. } = entry {
+            if let TranscriptEntry::Assistant {
+                ref mut is_streaming,
+                ..
+            } = entry
+            {
                 *is_streaming = false;
                 break;
             }
@@ -364,7 +433,11 @@ impl App {
     fn handle_mouse(&mut self, kind: MouseEventKind) {
         match kind {
             MouseEventKind::ScrollDown => {
-                transcript::scroll_down(&mut self.transcript.scroll, self.transcript.entries.len(), 3);
+                transcript::scroll_down(
+                    &mut self.transcript.scroll,
+                    self.transcript.entries.len(),
+                    3,
+                );
             }
             MouseEventKind::ScrollUp => {
                 transcript::scroll_up(&mut self.transcript.scroll, 3);
@@ -415,31 +488,49 @@ impl App {
                 self.transcript.messages.clear();
                 self.editor.buffer.clear();
             }
-            "/tools" => {
-                match commands::tools::list_tools() {
-                    Ok(tools) => {
-                        let list = tools.join(", ");
-                        self.transcript.entries.push(TranscriptEntry::Notice {
-                            text: format!("Available tools: {}", list),
-                            is_error: false,
-                        });
-                    }
-                    Err(e) => {
-                        self.transcript.entries.push(TranscriptEntry::Notice {
-                            text: format!("Error listing tools: {}", e),
-                            is_error: true,
-                        });
-                    }
+            "/tools" => match commands::tools::list_tools() {
+                Ok(tools) => {
+                    let list = tools.join(", ");
+                    self.transcript.entries.push(TranscriptEntry::Notice {
+                        text: format!("Available tools: {}", list),
+                        is_error: false,
+                    });
                 }
-            }
-            "/model" | "/provider" | "/providers" | "/p" => {
+                Err(e) => {
+                    self.transcript.entries.push(TranscriptEntry::Notice {
+                        text: format!("Error listing tools: {}", e),
+                        is_error: true,
+                    });
+                }
+            },
+            "/model" => {
                 if self.is_streaming {
                     self.transcript.entries.push(TranscriptEntry::Notice {
                         text: "Can't open provider panel while streaming.".into(),
                         is_error: true,
                     });
                 } else {
-                    self.provider_panel_state = omega_core::tui::provider_panel::ProviderPanelState::from_config(&self.config);
+                    // Model-first: jump straight to model picker for current provider.
+                    self.provider_panel_state =
+                        omega_core::tui::provider_panel::ProviderPanelState::from_config_at(
+                            &self.config,
+                            omega_core::tui::provider_panel::WizardStep::Model,
+                        );
+                    self.show_provider_panel = true;
+                }
+            }
+            "/provider" | "/providers" | "/p" => {
+                if self.is_streaming {
+                    self.transcript.entries.push(TranscriptEntry::Notice {
+                        text: "Can't open provider panel while streaming.".into(),
+                        is_error: true,
+                    });
+                } else {
+                    // Provider list is step 1 — show that when user asks for providers.
+                    self.provider_panel_state =
+                        omega_core::tui::provider_panel::ProviderPanelState::from_config(
+                            &self.config,
+                        );
                     self.show_provider_panel = true;
                 }
             }
@@ -492,6 +583,7 @@ impl App {
         // Shared message list for the task to modify
         let messages = Arc::new(tokio::sync::Mutex::new(self.transcript.messages.clone()));
         let cancel_flag = self.cancel_flag.clone();
+        let session = self.session.clone();
 
         let event_tx = tx.clone();
 
@@ -531,6 +623,15 @@ impl App {
             // Check cancellation (don't send events if cancelled)
             if cancel_flag.load(Ordering::SeqCst) {
                 return;
+            }
+
+            // Persist completed turn (append-only; SessionStore skips already-written prefix).
+            if result.is_ok() {
+                if let Ok(mut store) = session.lock() {
+                    if let Err(e) = store.append_messages(&saved_msgs) {
+                        log::warn!("session append failed: {e}");
+                    }
+                }
             }
 
             // Send done event with result
@@ -573,7 +674,11 @@ impl App {
                 UiStreamEvent::ToolCall { .. } => {
                     self.status.set_spinner_state(SpinnerState::ToolCall);
                 }
-                UiStreamEvent::Done { tokens_in, tokens_out, .. } => {
+                UiStreamEvent::Done {
+                    tokens_in,
+                    tokens_out,
+                    ..
+                } => {
                     self.session_tokens_in += *tokens_in as u64;
                     self.session_tokens_out += *tokens_out as u64;
                     self.session_messages += 1;
@@ -692,13 +797,26 @@ impl App {
     fn render_widgets(&mut self, frame: &mut ratatui::Frame) {
         let area = frame.size();
 
+        // Modal overlays own the full screen — skip chat chrome so transcript /
+        // metrics / tool boxes cannot bleed through a transparent panel.
+        if self.show_provider_panel && !self.show_help {
+            fill_area(frame, area, theme::SURFACE);
+            omega_core::tui::provider_panel::render(
+                area,
+                frame.buffer_mut(),
+                &self.provider_panel_state,
+                &self.config,
+            );
+            return;
+        }
+
         // ── Full-screen background ──────────────────────────────────────
         // Reset every cell so the canvas inherits the terminal background.
         fill_area(frame, area, theme::BG);
 
         // ── Layout: vertical stack ──────────────────────────────────────
         let top_bar_h = 1u16;
-        let metrics_h = 3u16;  // 3 lines: token gauge + model/context row + tool chips
+        let metrics_h = 3u16; // 3 lines: token gauge + model/context row + tool chips
         let footer_h = 1u16;
         // Input is a fixed 3-row strip: top line, content, bottom line.
         let editor_h = 3u16;
@@ -706,11 +824,11 @@ impl App {
         let vert = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(top_bar_h),       // system bar
-                Constraint::Length(metrics_h),       // metrics panel
-                Constraint::Min(4),                  // process (transcript)
-                Constraint::Length(editor_h),        // command input
-                Constraint::Length(footer_h),        // footer
+                Constraint::Length(top_bar_h), // system bar
+                Constraint::Length(metrics_h), // metrics panel
+                Constraint::Min(4),            // process (transcript)
+                Constraint::Length(editor_h),  // command input
+                Constraint::Length(footer_h),  // footer
             ])
             .split(area);
 
@@ -730,7 +848,13 @@ impl App {
         render_process_panel(frame, process_area, &mut self.transcript, self.show_help);
 
         // ── Command input (glass-bordered) ───────────────────────────────
-        render_command_input(frame, editor_area, &self.editor, self.is_streaming, &self.status.spinner);
+        render_command_input(
+            frame,
+            editor_area,
+            &self.editor,
+            self.is_streaming,
+            &self.status.spinner,
+        );
 
         // ── Footer bar ──────────────────────────────────────────────────
         self.status.hint_text = Some("[CR] COMMIT | [^C] ABORT | ? help".into());
@@ -744,19 +868,11 @@ impl App {
         frame.render_widget(&self.status, footer_area);
 
         // ── Overlays ────────────────────────────────────────────────────
-        if self.show_provider_panel && !self.show_help {
-            omega_core::tui::provider_panel::render(
-                area,
-                frame.buffer_mut(),
-                &self.provider_panel_state,
-                &self.config,
-            );
-        }
         if self.show_help {
             omega_core::tui::help::render(area, frame.buffer_mut());
         }
-    }  // end render_widgets
-}  // end impl App
+    } // end render_widgets
+} // end impl App
 
 impl ratata::screen::Screen for App {
     fn render(&mut self, f: &mut ratatui::Frame) {
@@ -781,7 +897,11 @@ impl ratata::screen::Screen for App {
                     state: msg.state,
                 };
                 self.handle_key(key);
-                if self.should_quit { Some(Command::Quit) } else { None }
+                if self.should_quit {
+                    Some(Command::Quit)
+                } else {
+                    None
+                }
             }
             Message::Mouse(event) => {
                 self.handle_mouse(event.kind);
@@ -792,7 +912,6 @@ impl ratata::screen::Screen for App {
         }
     }
 }
-
 
 // ── Layout helpers ──────────────────────────────────────────────────────────
 
@@ -810,9 +929,7 @@ fn fill_area(frame: &mut ratatui::Frame, area: Rect, color: Color) {
 
 /// Draw a horizontal rule line.
 
-
 /// Draw a vertical line (for glass sidebar edge).
-
 
 /// Render a glass-style bordered block helper: fills inner bg, draws box-drawing border.
 fn render_glass_block(
@@ -845,45 +962,83 @@ fn render_glass_block(
 
     // Top border ┌─ title ────────┐
     let title_chars: Vec<char> = title.chars().collect();
-    let dash_count = bw.saturating_sub(title_chars.len() as u16).saturating_sub(4);
+    let dash_count = bw
+        .saturating_sub(title_chars.len() as u16)
+        .saturating_sub(4);
     {
         let y = area.y;
         // ┌
-        frame.buffer_mut().get_mut(area.x, y).set_symbol("┌").set_fg(border_color);
+        frame
+            .buffer_mut()
+            .get_mut(area.x, y)
+            .set_symbol("┌")
+            .set_fg(border_color);
         // title
         for (i, ch) in title_chars.iter().enumerate() {
             let cx = area.x + 2 + i as u16;
             if cx < area.x + bw {
-                frame.buffer_mut().get_mut(cx, y).set_char(*ch).set_fg(title_color);
+                frame
+                    .buffer_mut()
+                    .get_mut(cx, y)
+                    .set_char(*ch)
+                    .set_fg(title_color);
             }
         }
         // ─ fill
         for i in 0..dash_count {
             let cx = area.x + 2 + title_chars.len() as u16 + i;
             if cx < area.x + bw - 1 {
-                frame.buffer_mut().get_mut(cx, y).set_symbol("─").set_fg(border_color);
+                frame
+                    .buffer_mut()
+                    .get_mut(cx, y)
+                    .set_symbol("─")
+                    .set_fg(border_color);
             }
         }
         // ┐
-        frame.buffer_mut().get_mut(area.x + bw - 1, y).set_symbol("┐").set_fg(border_color);
+        frame
+            .buffer_mut()
+            .get_mut(area.x + bw - 1, y)
+            .set_symbol("┐")
+            .set_fg(border_color);
     }
 
     // Sides │ … │
     for dy in 1..bh.saturating_sub(1) {
         let y = area.y + dy;
-        frame.buffer_mut().get_mut(area.x, y).set_symbol("│").set_fg(border_color);
-        frame.buffer_mut().get_mut(area.x + bw - 1, y).set_symbol("│").set_fg(border_color);
+        frame
+            .buffer_mut()
+            .get_mut(area.x, y)
+            .set_symbol("│")
+            .set_fg(border_color);
+        frame
+            .buffer_mut()
+            .get_mut(area.x + bw - 1, y)
+            .set_symbol("│")
+            .set_fg(border_color);
     }
 
     // Bottom border └──────────────┘
     {
         let y = area.y + bh - 1;
-        frame.buffer_mut().get_mut(area.x, y).set_symbol("└").set_fg(border_color);
+        frame
+            .buffer_mut()
+            .get_mut(area.x, y)
+            .set_symbol("└")
+            .set_fg(border_color);
         for i in 1..bw.saturating_sub(1) {
             let cx = area.x + i;
-            frame.buffer_mut().get_mut(cx, y).set_symbol("─").set_fg(border_color);
+            frame
+                .buffer_mut()
+                .get_mut(cx, y)
+                .set_symbol("─")
+                .set_fg(border_color);
         }
-        frame.buffer_mut().get_mut(area.x + bw - 1, y).set_symbol("┘").set_fg(border_color);
+        frame
+            .buffer_mut()
+            .get_mut(area.x + bw - 1, y)
+            .set_symbol("┘")
+            .set_fg(border_color);
     }
 
     inner_area
@@ -892,10 +1047,17 @@ fn render_glass_block(
 // ── Top system bar ──────────────────────────────────────────────────────────
 
 fn render_top_bar(frame: &mut ratatui::Frame, area: Rect, model: &str) {
-    if area.height < 1 || area.width < 30 { return; }
+    if area.height < 1 || area.width < 30 {
+        return;
+    }
 
     let left_spans = vec![
-        Span::styled(" OMEGA_AGENT ", Style::default().fg(theme::PRIMARY).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " OMEGA_AGENT ",
+            Style::default()
+                .fg(theme::PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled("v", theme::style_dim()),
         Span::styled(env!("CARGO_PKG_VERSION"), theme::style_dim()),
         Span::styled(" · ", theme::style_dim()),
@@ -913,7 +1075,9 @@ fn render_top_bar(frame: &mut ratatui::Frame, area: Rect, model: &str) {
 
     let mut out = vec![];
     out.extend(left_spans);
-    if fill > 0 { out.push(Span::raw(" ".repeat(fill as usize))); }
+    if fill > 0 {
+        out.push(Span::raw(" ".repeat(fill as usize)));
+    }
     out.push(Span::styled(right_hint, theme::style_dim()));
 
     let para = Paragraph::new(Line::from(out));
@@ -940,10 +1104,15 @@ fn render_metrics_panel(
     config: &providers::ProviderConfig,
     _is_streaming: bool,
 ) {
-    if area.height < 3 || area.width < 40 { return; }
+    if area.height < 3 || area.width < 40 {
+        return;
+    }
 
     let inner = render_glass_block(
-        frame, area, theme::SURFACE_LOW, theme::OUTLINE,
+        frame,
+        area,
+        theme::SURFACE_LOW,
+        theme::OUTLINE,
         " SYSTEM METRICS & ACTIVE TOOLS ",
         theme::PRIMARY,
     );
@@ -956,8 +1125,10 @@ fn render_metrics_panel(
         Span::styled("TOKENS ", theme::style_dim()),
         Span::styled(usage, Style::default().fg(theme::PRIMARY)),
     ];
-    Paragraph::new(Line::from(gauge_spans))
-        .render(Rect::new(inner.x + 1, gauge_y, inner.width.saturating_sub(2), 1), frame.buffer_mut());
+    Paragraph::new(Line::from(gauge_spans)).render(
+        Rect::new(inner.x + 1, gauge_y, inner.width.saturating_sub(2), 1),
+        frame.buffer_mut(),
+    );
 
     // Row 1: model only
     let row1_y = gauge_y + 1;
@@ -966,8 +1137,10 @@ fn render_metrics_panel(
         Span::styled("MODEL ", theme::style_dim()),
         Span::styled(model_str, Style::default().fg(theme::SECONDARY)),
     ];
-    Paragraph::new(Line::from(model_spans))
-        .render(Rect::new(inner.x + 1, row1_y, inner.width.saturating_sub(2), 1), frame.buffer_mut());
+    Paragraph::new(Line::from(model_spans)).render(
+        Rect::new(inner.x + 1, row1_y, inner.width.saturating_sub(2), 1),
+        frame.buffer_mut(),
+    );
 
     // Row 2: active tool chips
     if inner.height > 2 {
@@ -980,12 +1153,17 @@ fn render_metrics_panel(
         ];
         let mut chip_spans: Vec<Span> = Vec::new();
         for (i, (label, col)) in chips.iter().enumerate() {
-            if i > 0 { chip_spans.push(Span::raw(" ")); }
+            if i > 0 {
+                chip_spans.push(Span::raw(" "));
+            }
             chip_spans.push(Span::styled(*label, Style::default().fg(*col)));
         }
         Paragraph::new(Line::from(chip_spans))
             .alignment(Alignment::Right)
-            .render(Rect::new(inner.x + 1, chips_y, inner.width.saturating_sub(2), 1), frame.buffer_mut());
+            .render(
+                Rect::new(inner.x + 1, chips_y, inner.width.saturating_sub(2), 1),
+                frame.buffer_mut(),
+            );
     }
 }
 
@@ -997,7 +1175,9 @@ fn render_process_panel(
     transcript: &mut Transcript,
     _show_help: bool,
 ) {
-    if area.height < 3 || area.width < 20 { return; }
+    if area.height < 3 || area.width < 20 {
+        return;
+    }
 
     // No frame around the transcript — just the content on the terminal canvas.
     fill_area(frame, area, theme::BG);
@@ -1013,7 +1193,9 @@ fn render_command_input(
     is_streaming: bool,
     spinner: &OmegaSpinner,
 ) {
-    if area.height < 3 || area.width < 4 { return; }
+    if area.height < 3 || area.width < 4 {
+        return;
+    }
 
     // Inherit the terminal background — no dark recessed fill.
     fill_area(frame, area, theme::BG);
@@ -1025,18 +1207,30 @@ fn render_command_input(
 
     // Top and bottom rules only — no side borders, no labels.
     for x in area.x..area.x + area.width {
-        frame.buffer_mut().get_mut(x, top_y).set_symbol("─").set_style(line_style);
-        frame.buffer_mut().get_mut(x, bottom_y).set_symbol("─").set_style(line_style);
+        frame
+            .buffer_mut()
+            .get_mut(x, top_y)
+            .set_symbol("─")
+            .set_style(line_style);
+        frame
+            .buffer_mut()
+            .get_mut(x, bottom_y)
+            .set_symbol("─")
+            .set_style(line_style);
     }
 
     let content_x = area.x + 1;
     let content_w = area.width.saturating_sub(2);
-    if content_w == 0 { return; }
+    if content_w == 0 {
+        return;
+    }
 
     if is_streaming && editor.buffer.is_empty() {
         let activity = format!("{} {}", spinner.current_glyph(), spinner.current_phrase());
-        Paragraph::new(Line::from(Span::styled(activity, spinner.glyph_style())))
-            .render(Rect::new(content_x, content_y, content_w, 1), frame.buffer_mut());
+        Paragraph::new(Line::from(Span::styled(activity, spinner.glyph_style()))).render(
+            Rect::new(content_x, content_y, content_w, 1),
+            frame.buffer_mut(),
+        );
     } else if !editor.buffer.is_empty() {
         // Single-line display: keep the tail of multi-line text visible.
         let display = editor.buffer.lines().last().unwrap_or("");
@@ -1046,12 +1240,17 @@ fn render_command_input(
         } else {
             display.to_string()
         };
-        Paragraph::new(Line::from(Span::styled(shown, Style::default().fg(theme::FG))))
-            .render(Rect::new(content_x, content_y, content_w, 1), frame.buffer_mut());
+        Paragraph::new(Line::from(Span::styled(
+            shown,
+            Style::default().fg(theme::FG),
+        )))
+        .render(
+            Rect::new(content_x, content_y, content_w, 1),
+            frame.buffer_mut(),
+        );
     }
     // Empty idle: just the two horizontal lines.
 }
-
 
 // ── Config helpers ──────────────────────────────────────────────────────────
 
@@ -1074,7 +1273,11 @@ fn load_config() -> CliConfig {
     std::fs::read_to_string(&path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or(CliConfig { provider: None, model: None, base_url: None })
+        .unwrap_or(CliConfig {
+            provider: None,
+            model: None,
+            base_url: None,
+        })
 }
 
 fn save_config(config: &providers::ProviderConfig) {
@@ -1114,8 +1317,8 @@ fn load_provider_config(
         .map(providers::ProviderKind::from_str)
         .unwrap_or_else(|| {
             // Auto-detect: if API key is set, use OpenAI; otherwise Local (Ollama)
-            let has_api_key = std::env::var("OMEGA_API_KEY").is_ok()
-                || config_dir().join(".env").exists();
+            let has_api_key =
+                std::env::var("OMEGA_API_KEY").is_ok() || config_dir().join(".env").exists();
             if has_api_key {
                 providers::ProviderKind::OpenAI
             } else {
@@ -1124,7 +1327,8 @@ fn load_provider_config(
         });
 
     // Resolve model
-    let model = cli_cfg.model
+    let model = cli_cfg
+        .model
         .or_else(|| std::env::var("OMEGA_MODEL").ok())
         .unwrap_or_else(|| match kind {
             providers::ProviderKind::OpenAI => "gpt-4o-mini".into(),
@@ -1135,13 +1339,16 @@ fn load_provider_config(
         });
 
     // Resolve base URL
-    let base_url = cli_cfg.base_url
+    let base_url = cli_cfg
+        .base_url
         .or_else(|| std::env::var("OMEGA_BASE_URL").ok());
 
     // Resolve API key
     let api_key = std::env::var("OMEGA_API_KEY").ok().or_else(|| {
         let p = config_dir().join(".env");
-        std::fs::read_to_string(&p).ok().map(|s| s.trim().to_string())
+        std::fs::read_to_string(&p)
+            .ok()
+            .map(|s| s.trim().to_string())
     });
 
     providers::ProviderConfig {
@@ -1157,16 +1364,39 @@ fn load_provider_config(
 // ── CLI ──────────────────────────────────────────────────────────────────────
 
 #[derive(Parser)]
-#[command(name = "omega", version, about = "Omega Agent TUI — AI coding assistant")]
+#[command(
+    name = "omega",
+    version,
+    about = "Omega Agent TUI — AI coding assistant"
+)]
 struct Cli {
-    #[arg(short = 'p', long, help = "Provider (openai, anthropic, google, local, ollama, groq, etc.)")]
+    #[arg(
+        short = 'p',
+        long,
+        help = "Provider (openai, anthropic, google, local, ollama, groq, etc.)"
+    )]
     provider: Option<String>,
 
-    #[arg(short = 'm', long, help = "Model name (e.g. gpt-4o-mini, llama3.1:8b, claude-sonnet-4)")]
+    #[arg(
+        short = 'm',
+        long,
+        help = "Model name (e.g. gpt-4o-mini, llama3.1:8b, claude-sonnet-4)"
+    )]
     model: Option<String>,
 
     #[arg(short = 'b', long, help = "Base URL for the provider API")]
     base_url: Option<String>,
+
+    /// Resume a specific conversation session by id
+    #[arg(long = "session", value_name = "ID", help = "Resume session <id>")]
+    session: Option<String>,
+
+    /// Force a brand-new conversation session (ignore last-session marker)
+    #[arg(
+        long = "new-session",
+        help = "Start a new session instead of resuming the last one"
+    )]
+    new_session: bool,
 }
 
 // entry point
@@ -1175,14 +1405,19 @@ fn main() -> Result<()> {
     // `info` would write behind Ratatui and corrupt the layout, so default to
     // `error` unless the caller explicitly exports RUST_LOG.
     let default_filter = std::env::var("RUST_LOG").unwrap_or_else(|_| "error".to_string());
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(&default_filter)).init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(&default_filter))
+        .init();
     let cli = Cli::parse();
     let config = load_provider_config(cli.provider, cli.model, cli.base_url);
 
     let model = config.model.clone();
     let kind = config.kind.to_string();
 
-    let app = App::new(config);
+    let (session_store, session_load) = SessionStore::resolve(cli.session, cli.new_session)
+        .map_err(|e| anyhow::anyhow!("session: {e}"))?;
+    let session_id = session_store.id.clone();
+
+    let app = App::new(config, session_store, session_load);
 
     // Create a tokio runtime for background streaming tasks
     let rt = tokio::runtime::Runtime::new()?;
@@ -1193,14 +1428,18 @@ fn main() -> Result<()> {
     Application::new()
         .tick_rate(Duration::from_millis(80))
         .screen(app)
-        .on_startup(|| Command::Batch(vec![
-            Command::EnableRawMode,
-            Command::crossterm(crossterm::terminal::EnterAlternateScreen),
-        ]))
-        .on_shutdown(|| Command::Batch(vec![
-            Command::crossterm(crossterm::terminal::LeaveAlternateScreen),
-            Command::DisableRawMode,
-        ]))
+        .on_startup(|| {
+            Command::Batch(vec![
+                Command::EnableRawMode,
+                Command::crossterm(crossterm::terminal::EnterAlternateScreen),
+            ])
+        })
+        .on_shutdown(|| {
+            Command::Batch(vec![
+                Command::crossterm(crossterm::terminal::LeaveAlternateScreen),
+                Command::DisableRawMode,
+            ])
+        })
         .build(std::io::stdout(), backend)?
         .run::<App>()?;
 
@@ -1210,6 +1449,7 @@ fn main() -> Result<()> {
     println!("Ω Omega Agent — session summary");
     println!("  Model:     {}", model);
     println!("  Provider:  {}", kind);
+    println!("  Session:   {}", session_id);
     println!("  Tokens:    {} in / {} out", tokens_in, tokens_out);
     println!();
 

@@ -1,6 +1,6 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Style, Modifier};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Widget};
 
@@ -10,7 +10,7 @@ use super::theme;
 #[derive(Clone)]
 pub struct EditorState {
     pub buffer: String,
-    pub cursor: usize,       // Byte offset into buffer
+    pub cursor: usize, // Byte offset into buffer
     pub state: EditorMode,
     /// Slash-command suggestions (popup above editor)
     pub suggestions: Vec<String>,
@@ -71,7 +71,9 @@ impl EditorState {
     pub fn delete(&mut self) {
         if self.cursor < self.buffer.len() {
             let next = self.buffer[self.cursor..].char_indices().nth(1);
-            let end = next.map(|(i, _)| self.cursor + i).unwrap_or(self.buffer.len());
+            let end = next
+                .map(|(i, _)| self.cursor + i)
+                .unwrap_or(self.buffer.len());
             self.buffer.drain(self.cursor..end);
         }
     }
@@ -144,7 +146,12 @@ impl Widget for &EditorState {
             .borders(Borders::TOP)
             .border_type(BorderType::Plain)
             .border_style(border_style)
-            .title(Line::from(Span::styled(label, Style::default().fg(border_color).add_modifier(Modifier::DIM))))
+            .title(Line::from(Span::styled(
+                label,
+                Style::default()
+                    .fg(border_color)
+                    .add_modifier(Modifier::DIM),
+            )))
             .style(Style::default().bg(theme::RECESSED));
 
         let text = if self.buffer.is_empty() {
@@ -158,20 +165,14 @@ impl Widget for &EditorState {
             Text::from(lines)
         };
 
-        let para = Paragraph::new(text)
-            .block(block);
+        let para = Paragraph::new(text).block(block);
 
         para.render(area, buf);
     }
 }
 
 /// Render slash-command suggestion popup above the editor.
-pub fn render_suggestions(
-    area: Rect,
-    buf: &mut Buffer,
-    suggestions: &[String],
-    selected: usize,
-) {
+pub fn render_suggestions(area: Rect, buf: &mut Buffer, suggestions: &[String], selected: usize) {
     if suggestions.is_empty() || area.height < 1 {
         return;
     }
@@ -180,17 +181,14 @@ pub fn render_suggestions(
     let popup_height = max_height + 2; // border
     let popup_y = area.y.saturating_sub(popup_height);
 
-    let popup_area = Rect::new(
-        area.x,
-        popup_y,
-        area.width.min(40),
-        popup_height,
-    );
+    let popup_area = Rect::new(area.x, popup_y, area.width.min(40), popup_height);
 
     let mut lines = Vec::new();
     for (i, s) in suggestions.iter().enumerate().take(max_height as usize) {
         let style = if i == selected {
-            Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(theme::ACCENT)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme::DIM)
         };
@@ -221,7 +219,10 @@ impl Component for EditorState {
         }
         match key.code {
             KeyCode::Enter => {
-                if key.modifiers.contains(crossterm::event::KeyModifiers::SHIFT) {
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::SHIFT)
+                {
                     self.newline();
                     Action::Noop
                 } else {
@@ -241,7 +242,10 @@ impl Component for EditorState {
                 Action::Noop
             }
             KeyCode::Left => {
-                if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL)
+                {
                     self.cursor_home();
                 } else {
                     self.cursor_left();
@@ -249,7 +253,10 @@ impl Component for EditorState {
                 Action::Noop
             }
             KeyCode::Right => {
-                if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL)
+                {
                     self.cursor_end();
                 } else {
                     self.cursor_right();
@@ -266,7 +273,8 @@ impl Component for EditorState {
             }
             KeyCode::Tab => {
                 if !self.suggestions.is_empty() {
-                    self.selected_suggestion = (self.selected_suggestion + 1) % self.suggestions.len();
+                    self.selected_suggestion =
+                        (self.selected_suggestion + 1) % self.suggestions.len();
                 }
                 Action::Noop
             }

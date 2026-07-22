@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
-use crate::{AppState, MutexExt};
 use crate::ChatEmitter;
+use crate::{AppState, MutexExt};
+use serde::{Deserialize, Serialize};
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -41,9 +41,15 @@ pub fn session_token_counts() -> (u64, u64) {
 pub struct NoopEmitter;
 
 impl ChatEmitter for NoopEmitter {
-    fn emit_token(&self, _token: &str) -> Result<(), String> { Ok(()) }
-    fn emit_done(&self, _full: &str) -> Result<(), String> { Ok(()) }
-    fn emit_error(&self, _error: &str) -> Result<(), String> { Ok(()) }
+    fn emit_token(&self, _token: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn emit_done(&self, _full: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn emit_error(&self, _error: &str) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 enum Permission {
@@ -52,7 +58,12 @@ enum Permission {
     Abort,
 }
 
-async fn check_permission<E: ChatEmitter>(mode: &str, tool: &str, _args: &str, emitter: &E) -> Permission {
+async fn check_permission<E: ChatEmitter>(
+    mode: &str,
+    tool: &str,
+    _args: &str,
+    emitter: &E,
+) -> Permission {
     match mode {
         "strict" => {
             if emitter.allows_direct_terminal_output() {
@@ -144,7 +155,11 @@ pub async fn send_message(
     state: &AppState,
     request: SendMessageRequest,
 ) -> Result<SendMessageResponse, String> {
-    log::debug!("send_message: agent={}, content={:?}", request.agent_type, request.content.chars().take(50).collect::<String>());
+    log::debug!(
+        "send_message: agent={}, content={:?}",
+        request.agent_type,
+        request.content.chars().take(50).collect::<String>()
+    );
 
     let config = request.provider.unwrap_or_else(|| {
         let s = state.provider_config.lock_guard();
@@ -264,7 +279,14 @@ async fn handle_tool_calls<E: ChatEmitter>(
             args,
         };
         // Check permission FIRST — before any file I/O
-        match check_permission(permission_mode, &tc.function.name, &tc.function.arguments, emitter).await {
+        match check_permission(
+            permission_mode,
+            &tc.function.name,
+            &tc.function.arguments,
+            emitter,
+        )
+        .await
+        {
             Permission::Allow => {}
             Permission::Deny => {
                 emitter.emit_tool_result(&tc.function.name, false, "denied")?;
@@ -344,7 +366,9 @@ pub struct StreamMessageRequest {
     pub max_tool_loops: Option<u32>,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 /// Canonical interactive agent loop (no cancel flag).
 pub async fn stream_message_with_history<E: ChatEmitter>(
@@ -383,7 +407,8 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
     let max_tool_loops = request.max_tool_loops.unwrap_or(DEFAULT_MAX_TOOL_LOOPS);
 
     if messages.is_empty() {
-        let sys_prompt = request.system_prompt
+        let sys_prompt = request
+            .system_prompt
             .unwrap_or_else(crate::commands::tools::default_system_prompt);
         messages.push(providers::ChatMessage {
             role: "system".into(),
@@ -419,7 +444,11 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
         max_loops -= 1;
 
         if config.kind.supports_streaming() {
-            log::debug!("streaming: provider={:?} tools={}", config.kind, tools.len());
+            log::debug!(
+                "streaming: provider={:?} tools={}",
+                config.kind,
+                tools.len()
+            );
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
             let chat_request = providers::ChatRequest {
@@ -487,7 +516,9 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
                     }
                     log::debug!("received {} tool call deltas", deltas.len());
                     for d in deltas {
-                        let pos = tool_call_deltas.iter().position(|(idx, _, _, _)| *idx == d.index);
+                        let pos = tool_call_deltas
+                            .iter()
+                            .position(|(idx, _, _, _)| *idx == d.index);
                         if let Some(p) = pos {
                             let entry = &mut tool_call_deltas[p];
                             if let Some(ref id_val) = d.id {
@@ -495,10 +526,14 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
                                     entry.1.push_str(id_val);
                                 }
                             }
-                            if let Some(ref name) = d.function.as_ref().and_then(|f| f.name.as_ref()) {
+                            if let Some(ref name) =
+                                d.function.as_ref().and_then(|f| f.name.as_ref())
+                            {
                                 entry.2.push_str(name);
                             }
-                            if let Some(ref args) = d.function.as_ref().and_then(|f| f.arguments.as_ref()) {
+                            if let Some(ref args) =
+                                d.function.as_ref().and_then(|f| f.arguments.as_ref())
+                            {
                                 entry.3.push_str(args);
                             }
                         } else {
@@ -511,7 +546,9 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
                             if let Some(ref n) = d.function.as_ref().and_then(|f| f.name.as_ref()) {
                                 name_buf.push_str(n);
                             }
-                            if let Some(ref a) = d.function.as_ref().and_then(|f| f.arguments.as_ref()) {
+                            if let Some(ref a) =
+                                d.function.as_ref().and_then(|f| f.arguments.as_ref())
+                            {
                                 args_buf.push_str(a);
                             }
                             tool_call_deltas.push((d.index, id_buf, name_buf, args_buf));
@@ -535,17 +572,25 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
             }
 
             if !tool_call_deltas.is_empty() {
-                log::debug!("executing {} accumulated tool calls", tool_call_deltas.len());
-                let tool_calls: Vec<providers::ToolCall> = tool_call_deltas.iter().map(|(_index, id, name, args)| {
-                    providers::ToolCall {
-                        id: if id.is_empty() { format!("call_{}", _index) } else { id.clone() },
+                log::debug!(
+                    "executing {} accumulated tool calls",
+                    tool_call_deltas.len()
+                );
+                let tool_calls: Vec<providers::ToolCall> = tool_call_deltas
+                    .iter()
+                    .map(|(_index, id, name, args)| providers::ToolCall {
+                        id: if id.is_empty() {
+                            format!("call_{}", _index)
+                        } else {
+                            id.clone()
+                        },
                         tool_type: "function".into(),
                         function: providers::ToolCallFunction {
                             name: name.clone(),
                             arguments: args.clone(),
                         },
-                    }
-                }).collect();
+                    })
+                    .collect();
 
                 handle_tool_calls(
                     state,
@@ -561,11 +606,26 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
                 continue;
             }
 
+            // Persist final assistant text into conversation history so multi-turn
+            // and session resume keep the LLM context complete.
+            if !full_response.is_empty() {
+                messages.push(providers::ChatMessage {
+                    role: "assistant".into(),
+                    content: full_response.clone(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                });
+            }
+
             emitter.emit_done(&full_response)?;
             if let Some(ref u) = last_usage {
                 record_cost(u.input_tokens, u.output_tokens);
                 if emitter.allows_direct_terminal_output() {
-                    eprintln!("  {}tokens: {} in / {} out{}", DIM, u.input_tokens, u.output_tokens, RESET);
+                    eprintln!(
+                        "  {}tokens: {} in / {} out{}",
+                        DIM, u.input_tokens, u.output_tokens, RESET
+                    );
                 }
             }
             return Ok(full_response);
@@ -620,11 +680,23 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
                 emitter.emit_token(&response.content)?;
                 full_response.push_str(&response.content);
             }
+            if !full_response.is_empty() {
+                messages.push(providers::ChatMessage {
+                    role: "assistant".into(),
+                    content: full_response.clone(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                });
+            }
             emitter.emit_done(&full_response)?;
             if let Some(ref u) = response.usage {
                 record_cost(u.input_tokens, u.output_tokens);
                 if emitter.allows_direct_terminal_output() {
-                    eprintln!("  {}tokens: {} in / {} out{}", DIM, u.input_tokens, u.output_tokens, RESET);
+                    eprintln!(
+                        "  {}tokens: {} in / {} out{}",
+                        DIM, u.input_tokens, u.output_tokens, RESET
+                    );
                 }
             }
             return Ok(full_response);
@@ -657,19 +729,16 @@ pub async fn list_models(config: &providers::ProviderConfig) -> Vec<String> {
         Ok(models) => models.into_iter().map(|m| m.id).collect(),
         Err(_) => {
             let fallback: &[&str] = match config.kind {
-                providers::ProviderKind::OpenAI => &[
-                    "gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo",
-                ],
+                providers::ProviderKind::OpenAI => {
+                    &["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"]
+                }
                 providers::ProviderKind::Anthropic => &[
-                    "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022",
+                    "claude-3-5-sonnet-20241022",
+                    "claude-3-5-haiku-20241022",
                     "claude-opus-4-20250514",
                 ],
-                providers::ProviderKind::Groq => &[
-                    "llama-3.3-70b-versatile", "mixtral-8x7b-32768",
-                ],
-                providers::ProviderKind::XAI => &[
-                    "grok-3", "grok-3-mini",
-                ],
+                providers::ProviderKind::Groq => &["llama-3.3-70b-versatile", "mixtral-8x7b-32768"],
+                providers::ProviderKind::XAI => &["grok-3", "grok-3-mini"],
                 providers::ProviderKind::Local => &["ollama"],
                 _ => &["unknown"],
             };
@@ -689,11 +758,26 @@ mod tests {
     struct TestEmitter;
 
     impl ChatEmitter for TestEmitter {
-        fn emit_token(&self, _token: &str) -> Result<(), String> { Ok(()) }
-        fn emit_done(&self, _full: &str) -> Result<(), String> { Ok(()) }
-        fn emit_error(&self, _error: &str) -> Result<(), String> { Ok(()) }
-        fn emit_tool_call(&self, _name: &str, _args: &str) -> Result<(), String> { Ok(()) }
-        fn emit_tool_result(&self, _name: &str, _success: bool, _output: &str) -> Result<(), String> { Ok(()) }
+        fn emit_token(&self, _token: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn emit_done(&self, _full: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn emit_error(&self, _error: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn emit_tool_call(&self, _name: &str, _args: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn emit_tool_result(
+            &self,
+            _name: &str,
+            _success: bool,
+            _output: &str,
+        ) -> Result<(), String> {
+            Ok(())
+        }
     }
 
     fn sse_line(value: &serde_json::Value) -> String {
@@ -731,11 +815,11 @@ mod tests {
     }
 
     // Integration test: requires running tool-harness backend and real SSE server.
-// Skipped while the chat loop infrastructure is refactored.
-// Re-enable with #[test] when the mock tool executor is wired.
-#[tokio::test]
-#[ignore]
-async fn test_stream_message_tool_calls_execute_and_push_results() {
+    // Skipped while the chat loop infrastructure is refactored.
+    // Re-enable with #[test] when the mock tool executor is wired.
+    #[tokio::test]
+    #[ignore]
+    async fn test_stream_message_tool_calls_execute_and_push_results() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let request_count = Arc::new(AtomicUsize::new(0));
@@ -788,8 +872,15 @@ async fn test_stream_message_tool_calls_execute_and_push_results() {
         let mut messages = Vec::new();
         let result = stream_message_with_history(&state, request, &emitter, &mut messages).await;
 
-        assert!(result.is_ok(), "stream_message_with_history failed: {:?}", result.err());
-        assert!(!messages.is_empty(), "messages buffer should contain history");
+        assert!(
+            result.is_ok(),
+            "stream_message_with_history failed: {:?}",
+            result.err()
+        );
+        assert!(
+            !messages.is_empty(),
+            "messages buffer should contain history"
+        );
 
         let roles: Vec<&str> = messages.iter().map(|m| m.role.as_str()).collect();
         assert!(
@@ -819,8 +910,8 @@ async fn test_stream_message_tool_calls_execute_and_push_results() {
     }
 
     #[tokio::test]
-#[ignore]
-async fn test_stream_message_preserves_history_across_calls() {
+    #[ignore]
+    async fn test_stream_message_preserves_history_across_calls() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let request_count = Arc::new(AtomicUsize::new(0));
@@ -895,7 +986,6 @@ async fn test_stream_message_preserves_history_across_calls() {
         .await;
         assert!(r2.is_ok(), "second call failed: {:?}", r2.err());
 
-        let roles: Vec<&str> = messages.iter().map(|m| m.role.as_str()).collect();
         // grow across calls: system, user, assistant+tool_calls, tool, assistant × 2
         assert!(
             messages.len() > 3,
@@ -908,8 +998,8 @@ async fn test_stream_message_preserves_history_across_calls() {
     }
 
     #[tokio::test]
-#[ignore]
-async fn test_stream_message_handles_parse_error_tool_call() {
+    #[ignore]
+    async fn test_stream_message_handles_parse_error_tool_call() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let request_count = Arc::new(AtomicUsize::new(0));
@@ -975,7 +1065,11 @@ async fn test_stream_message_handles_parse_error_tool_call() {
         )
         .await;
 
-        assert!(result.is_ok(), "should not crash on parse error: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "should not crash on parse error: {:?}",
+            result.err()
+        );
 
         let roles: Vec<&str> = messages.iter().map(|m| m.role.as_str()).collect();
         assert!(
@@ -989,9 +1083,9 @@ async fn test_stream_message_handles_parse_error_tool_call() {
     }
 
     /// Test that cancel before start returns "cancelled".
-/// This does not need a running LLM backend.
-#[tokio::test]
-async fn test_cancel_before_start_returns_cancelled() {
+    /// This does not need a running LLM backend.
+    #[tokio::test]
+    async fn test_cancel_before_start_returns_cancelled() {
         let cfg = providers::ProviderConfig {
             kind: providers::ProviderKind::Local,
             api_key: None,

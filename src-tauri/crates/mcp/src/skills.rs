@@ -33,7 +33,10 @@ impl SkillsRegistry {
         let mut errors = Vec::new();
 
         if !path.exists() {
-            return (registry, vec![format!("skills directory not found: {}", path.display())]);
+            return (
+                registry,
+                vec![format!("skills directory not found: {}", path.display())],
+            );
         }
 
         let entries = match std::fs::read_dir(path) {

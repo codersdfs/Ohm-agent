@@ -1,9 +1,9 @@
+use crate::commands::tools::GateCheckResult;
+use crate::pipeline::plan::StructuredPlan;
+use crate::pipeline::review_score::{PromotionStats, ScoreBreakdown};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use crate::commands::tools::GateCheckResult;
-use crate::pipeline::plan::StructuredPlan;
-use crate::pipeline::review_score::{ScoreBreakdown, PromotionStats};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuildConfig {
@@ -12,7 +12,9 @@ pub struct BuildConfig {
 
 impl Default for BuildConfig {
     fn default() -> Self {
-        Self { auto_approve: false }
+        Self {
+            auto_approve: false,
+        }
     }
 }
 
@@ -49,7 +51,10 @@ pub struct ReviewConfig {
 
 impl Default for ReviewConfig {
     fn default() -> Self {
-        Self { mode: ReviewMode::Summary, max_retries: 3 }
+        Self {
+            mode: ReviewMode::Summary,
+            max_retries: 3,
+        }
     }
 }
 

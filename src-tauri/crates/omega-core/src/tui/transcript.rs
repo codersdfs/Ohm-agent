@@ -8,7 +8,13 @@ use super::markdown;
 use super::theme;
 
 const ACTIVITY_SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-const ACTIVITY_WORDS: &[&str] = &["Cooking…", "Pondering…", "Reasoning…", "Planning…", "Considering…"];
+const ACTIVITY_WORDS: &[&str] = &[
+    "Cooking…",
+    "Pondering…",
+    "Reasoning…",
+    "Planning…",
+    "Considering…",
+];
 
 fn activity_text(tick: u64) -> String {
     let glyph = ACTIVITY_SPINNER[tick as usize % ACTIVITY_SPINNER.len()];
@@ -30,9 +36,7 @@ pub enum TranscriptEntry {
         thinking: String,
     },
     /// Tool call — rendered as a bordered box (Claude Code / Pi Agent style)
-    ToolCallBox {
-        state: ToolCallState,
-    },
+    ToolCallBox { state: ToolCallState },
 
     /// Legacy simple inline tool call (not boxed)
     ToolCall {
@@ -41,10 +45,7 @@ pub enum TranscriptEntry {
         result: Option<String>,
     },
     /// System notice or error
-    Notice {
-        text: String,
-        is_error: bool,
-    },
+    Notice { text: String, is_error: bool },
 }
 
 impl TranscriptEntry {
@@ -54,31 +55,42 @@ impl TranscriptEntry {
             TranscriptEntry::User { content } => {
                 let mut text = markdown::render_markdown(content);
                 // Prepend user marker: cyan chevron
-                let marker = Line::from(vec![
-                    Span::styled("> ", Style::default().fg(theme::PRIMARY).add_modifier(Modifier::BOLD)),
-                ]);
+                let marker = Line::from(vec![Span::styled(
+                    "> ",
+                    Style::default()
+                        .fg(theme::PRIMARY)
+                        .add_modifier(Modifier::BOLD),
+                )]);
                 let mut all = vec![marker];
                 all.append(&mut text.lines);
                 Text::from(all)
             }
-            TranscriptEntry::Assistant { content, rendered, is_streaming, thinking } => {
+            TranscriptEntry::Assistant {
+                content,
+                rendered,
+                is_streaming,
+                thinking,
+            } => {
                 let mut all = Vec::new();
 
                 // Show activity directly, without a separate assistant marker.
                 if *is_streaming {
                     let activity = activity_text(activity_tick);
-                    all.push(Line::from(vec![
-                        Span::styled(activity.trim_start().to_owned(), theme::style_dim()),
-                    ]));
+                    all.push(Line::from(vec![Span::styled(
+                        activity.trim_start().to_owned(),
+                        theme::style_dim(),
+                    )]));
                 }
 
                 // Reasoning text remains below the activity line.
                 if !thinking.is_empty() {
                     let mut thinking_lines = markdown::render_markdown(thinking).lines;
                     for line in thinking_lines.iter_mut() {
-                        let dimmed: Vec<Span> = line.spans.iter().map(|s| {
-                            Span::styled(s.content.clone(), theme::style_dim())
-                        }).collect();
+                        let dimmed: Vec<Span> = line
+                            .spans
+                            .iter()
+                            .map(|s| Span::styled(s.content.clone(), theme::style_dim()))
+                            .collect();
                         all.push(Line::from(dimmed));
                     }
                 }
@@ -103,24 +115,27 @@ impl TranscriptEntry {
                 *rendered = Some(t.clone());
                 t
             }
-            TranscriptEntry::ToolCall { tool_name, args, result } => {
-                render_tool_call_box_simple(tool_name, args, result, _width)
-            }
-            TranscriptEntry::ToolCallBox { state } => {
-                render_tool_call_compact(state, _width)
-            }
+            TranscriptEntry::ToolCall {
+                tool_name,
+                args,
+                result,
+            } => render_tool_call_box_simple(tool_name, args, result, _width),
+            TranscriptEntry::ToolCallBox { state } => render_tool_call_compact(state, _width),
             TranscriptEntry::Notice { text, is_error } => {
                 // Try to detect a typed error via flat-string prefix so notices
                 // get the right neon chip / icon instead of always error-red bold.
                 let typed = if *is_error {
                     Some(crate::error::AgentError::from_flat_string(text))
-                } else { None };
+                } else {
+                    None
+                };
                 let is_quiet = typed.as_ref().map(|e| e.is_quiet()).unwrap_or(false);
 
                 let style = if is_quiet {
                     theme::style_dim()
                 } else if *is_error {
-                    let col = typed.as_ref()
+                    let col = typed
+                        .as_ref()
                         .map(|e| e.chip_color())
                         .unwrap_or(theme::ERROR);
                     Style::default().fg(col).add_modifier(Modifier::BOLD)
@@ -129,16 +144,21 @@ impl TranscriptEntry {
                 };
 
                 let prefix = match (&typed, *is_error) {
-                    (Some(e), _)     => format!("{} ", e.icon()),
-                    (None, true)     => "✗ ".to_string(),
-                    (None, false)    => "· ".to_string(),
+                    (Some(e), _) => format!("{} ", e.icon()),
+                    (None, true) => "✗ ".to_string(),
+                    (None, false) => "· ".to_string(),
                 };
 
                 // Render the chip label inline when it's a typed error.
                 if let Some(e) = &typed {
                     let chip = format!("[ {} ] ", e.chip_label());
                     Text::from(Line::from(vec![
-                        Span::styled(prefix.clone(), Style::default().fg(e.chip_color()).add_modifier(Modifier::BOLD)),
+                        Span::styled(
+                            prefix.clone(),
+                            Style::default()
+                                .fg(e.chip_color())
+                                .add_modifier(Modifier::BOLD),
+                        ),
                         Span::styled(chip, e.style()),
                         Span::styled(e.message(), style),
                     ]))
@@ -155,7 +175,11 @@ impl TranscriptEntry {
     /// Get the rendered text, rendering if needed.
     pub fn get_rendered(&mut self, width: u16, activity_tick: u64) -> Text<'static> {
         match self {
-            TranscriptEntry::Assistant { rendered, is_streaming, .. } => {
+            TranscriptEntry::Assistant {
+                rendered,
+                is_streaming,
+                ..
+            } => {
                 // Streaming entries must be regenerated so the spinner advances.
                 if !*is_streaming {
                     if let Some(r) = rendered.take() {
@@ -181,7 +205,12 @@ impl TranscriptEntry {
 // ─── Simple tool call box (for legacy ToolCall variant) ──────────────────────
 
 /// Render a compact box for simple tool call entries (not collapsible).
-fn render_tool_call_box_simple(tool_name: &str, args: &str, result: &Option<String>, avail_width: u16) -> Text<'static> {
+fn render_tool_call_box_simple(
+    tool_name: &str,
+    args: &str,
+    result: &Option<String>,
+    avail_width: u16,
+) -> Text<'static> {
     let mut state = ToolCallState::new(tool_name.to_string(), args.to_string());
     state.expanded = false;
     if let Some(r) = result.as_ref().filter(|r| !r.trim().is_empty()) {
@@ -195,11 +224,13 @@ fn render_tool_call_box_simple(tool_name: &str, args: &str, result: &Option<Stri
         if state.status == ToolCallStatus::Errored {
             state.error = crate::error::AgentError::from_flat_string(r)
                 .typed_tool_error()
-                .or_else(|| Some(crate::error::ToolCallError::new(
-                    tool_name.to_string(),
-                    crate::error::ToolErrorKind::ExecutionFailed,
-                    r.trim_start_matches("ERROR:").trim().to_string(),
-                )));
+                .or_else(|| {
+                    Some(crate::error::ToolCallError::new(
+                        tool_name.to_string(),
+                        crate::error::ToolErrorKind::ExecutionFailed,
+                        r.trim_start_matches("ERROR:").trim().to_string(),
+                    ))
+                });
         }
     } else if result.is_some() {
         state.status = ToolCallStatus::Completed;
@@ -212,15 +243,21 @@ fn compute_tool_summary(tool_name: &str, args: &str) -> String {
     let obj = parsed.as_ref().and_then(|v| v.as_object());
     match tool_name {
         "bash" | "shell" | "command" | "run" => {
-            let cmd = obj.and_then(|o| o.get("command").or(o.get("cmd")).or(o.get("shell")))
-                .and_then(|v| v.as_str()).unwrap_or(args.trim());
+            let cmd = obj
+                .and_then(|o| o.get("command").or(o.get("cmd")).or(o.get("shell")))
+                .and_then(|v| v.as_str())
+                .unwrap_or(args.trim());
             format!("bash {}", shorten(cmd, 40))
         }
         "write" | "create" => {
-            let p = obj.and_then(|o| o.get("filePath").or(o.get("path")).or(o.get("file")))
-                .and_then(|v| v.as_str()).unwrap_or("?");
-            let content = obj.and_then(|o| o.get("content"))
-                .and_then(|v| v.as_str()).unwrap_or("");
+            let p = obj
+                .and_then(|o| o.get("filePath").or(o.get("path")).or(o.get("file")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let content = obj
+                .and_then(|o| o.get("content"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let first_line = content.lines().next().unwrap_or("");
             if first_line.is_empty() {
                 format!("write {}", p)
@@ -229,8 +266,10 @@ fn compute_tool_summary(tool_name: &str, args: &str) -> String {
             }
         }
         "edit" | "patch" | "str_replace" => {
-            let p = obj.and_then(|o| o.get("filePath").or(o.get("path")).or(o.get("file")))
-                .and_then(|v| v.as_str()).unwrap_or("?");
+            let p = obj
+                .and_then(|o| o.get("filePath").or(o.get("path")).or(o.get("file")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
             let old_lines = obj
                 .and_then(|o| o.get("oldString").or(o.get("oldText")).or(o.get("find")))
                 .and_then(|v| v.as_str())
@@ -245,22 +284,31 @@ fn compute_tool_summary(tool_name: &str, args: &str) -> String {
             format!("edit {} · -{} / +{} lines", p, old_lines, new_lines)
         }
         "read" | "view" | "cat" => {
-            let p = obj.and_then(|o| o.get("filePath").or(o.get("path")).or(o.get("file")))
-                .and_then(|v| v.as_str()).unwrap_or("?");
+            let p = obj
+                .and_then(|o| o.get("filePath").or(o.get("path")).or(o.get("file")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
             format!("read {}", p)
         }
         "glob" | "ls" | "list" => {
-            let pat = obj.and_then(|o| o.get("pattern").or(o.get("glob")))
-                .and_then(|v| v.as_str()).unwrap_or("?");
+            let pat = obj
+                .and_then(|o| o.get("pattern").or(o.get("glob")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
             format!("glob {}", pat)
         }
         "grep" | "search" | "rg" => {
-            let q = obj.and_then(|o| o.get("pattern").or(o.get("query")).or(o.get("search")))
-                .and_then(|v| v.as_str()).unwrap_or("?");
+            let q = obj
+                .and_then(|o| o.get("pattern").or(o.get("query")).or(o.get("search")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
             format!("grep {}", q)
         }
         "web" | "fetch" | "browse" => {
-            let u = obj.and_then(|o| o.get("url")).and_then(|v| v.as_str()).unwrap_or("?");
+            let u = obj
+                .and_then(|o| o.get("url"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
             format!("fetch {}", u)
         }
         _ => format!("{} {}", tool_name, shorten(args.trim(), 30)),
@@ -323,11 +371,8 @@ fn extract_write_preview(tool_name: &str, args: &str) -> Option<WriteCodePreview
         .and_then(|v| v.as_str())
         .unwrap_or("untitled");
 
-    let (lines, omitted_lines) = collect_bounded_lines(
-        content,
-        MAX_RETAINED_SOURCE_LINES,
-        MAX_SOURCE_COLUMNS,
-    );
+    let (lines, omitted_lines) =
+        collect_bounded_lines(content, MAX_RETAINED_SOURCE_LINES, MAX_SOURCE_COLUMNS);
 
     Some(WriteCodePreview {
         path: fit_to_width(path, 160),
@@ -362,16 +407,10 @@ fn extract_edit_preview(tool_name: &str, args: &str) -> Option<EditCodePreview> 
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    let (removed, omitted_removed) = collect_bounded_lines(
-        old,
-        MAX_RETAINED_SOURCE_LINES,
-        MAX_SOURCE_COLUMNS,
-    );
-    let (added, omitted_added) = collect_bounded_lines(
-        new,
-        MAX_RETAINED_SOURCE_LINES,
-        MAX_SOURCE_COLUMNS,
-    );
+    let (removed, omitted_removed) =
+        collect_bounded_lines(old, MAX_RETAINED_SOURCE_LINES, MAX_SOURCE_COLUMNS);
+    let (added, omitted_added) =
+        collect_bounded_lines(new, MAX_RETAINED_SOURCE_LINES, MAX_SOURCE_COLUMNS);
 
     Some(EditCodePreview {
         path: fit_to_width(path, 160),
@@ -594,7 +633,11 @@ fn render_source_tool_shell(state: &ToolCallState, width: u16) -> Option<Text<'s
 
     let inner_width = usize::from(width.saturating_sub(2).max(8));
     let (status_label, status_color) = source_tool_status(state.status);
-    let tool_color = if is_write { theme::TOOL_WRITE } else { theme::TOOL_EDIT };
+    let tool_color = if is_write {
+        theme::TOOL_WRITE
+    } else {
+        theme::TOOL_EDIT
+    };
     let bg = match state.status {
         ToolCallStatus::Errored => Color::Rgb(22, 8, 8),
         ToolCallStatus::Completed => Color::Rgb(6, 18, 10),
@@ -623,9 +666,21 @@ fn render_source_tool_shell(state: &ToolCallState, width: u16) -> Option<Text<'s
         .saturating_sub(status_width + 1);
     lines.push(source_shell_row(
         vec![
-            Span::styled(left, Style::default().fg(tool_color).bg(bg).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                left,
+                Style::default()
+                    .fg(tool_color)
+                    .bg(bg)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" ".repeat(gap), Style::default().bg(bg)),
-            Span::styled(format!("{} ", status_label), Style::default().fg(status_color).bg(bg).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!("{} ", status_label),
+                Style::default()
+                    .fg(status_color)
+                    .bg(bg)
+                    .add_modifier(Modifier::BOLD),
+            ),
         ],
         inner_width,
         border_style,
@@ -633,7 +688,11 @@ fn render_source_tool_shell(state: &ToolCallState, width: u16) -> Option<Text<'s
     ));
     lines.push(source_shell_row(vec![], inner_width, border_style, bg));
 
-    let preview_limit = if state.expanded { usize::MAX } else { COLLAPSED_SOURCE_LINES };
+    let preview_limit = if state.expanded {
+        usize::MAX
+    } else {
+        COLLAPSED_SOURCE_LINES
+    };
     let mut shown = 0usize;
     let mut hidden = 0usize;
 
@@ -656,7 +715,10 @@ fn render_source_tool_shell(state: &ToolCallState, width: u16) -> Option<Text<'s
         for line in preview.removed.iter().take(remaining) {
             let body = fit_to_width(line, inner_width.saturating_sub(3));
             lines.push(source_shell_row(
-                vec![Span::styled(format!(" - {}", body), Style::default().fg(theme::DIFF_REMOVE).bg(bg))],
+                vec![Span::styled(
+                    format!(" - {}", body),
+                    Style::default().fg(theme::DIFF_REMOVE).bg(bg),
+                )],
                 inner_width,
                 border_style,
                 bg,
@@ -667,15 +729,20 @@ fn render_source_tool_shell(state: &ToolCallState, width: u16) -> Option<Text<'s
         for line in preview.added.iter().take(remaining) {
             let body = fit_to_width(line, inner_width.saturating_sub(3));
             lines.push(source_shell_row(
-                vec![Span::styled(format!(" + {}", body), Style::default().fg(theme::DIFF_ADD).bg(bg))],
+                vec![Span::styled(
+                    format!(" + {}", body),
+                    Style::default().fg(theme::DIFF_ADD).bg(bg),
+                )],
                 inner_width,
                 border_style,
                 bg,
             ));
             shown += 1;
         }
-        hidden = preview.removed.len() + preview.added.len()
-            + preview.omitted_removed + preview.omitted_added
+        hidden = preview.removed.len()
+            + preview.added.len()
+            + preview.omitted_removed
+            + preview.omitted_added
             - shown;
     }
 
@@ -691,7 +758,10 @@ fn render_source_tool_shell(state: &ToolCallState, width: u16) -> Option<Text<'s
     lines.push(source_shell_row(vec![], inner_width, border_style, bg));
     let footer = if hidden > 0 {
         if state.expanded {
-            format!(" ... {} lines outside retained preview  [Ctrl+E] collapse", hidden)
+            format!(
+                " ... {} lines outside retained preview  [Ctrl+E] collapse",
+                hidden
+            )
         } else {
             format!(" ... {} more lines  [Ctrl+E] expand", hidden)
         }
@@ -712,7 +782,10 @@ fn render_source_tool_shell(state: &ToolCallState, width: u16) -> Option<Text<'s
             for message_line in error.message.lines().take(4) {
                 lines.push(source_shell_row(
                     vec![Span::styled(
-                        format!(" {}", fit_to_width(message_line, inner_width.saturating_sub(1))),
+                        format!(
+                            " {}",
+                            fit_to_width(message_line, inner_width.saturating_sub(1))
+                        ),
                         Style::default().fg(theme::ERROR).bg(bg),
                     )],
                     inner_width,
@@ -742,9 +815,9 @@ fn render_tool_call_compact(state: &ToolCallState, _avail_width: u16) -> Text<'s
 
     let (border_color, fill_bg, icon_str) = match status {
         ToolCallStatus::Completed => (theme::SUCCESS, Color::Rgb(6, 18, 10), "✓"),
-        ToolCallStatus::Errored   => (theme::ERROR,   Color::Rgb(22, 8, 8),  "✗"),
-        ToolCallStatus::Running   => (theme::PRIMARY, Color::Rgb(8, 14, 20), "▶"),
-        ToolCallStatus::Pending   => (theme::DIM,     Color::Rgb(8, 10, 14), "⋯"),
+        ToolCallStatus::Errored => (theme::ERROR, Color::Rgb(22, 8, 8), "✗"),
+        ToolCallStatus::Running => (theme::PRIMARY, Color::Rgb(8, 14, 20), "▶"),
+        ToolCallStatus::Pending => (theme::DIM, Color::Rgb(8, 10, 14), "⋯"),
     };
 
     let bstyle = Style::default().fg(border_color).bg(fill_bg);
@@ -764,20 +837,21 @@ fn render_tool_call_compact(state: &ToolCallState, _avail_width: u16) -> Text<'s
     // widths, could underflow and panic the full-screen TUI.)
 
     // Top border with tool name — total width = avail + 2
-    let title = fit_to_width(
-        &format!(" {} {} ", icon_str, name),
-        avail.saturating_sub(1),
-    );
+    let title = fit_to_width(&format!(" {} {} ", icon_str, name), avail.saturating_sub(1));
     let title_len = title.chars().count();
     // ┌ (1) + ─ (1) + title (N) + dashes (avail − 1 − N) + ┐ (1) = avail + 2
     let right_dashes = avail.saturating_sub(title_len + 1);
     lines.push(Line::from(Span::styled(
-        format!("┌─{}{}┐", title, "─".repeat(right_dashes)), bstyle)));
+        format!("┌─{}{}┐", title, "─".repeat(right_dashes)),
+        bstyle,
+    )));
 
     // Summary line — total width = avail + 2. `" "` prefix is one of the
     // inner chars, so trailing padding = avail − 1 − summary_len.
     let summary = fit_to_width(&state.tool_summary, avail.saturating_sub(1));
-    let spad = avail.saturating_sub(1).saturating_sub(summary.chars().count());
+    let spad = avail
+        .saturating_sub(1)
+        .saturating_sub(summary.chars().count());
     lines.push(Line::from(vec![
         Span::styled("│", bstyle),
         Span::styled(format!(" {}{}", summary, " ".repeat(spad)), content_style),
@@ -800,7 +874,13 @@ fn render_tool_call_compact(state: &ToolCallState, _avail_width: u16) -> Text<'s
                     let err_pad = avail.saturating_sub(err_len);
                     lines.push(Line::from(vec![
                         Span::styled("│", bstyle),
-                        Span::styled(err_label.to_string(), Style::default().fg(theme::ERROR).add_modifier(Modifier::BOLD).bg(fill_bg)),
+                        Span::styled(
+                            err_label.to_string(),
+                            Style::default()
+                                .fg(theme::ERROR)
+                                .add_modifier(Modifier::BOLD)
+                                .bg(fill_bg),
+                        ),
                         Span::styled(" ".repeat(err_pad), fill_bg),
                         Span::styled("│", bstyle),
                     ]));
@@ -809,7 +889,10 @@ fn render_tool_call_compact(state: &ToolCallState, _avail_width: u16) -> Text<'s
                         let lpad = avail.saturating_sub(1).saturating_sub(line.chars().count());
                         lines.push(Line::from(vec![
                             Span::styled("│", bstyle),
-                            Span::styled(format!(" {}{}", line, " ".repeat(lpad)), Style::default().fg(theme::ERROR).bg(fill_bg)),
+                            Span::styled(
+                                format!(" {}{}", line, " ".repeat(lpad)),
+                                Style::default().fg(theme::ERROR).bg(fill_bg),
+                            ),
                             Span::styled("│", bstyle),
                         ]));
                     }
@@ -834,14 +917,18 @@ fn render_tool_call_compact(state: &ToolCallState, _avail_width: u16) -> Text<'s
 
     // Bottom border — total width = avail + 2
     lines.push(Line::from(Span::styled(
-        format!("└{}┘", "─".repeat(avail)), bstyle)));
+        format!("└{}┘", "─".repeat(avail)),
+        bstyle,
+    )));
 
     Text::from(lines)
 }
 
 fn fit_to_width(s: &str, max_chars: usize) -> String {
     let count = s.chars().count();
-    if count <= max_chars { return s.to_string(); }
+    if count <= max_chars {
+        return s.to_string();
+    }
     let take = max_chars.saturating_sub(1);
     let truncated: String = s.chars().take(take).collect();
     format!("{}…", truncated)
@@ -850,7 +937,6 @@ fn fit_to_width(s: &str, max_chars: usize) -> String {
 fn shorten(s: &str, max: usize) -> String {
     fit_to_width(s, max)
 }
-
 
 // ─── ToolCallState ───────────────────────────────────────────────────────────
 
@@ -933,11 +1019,21 @@ impl ToolCallState {
             format!(" {} {} {} ", icon, self.tool_name, dur)
         } else {
             let kv_count = self.args_kv.len();
-            let dur_suffix = if !dur.is_empty() { format!(" {}", dur) } else { String::new() };
-            if self.result_preview.is_some() {
-                format!(" {} {} ({} args){}", icon, self.tool_name, kv_count, dur_suffix)
+            let dur_suffix = if !dur.is_empty() {
+                format!(" {}", dur)
             } else {
-                format!(" {} {} ({} args){}", icon, self.tool_name, kv_count, dur_suffix)
+                String::new()
+            };
+            if self.result_preview.is_some() {
+                format!(
+                    " {} {} ({} args){}",
+                    icon, self.tool_name, kv_count, dur_suffix
+                )
+            } else {
+                format!(
+                    " {} {} ({} args){}",
+                    icon, self.tool_name, kv_count, dur_suffix
+                )
             }
         }
     }
@@ -985,13 +1081,16 @@ fn parse_args_kv(args: &str) -> Vec<(String, String)> {
 
 /// Scroll state for the transcript.
 pub struct ScrollState {
-    pub offset: usize,       // Scroll offset in lines from top
-    pub auto_scroll: bool,   // Whether to follow new content
+    pub offset: usize,     // Scroll offset in lines from top
+    pub auto_scroll: bool, // Whether to follow new content
 }
 
 impl Default for ScrollState {
     fn default() -> Self {
-        Self { offset: 0, auto_scroll: true }
+        Self {
+            offset: 0,
+            auto_scroll: true,
+        }
     }
 }
 
@@ -1083,7 +1182,8 @@ pub struct Transcript {
     pub entries: Vec<TranscriptEntry>,
     pub scroll: ScrollState,
     pub messages: Vec<providers::ChatMessage>,
-    pub stream_event_rx: Option<tokio::sync::mpsc::UnboundedReceiver<super::component::UiStreamEvent>>,
+    pub stream_event_rx:
+        Option<tokio::sync::mpsc::UnboundedReceiver<super::component::UiStreamEvent>>,
     pub streaming_fragment: String,
     pub tools_expanded: bool,
     pub activity_tick: u64,
@@ -1100,6 +1200,15 @@ impl Transcript {
             tools_expanded: false,
             activity_tick: 0,
         }
+    }
+
+    /// Restore provider history and UI entries from a loaded session.
+    /// Exact ChatMessage history is preserved for the LLM; UI entries are approximate.
+    pub fn load_from_session(&mut self, messages: Vec<providers::ChatMessage>) {
+        self.messages = messages;
+        let ui = crate::session::messages_to_transcript_entries(&self.messages);
+        self.entries.extend(ui);
+        self.scroll.auto_scroll = true;
     }
 
     pub fn tick_activity(&mut self) {
@@ -1130,7 +1239,9 @@ impl Transcript {
                     let drop_idx = if self.entries.len() >= 2 {
                         let i = self.entries.len() - 2;
                         match &self.entries[i] {
-                            TranscriptEntry::Assistant { content, .. } if content.is_empty() => Some(i),
+                            TranscriptEntry::Assistant { content, .. } if content.is_empty() => {
+                                Some(i)
+                            }
                             _ => None,
                         }
                     } else {
@@ -1147,7 +1258,13 @@ impl Transcript {
                     });
                 }
                 for entry in self.entries.iter_mut().rev() {
-                    if let TranscriptEntry::Assistant { content, rendered, is_streaming, .. } = entry {
+                    if let TranscriptEntry::Assistant {
+                        content,
+                        rendered,
+                        is_streaming,
+                        ..
+                    } = entry
+                    {
                         content.push_str(t);
                         *rendered = None;
                         *is_streaming = true;
@@ -1158,7 +1275,13 @@ impl Transcript {
             }
             super::component::UiStreamEvent::Thinking(t) => {
                 for entry in self.entries.iter_mut().rev() {
-                    if let TranscriptEntry::Assistant { ref mut thinking, ref mut rendered, is_streaming, .. } = entry {
+                    if let TranscriptEntry::Assistant {
+                        ref mut thinking,
+                        ref mut rendered,
+                        is_streaming,
+                        ..
+                    } = entry
+                    {
                         thinking.push_str(t);
                         *rendered = None;
                         *is_streaming = true;
@@ -1169,7 +1292,11 @@ impl Transcript {
             }
             super::component::UiStreamEvent::ThinkingDone => {
                 for entry in self.entries.iter_mut().rev() {
-                    if let TranscriptEntry::Assistant { ref mut is_streaming, .. } = entry {
+                    if let TranscriptEntry::Assistant {
+                        ref mut is_streaming,
+                        ..
+                    } = entry
+                    {
                         *is_streaming = false;
                         break;
                     }
@@ -1184,7 +1311,11 @@ impl Transcript {
                 self.entries.push(TranscriptEntry::ToolCallBox { state });
                 Action::Noop
             }
-            super::component::UiStreamEvent::ToolResult { name, success, output } => {
+            super::component::UiStreamEvent::ToolResult {
+                name,
+                success,
+                output,
+            } => {
                 // Char-safe truncation (byte slicing can panic on multibyte UTF-8).
                 // `shorten` appends the ellipsis itself when it truncates.
                 let preview: String = if output.chars().count() > 200 {
@@ -1228,11 +1359,21 @@ impl Transcript {
                 }
                 Action::Noop
             }
-            super::component::UiStreamEvent::Done { full: _, tokens_in, tokens_out, messages } => {
+            super::component::UiStreamEvent::Done {
+                full: _,
+                tokens_in,
+                tokens_out,
+                messages,
+            } => {
                 // Flip the trailing assistant entry out of streaming mode so
                 // its content renders (and the live cursor disappears).
                 for entry in self.entries.iter_mut().rev() {
-                    if let TranscriptEntry::Assistant { is_streaming, rendered, .. } = entry {
+                    if let TranscriptEntry::Assistant {
+                        is_streaming,
+                        rendered,
+                        ..
+                    } = entry
+                    {
                         *is_streaming = false;
                         *rendered = None;
                         break;
@@ -1278,7 +1419,13 @@ impl Component for Transcript {
     }
 
     fn render(&mut self, f: &mut ratatui::Frame, area: Rect) {
-        render(area, f.buffer_mut(), &mut self.entries, &mut self.scroll, self.activity_tick);
+        render(
+            area,
+            f.buffer_mut(),
+            &mut self.entries,
+            &mut self.scroll,
+            self.activity_tick,
+        );
     }
 }
 
@@ -1289,9 +1436,16 @@ mod tests {
     use super::*;
 
     fn text_to_string(t: &Text<'static>) -> String {
-        t.lines.iter().map(|l| {
-            l.spans.iter().map(|s| s.content.clone()).collect::<String>()
-        }).collect::<Vec<_>>().join("\n")
+        t.lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.clone())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     #[test]
@@ -1372,7 +1526,10 @@ mod tests {
         })
         .to_string();
         let state = ToolCallState::new("write".into(), args);
-        assert!(state.args.is_empty(), "full write payload must not be retained");
+        assert!(
+            state.args.is_empty(),
+            "full write payload must not be retained"
+        );
         assert_eq!(state.write_preview.as_ref().unwrap().lines.len(), 10);
         let mut entry = TranscriptEntry::ToolCallBox { state };
 
@@ -1387,8 +1544,13 @@ mod tests {
 
         let expected = lines[0].chars().count();
         for (index, line) in lines.iter().enumerate() {
-            assert_eq!(line.chars().count(), expected,
-                "write panel line {} has inconsistent width: '{}'", index, line);
+            assert_eq!(
+                line.chars().count(),
+                expected,
+                "write panel line {} has inconsistent width: '{}'",
+                index,
+                line
+            );
         }
     }
 
@@ -1448,7 +1610,10 @@ mod tests {
         .to_string();
 
         let state = ToolCallState::new("edit".into(), args);
-        assert!(state.args.is_empty(), "full edit payload must not be retained");
+        assert!(
+            state.args.is_empty(),
+            "full edit payload must not be retained"
+        );
         let preview = state.edit_preview.as_ref().unwrap();
         assert_eq!(preview.removed.len(), MAX_RETAINED_SOURCE_LINES);
         assert_eq!(preview.added.len(), MAX_RETAINED_SOURCE_LINES);
@@ -1466,8 +1631,13 @@ mod tests {
         let lines: Vec<&str> = output.lines().collect();
         let expected = lines[0].chars().count();
         for (index, line) in lines.iter().enumerate() {
-            assert_eq!(line.chars().count(), expected,
-                "edit panel line {} has inconsistent width: '{}'", index, line);
+            assert_eq!(
+                line.chars().count(),
+                expected,
+                "edit panel line {} has inconsistent width: '{}'",
+                index,
+                line
+            );
         }
     }
 
@@ -1476,7 +1646,8 @@ mod tests {
         let args = serde_json::json!({
             "filePath": "src/main.rs",
             "content": (1..=20).map(|n| format!("line {}", n)).collect::<Vec<_>>().join("\n"),
-        }).to_string();
+        })
+        .to_string();
         let mut transcript = Transcript::new();
         transcript.process_stream_event(&super::super::component::UiStreamEvent::ToolCall {
             name: "write".into(),
@@ -1489,7 +1660,9 @@ mod tests {
         });
 
         for entry in &transcript.entries {
-            let TranscriptEntry::ToolCallBox { state } = entry else { continue };
+            let TranscriptEntry::ToolCallBox { state } = entry else {
+                continue;
+            };
             assert!(state.expanded);
         }
     }
@@ -1505,26 +1678,43 @@ mod tests {
         let s = text_to_string(&rendered);
         let lines: Vec<&str> = s.lines().collect();
 
-        assert!(lines[0].starts_with("┌─"), "top border should start with ┌─");
+        assert!(
+            lines[0].starts_with("┌─"),
+            "top border should start with ┌─"
+        );
         assert!(lines[0].ends_with("┐"), "top border should end with ┐");
 
-        for line in &lines[1..lines.len()-1] {
-            if line.starts_with("├") || line.starts_with("└") { continue; }
+        for line in &lines[1..lines.len() - 1] {
+            if line.starts_with("├") || line.starts_with("└") {
+                continue;
+            }
             assert!(line.starts_with("│"), "content lines should start with │");
             assert!(line.ends_with("│"), "content lines should end with │");
         }
 
-        assert!(lines.last().unwrap().starts_with("└"), "bottom border should start with └");
-        assert!(lines.last().unwrap().ends_with("┘"), "bottom border should end with ┘");
+        assert!(
+            lines.last().unwrap().starts_with("└"),
+            "bottom border should start with └"
+        );
+        assert!(
+            lines.last().unwrap().ends_with("┘"),
+            "bottom border should end with ┘"
+        );
 
         let widths: Vec<usize> = lines.iter().map(|l| l.chars().count()).collect();
         let expected = widths[0];
         for (i, w) in widths.iter().enumerate() {
-            assert_eq!(*w, expected,
+            assert_eq!(
+                *w, expected,
                 "line {} is {} chars wide, expected {}: '{}'",
-                i, w, expected, lines[i]);
+                i, w, expected, lines[i]
+            );
         }
 
-        println!("Tool box borders OK — {} lines, {} chars wide", lines.len(), expected);
+        println!(
+            "Tool box borders OK — {} lines, {} chars wide",
+            lines.len(),
+            expected
+        );
     }
 }

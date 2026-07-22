@@ -107,7 +107,9 @@ impl ONNXEmbeddingEngine {
         }
         .map_err(|e| format!("Failed to build ONNX input tensor: {}", e))?;
 
-        let outputs = self.session.run(input_tensor)
+        let outputs = self
+            .session
+            .run(input_tensor)
             .map_err(|e| format!("ONNX inference failed: {}", e))?;
 
         // all-MiniLM-L6-v2 output is a single float tensor: (1, 384)
@@ -131,14 +133,19 @@ impl ONNXEmbeddingEngine {
     fn tokenize(text: &str) -> Tokenized {
         // Minimal whitespace tokenizer — real usage should use a tokenizer
         // compatible with the ONNX model (e.g., HuggingFace tokenizers crate).
-        let tokens: Vec<i64> = text.split_whitespace()
+        let tokens: Vec<i64> = text
+            .split_whitespace()
             .enumerate()
             .map(|(i, _)| (i + 1) as i64)
             .collect();
         let len = tokens.len() as i64;
         Tokenized {
             ids: vec![tokens.clone(), vec![0i64; 384.min(512) - tokens.len()]].concat(),
-            mask: vec![vec![1i64; len as usize], vec![0i64; 384.min(512) - tokens.len()]].concat(),
+            mask: vec![
+                vec![1i64; len as usize],
+                vec![0i64; 384.min(512) - tokens.len()],
+            ]
+            .concat(),
         }
     }
 }
@@ -177,7 +184,11 @@ mod tests {
         let a = engine.embed("delete all files")?;
         let b = engine.embed("hello world this is a test")?;
         let sim = engine.similarity(&a, &b)?;
-        assert!(sim < 0.3, "truly different texts should not be similar: {}", sim);
+        assert!(
+            sim < 0.3,
+            "truly different texts should not be similar: {}",
+            sim
+        );
         Ok(())
     }
 
@@ -196,7 +207,11 @@ mod tests {
         let a = engine.embed("the quick brown fox")?;
         let b = engine.embed("the quick brown fox")?;
         let sim = engine.similarity(&a, &b)?;
-        assert!((sim - 1.0).abs() < 0.001, "Self-similarity should be ~1.0, got {}", sim);
+        assert!(
+            (sim - 1.0).abs() < 0.001,
+            "Self-similarity should be ~1.0, got {}",
+            sim
+        );
         Ok(())
     }
 }

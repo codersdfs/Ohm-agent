@@ -92,7 +92,9 @@ pub fn style_tool_box_border() -> Style {
 }
 
 pub fn style_tool_box_title() -> Style {
-    Style::default().fg(TOOL_BOX_BORDER).add_modifier(Modifier::BOLD)
+    Style::default()
+        .fg(TOOL_BOX_BORDER)
+        .add_modifier(Modifier::BOLD)
 }
 
 pub fn style_tool_box_ok() -> Style {
@@ -114,7 +116,9 @@ pub fn style_dim() -> Style {
 }
 
 pub fn style_accent() -> Style {
-    Style::default().fg(PRIMARY_CONTAINER).add_modifier(Modifier::BOLD)
+    Style::default()
+        .fg(PRIMARY_CONTAINER)
+        .add_modifier(Modifier::BOLD)
 }
 
 pub fn style_error() -> Style {
@@ -145,9 +149,7 @@ pub fn style_secondary() -> Style {
 
 /// Style for a focused input field: brighter foreground and an underline effect.
 pub fn style_focused_field() -> Style {
-    Style::default()
-        .fg(FG)
-        .add_modifier(Modifier::UNDERLINED)
+    Style::default().fg(FG).add_modifier(Modifier::UNDERLINED)
 }
 
 /// Style for a focused button: bold and high-contrast without animation.
@@ -191,7 +193,11 @@ pub fn glass_border_styles(active: bool) -> (Style, Style, Style, Style) {
 
 /// Safe cell accessor for ratatui 0.26 (which has no `cell_mut`).
 /// Returns `None` when `(x, y)` is outside the buffer area.
-pub fn buf_cell_mut(buf: &mut ratatui::buffer::Buffer, x: u16, y: u16) -> Option<&mut ratatui::buffer::Cell> {
+pub fn buf_cell_mut(
+    buf: &mut ratatui::buffer::Buffer,
+    x: u16,
+    y: u16,
+) -> Option<&mut ratatui::buffer::Cell> {
     if x < buf.area.width && y < buf.area.height {
         Some(buf.get_mut(x, y))
     } else {

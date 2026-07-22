@@ -43,15 +43,19 @@ impl TableCache {
                 self.entries.remove(&evict_key);
             }
         }
-        self.entries.insert(key, CacheEntry {
-            data,
-            loaded_at: Instant::now(),
-            access_count: 0,
-        });
+        self.entries.insert(
+            key,
+            CacheEntry {
+                data,
+                loaded_at: Instant::now(),
+                access_count: 0,
+            },
+        );
     }
 
     fn evict_one(&self) -> Option<String> {
-        self.entries.iter()
+        self.entries
+            .iter()
             .min_by_key(|(_, e)| e.access_count)
             .map(|(k, _)| k.clone())
     }

@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
-use crate::AppState;
 use crate::pipeline::plan::{PlanAgent, StructuredPlan, PLAN_SYSTEM_PROMPT};
+use crate::AppState;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanGeneratedPayload {
@@ -9,10 +9,7 @@ pub struct PlanGeneratedPayload {
     pub raw_output: String,
 }
 
-pub async fn generate_plan(
-    state: &AppState,
-    task: String,
-) -> Result<PlanGeneratedPayload, String> {
+pub async fn generate_plan(state: &AppState, task: String) -> Result<PlanGeneratedPayload, String> {
     let task_id = uuid::Uuid::new_v4().to_string();
     log::info!("generate_plan: task_id={}", task_id);
 
@@ -51,16 +48,12 @@ pub async fn generate_plan(
     }
 }
 
-pub async fn get_plan(
-    state: &AppState,
-) -> Result<Option<StructuredPlan>, String> {
+pub async fn get_plan(state: &AppState) -> Result<Option<StructuredPlan>, String> {
     let pipeline = state.pipeline.lock().await;
     Ok(pipeline.structured_plan.clone())
 }
 
-pub async fn approve_plan(
-    state: &AppState,
-) -> Result<String, String> {
+pub async fn approve_plan(state: &AppState) -> Result<String, String> {
     let mut pipeline = state.pipeline.lock().await;
     if pipeline.structured_plan.is_none() {
         return Err("No plan to approve".into());

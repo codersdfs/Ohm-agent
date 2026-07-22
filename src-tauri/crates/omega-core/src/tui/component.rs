@@ -1,6 +1,6 @@
-use ratatui::Frame;
-use ratatui::layout::Rect;
 use crossterm::event::KeyEvent;
+use ratatui::layout::Rect;
+use ratatui::Frame;
 
 /// Events sent from the streaming task to the UI event loop.
 #[derive(Debug, Clone)]
@@ -8,9 +8,21 @@ pub enum UiStreamEvent {
     Token(String),
     Thinking(String),
     ThinkingDone,
-    ToolCall { name: String, args: String },
-    ToolResult { name: String, success: bool, output: String },
-    Done { full: String, tokens_in: u32, tokens_out: u32, messages: Vec<providers::ChatMessage> },
+    ToolCall {
+        name: String,
+        args: String,
+    },
+    ToolResult {
+        name: String,
+        success: bool,
+        output: String,
+    },
+    Done {
+        full: String,
+        tokens_in: u32,
+        tokens_out: u32,
+        messages: Vec<providers::ChatMessage>,
+    },
     Error(String),
 }
 
@@ -45,10 +57,7 @@ pub enum Action {
     /// Scroll to bottom.
     ScrollBottom,
     /// Streaming completed successfully.
-    StreamDone {
-        tokens_in: u32,
-        tokens_out: u32,
-    },
+    StreamDone { tokens_in: u32, tokens_out: u32 },
     /// Streaming finished with an error.
     StreamError,
 }

@@ -1,9 +1,9 @@
-pub mod chat;
-pub mod tools;
-pub mod gate;
-pub mod tables;
-pub mod memory;
-pub mod mcp;
-pub mod plan_cmd;
 pub mod build_cmd;
+pub mod chat;
+pub mod gate;
+pub mod mcp;
+pub mod memory;
+pub mod plan_cmd;
 pub mod review_cmd;
+pub mod tables;
+pub mod tools;

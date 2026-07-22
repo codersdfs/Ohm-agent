@@ -1,8 +1,11 @@
 // Glob tool implementation
 
-use crate::{Tool, ToolInput, ToolResult, ToolError, ToolUseContext};
+use crate::metadata::{
+    CostCategory, CostHint, LatencyHint, ToolCategory, ToolErrorSpec, ToolExample, ToolMetadata,
+    ToolSource,
+};
 use crate::schema::string_param;
-use crate::metadata::{ToolMetadata, ToolCategory, LatencyHint, ToolErrorSpec, ToolExample, ToolSource, CostHint, CostCategory};
+use crate::{Tool, ToolError, ToolInput, ToolResult, ToolUseContext};
 use async_trait::async_trait;
 
 pub struct GlobTool;
@@ -21,8 +24,12 @@ impl Default for GlobTool {
 
 #[async_trait]
 impl Tool for GlobTool {
-    fn name(&self) -> &str { "glob" }
-    fn description(&self) -> &str { "Find files matching a glob pattern. Use for listing files in a directory structure." }
+    fn name(&self) -> &str {
+        "glob"
+    }
+    fn description(&self) -> &str {
+        "Find files matching a glob pattern. Use for listing files in a directory structure."
+    }
 
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({
@@ -97,10 +104,29 @@ Returns one file path per line, sorted alphabetically.".into()),
     }
 
     async fn call(&self, input: ToolInput, _ctx: &ToolUseContext) -> Result<ToolResult, ToolError> {
-        let pattern = input.args.get("path")
+        let pattern = input
+            .args
+            .get("path")
             .and_then(|v| v.as_str())
-            .map(|p| format!("{}/{}", p.trim_end_matches('/').trim_end_matches('\\'), input.args.get("pattern").and_then(|v| v.as_str()).unwrap_or("*")))
-            .unwrap_or_else(|| input.args.get("pattern").and_then(|v| v.as_str()).unwrap_or("*").to_string());
+            .map(|p| {
+                format!(
+                    "{}/{}",
+                    p.trim_end_matches('/').trim_end_matches('\\'),
+                    input
+                        .args
+                        .get("pattern")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("*")
+                )
+            })
+            .unwrap_or_else(|| {
+                input
+                    .args
+                    .get("pattern")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("*")
+                    .to_string()
+            });
 
         let paths: Vec<String> = glob::glob(&pattern)
             .map_err(|e| ToolError::new(format!("Invalid glob pattern: {}", e)))?
@@ -124,8 +150,12 @@ mod tests {
     #[tokio::test]
     async fn test_glob_tool_finds_files() {
         let temp_dir = TempDir::new().unwrap();
-        tokio::fs::write(temp_dir.path().join("a.rs"), "").await.unwrap();
-        tokio::fs::write(temp_dir.path().join("b.txt"), "").await.unwrap();
+        tokio::fs::write(temp_dir.path().join("a.rs"), "")
+            .await
+            .unwrap();
+        tokio::fs::write(temp_dir.path().join("b.txt"), "")
+            .await
+            .unwrap();
 
         let tool = GlobTool::new();
         let input = ToolInput {

@@ -1,9 +1,9 @@
 // Tool registry for managing built-in and MCP tools
 
-use std::collections::HashMap;
-use crate::Tool;
 use crate::metadata::{ToolCategory, ToolMetadata, ToolRef};
+use crate::Tool;
 use providers::ToolDefinition;
+use std::collections::HashMap;
 
 /// Tool registry for registration, lookup, and listing
 pub struct ToolRegistry {
@@ -37,14 +37,17 @@ impl ToolRegistry {
 
     /// Get a tool by name (built-ins take precedence)
     pub fn get(&self, name: &str) -> Option<&dyn Tool> {
-        self.built_ins.get(name)
+        self.built_ins
+            .get(name)
             .map(|t| t.as_ref())
             .or_else(|| self.mcp_tools.get(name).map(|t| t.as_ref()))
     }
 
     /// List all tool names (built-ins first, then MCP)
     pub fn list(&self) -> Vec<String> {
-        let mut names: Vec<String> = self.built_ins.keys()
+        let mut names: Vec<String> = self
+            .built_ins
+            .keys()
             .chain(self.mcp_tools.keys())
             .cloned()
             .collect();
@@ -54,7 +57,9 @@ impl ToolRegistry {
 
     /// Get tool definitions for all registered tools
     pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
-        let mut defs: Vec<ToolDefinition> = self.built_ins.values()
+        let mut defs: Vec<ToolDefinition> = self
+            .built_ins
+            .values()
             .chain(self.mcp_tools.values())
             .map(|t| ToolDefinition {
                 tool_type: "function".into(),
@@ -79,7 +84,9 @@ impl ToolRegistry {
 
     /// Return metadata for every registered tool.
     pub fn all_metadata(&self) -> Vec<ToolMetadata> {
-        let mut meta: Vec<ToolMetadata> = self.built_ins.values()
+        let mut meta: Vec<ToolMetadata> = self
+            .built_ins
+            .values()
             .chain(self.mcp_tools.values())
             .map(|t| t.metadata())
             .collect();
@@ -107,37 +114,45 @@ impl ToolRegistry {
     /// Simple substring matching — Phase 2 will add fuzzy/ranked search.
     pub fn search(&self, query: &str) -> Vec<ToolRef> {
         let q = query.to_lowercase();
-        let mut results: Vec<(ToolRef, u32)> = self.all_refs().into_iter().filter_map(|r| {
-            let mut score = 0u32;
-            let name_lower = r.name.to_lowercase();
-            let desc_lower = r.description.to_lowercase();
+        let mut results: Vec<(ToolRef, u32)> = self
+            .all_refs()
+            .into_iter()
+            .filter_map(|r| {
+                let mut score = 0u32;
+                let name_lower = r.name.to_lowercase();
+                let desc_lower = r.description.to_lowercase();
 
-            // Exact name match tops the list
-            if name_lower == q {
-                score += 100;
-            }
-            // Name starts with query
-            if name_lower.starts_with(&q) {
-                score += 50;
-            }
-            // Name contains query
-            if name_lower.contains(&q) {
-                score += 30;
-            }
-            // Description contains query
-            if desc_lower.contains(&q) {
-                score += 10;
-            }
-            // Tags contain query
-            for tag in &r.tags {
-                if tag.to_lowercase().contains(&q) {
-                    score += 15;
-                    break;
+                // Exact name match tops the list
+                if name_lower == q {
+                    score += 100;
                 }
-            }
+                // Name starts with query
+                if name_lower.starts_with(&q) {
+                    score += 50;
+                }
+                // Name contains query
+                if name_lower.contains(&q) {
+                    score += 30;
+                }
+                // Description contains query
+                if desc_lower.contains(&q) {
+                    score += 10;
+                }
+                // Tags contain query
+                for tag in &r.tags {
+                    if tag.to_lowercase().contains(&q) {
+                        score += 15;
+                        break;
+                    }
+                }
 
-            if score > 0 { Some((r, score)) } else { None }
-        }).collect();
+                if score > 0 {
+                    Some((r, score))
+                } else {
+                    None
+                }
+            })
+            .collect();
 
         results.sort_by(|a, b| b.1.cmp(&a.1));
         results.into_iter().map(|(r, _)| r).collect()
@@ -173,17 +188,27 @@ impl ToolRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ToolInput, ToolResult, ToolError, ToolUseContext};
+    use crate::{ToolError, ToolInput, ToolResult, ToolUseContext};
     use async_trait::async_trait;
 
     struct MockTool;
 
     #[async_trait]
     impl Tool for MockTool {
-        fn name(&self) -> &str { "mock_tool" }
-        fn description(&self) -> &str { "A mock tool for testing" }
-        fn parameters_schema(&self) -> serde_json::Value { serde_json::json!({}) }
-        async fn call(&self, _input: ToolInput, _ctx: &ToolUseContext) -> Result<ToolResult, ToolError> {
+        fn name(&self) -> &str {
+            "mock_tool"
+        }
+        fn description(&self) -> &str {
+            "A mock tool for testing"
+        }
+        fn parameters_schema(&self) -> serde_json::Value {
+            serde_json::json!({})
+        }
+        async fn call(
+            &self,
+            _input: ToolInput,
+            _ctx: &ToolUseContext,
+        ) -> Result<ToolResult, ToolError> {
             Ok(ToolResult::success("mock output"))
         }
     }
@@ -214,10 +239,20 @@ mod tests {
 
     #[async_trait]
     impl Tool for AnotherMockTool {
-        fn name(&self) -> &str { "another_mock" }
-        fn description(&self) -> &str { "Another mock tool" }
-        fn parameters_schema(&self) -> serde_json::Value { serde_json::json!({}) }
-        async fn call(&self, _input: ToolInput, _ctx: &ToolUseContext) -> Result<ToolResult, ToolError> {
+        fn name(&self) -> &str {
+            "another_mock"
+        }
+        fn description(&self) -> &str {
+            "Another mock tool"
+        }
+        fn parameters_schema(&self) -> serde_json::Value {
+            serde_json::json!({})
+        }
+        async fn call(
+            &self,
+            _input: ToolInput,
+            _ctx: &ToolUseContext,
+        ) -> Result<ToolResult, ToolError> {
             Ok(ToolResult::success("another output"))
         }
     }

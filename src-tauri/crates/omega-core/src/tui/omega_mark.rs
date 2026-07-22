@@ -35,13 +35,17 @@ impl Widget for &AnimationPhase {
         };
 
         let glyph_height = glyph.len() as u16;
-        let glyph_width = glyph.iter().map(|l| l.chars().count() as u16).max().unwrap_or(0);
-        let start_y = area.top().saturating_add(
-            area.height.saturating_sub(glyph_height).saturating_sub(2) / 2,
-        );
-        let start_x = area.left().saturating_add(
-            area.width.saturating_sub(glyph_width) / 2,
-        );
+        let glyph_width = glyph
+            .iter()
+            .map(|l| l.chars().count() as u16)
+            .max()
+            .unwrap_or(0);
+        let start_y = area
+            .top()
+            .saturating_add(area.height.saturating_sub(glyph_height).saturating_sub(2) / 2);
+        let start_x = area
+            .left()
+            .saturating_add(area.width.saturating_sub(glyph_width) / 2);
 
         let padded: Vec<String> = glyph
             .iter()
@@ -114,7 +118,9 @@ impl Widget for &AnimationPhase {
 // ── Large version ──────────────────────────────────────────────────────────
 
 /// Build the full-size Omega glyph (≈21×9) and cooking emoji positions.
-fn full_omega(phase: &AnimationPhase) -> (Vec<&'static str>, Vec<(i16, i16, char)>, Option<Modifier>) {
+fn full_omega(
+    phase: &AnimationPhase,
+) -> (Vec<&'static str>, Vec<(i16, i16, char)>, Option<Modifier>) {
     let glyph = vec![
         "▓▓▓▓▓▓▓▓▓▓▓▓▓",
         "▓▓▒▒▒▒▒▒▒▒▒▒▒▒▒▒▓▓",
@@ -160,13 +166,25 @@ fn full_omega(phase: &AnimationPhase) -> (Vec<&'static str>, Vec<(i16, i16, char
 
     let modifier = match phase.agent {
         AgentState::Idle => {
-            if (phase.tick / 8) % 2 == 0 { Some(Modifier::BOLD) } else { None }
+            if (phase.tick / 8) % 2 == 0 {
+                Some(Modifier::BOLD)
+            } else {
+                None
+            }
         }
         AgentState::Thinking => {
-            if (phase.tick / 4) % 2 == 0 { Some(Modifier::BOLD) } else { None }
+            if (phase.tick / 4) % 2 == 0 {
+                Some(Modifier::BOLD)
+            } else {
+                None
+            }
         }
         AgentState::Streaming => {
-            if (phase.tick / 2) % 2 == 0 { Some(Modifier::BOLD) } else { None }
+            if (phase.tick / 2) % 2 == 0 {
+                Some(Modifier::BOLD)
+            } else {
+                None
+            }
         }
     };
 
@@ -176,30 +194,24 @@ fn full_omega(phase: &AnimationPhase) -> (Vec<&'static str>, Vec<(i16, i16, char
 // ── Compact version ────────────────────────────────────────────────────────
 
 /// Build the compact Omega glyph (≈9×5) with a two-frame dither.
-fn compact_omega(phase: &AnimationPhase) -> (Vec<&'static str>, Vec<(i16, i16, char)>, Option<Modifier>) {
+fn compact_omega(
+    phase: &AnimationPhase,
+) -> (Vec<&'static str>, Vec<(i16, i16, char)>, Option<Modifier>) {
     let frame = (phase.tick / 6) % 2;
 
     let glyph = if frame == 0 {
-        vec![
-            "  █████ ",
-            " ██▒▒▒██",
-            " ██ Ω ██",
-            " ██▒▒▒██",
-            "  █████ ",
-        ]
+        vec!["  █████ ", " ██▒▒▒██", " ██ Ω ██", " ██▒▒▒██", "  █████ "]
     } else {
-        vec![
-            "  ░░░░░ ",
-            " ░░███░░",
-            " ░░ Ω ░░",
-            " ░░███░░",
-            "  ░░░░░ ",
-        ]
+        vec!["  ░░░░░ ", " ░░███░░", " ░░ Ω ░░", " ░░███░░", "  ░░░░░ "]
     };
 
     let accent_mod = match phase.agent {
         AgentState::Idle => {
-            if (phase.tick / 8) % 2 == 0 { Some(Modifier::BOLD) } else { None }
+            if (phase.tick / 8) % 2 == 0 {
+                Some(Modifier::BOLD)
+            } else {
+                None
+            }
         }
         AgentState::Thinking => Some(Modifier::BOLD),
         AgentState::Streaming => None,
@@ -213,8 +225,16 @@ fn compact_omega(phase: &AnimationPhase) -> (Vec<&'static str>, Vec<(i16, i16, c
     };
 
     // Two cooking emoji orbiting
-    let emoji_set = if (phase.tick / 2) % 2 == 0 { '🍳' } else { '🥘' };
-    let emoji_set2 = if (phase.tick / 3) % 2 == 0 { '🍲' } else { '🫕' };
+    let emoji_set = if (phase.tick / 2) % 2 == 0 {
+        '🍳'
+    } else {
+        '🥘'
+    };
+    let emoji_set2 = if (phase.tick / 3) % 2 == 0 {
+        '🍲'
+    } else {
+        '🫕'
+    };
 
     let emoji_positions = vec![
         (

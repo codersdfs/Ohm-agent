@@ -1,12 +1,12 @@
-use crate::GateResult;
-use crate::Language;
-use crate::Violation;
+use crate::golden::GoldenRules;
+use crate::repeated::{self as repeated_checks, RepeatedPatternTracker};
 use crate::rules::RulesDatabase;
 use crate::scoring;
 use crate::structural::StructuralCheck;
 use crate::taste::TasteCheck;
-use crate::golden::GoldenRules;
-use crate::repeated::{self as repeated_checks, RepeatedPatternTracker};
+use crate::GateResult;
+use crate::Language;
+use crate::Violation;
 
 /// Unified Gate engine that runs all check types and returns aggregated results.
 pub struct GateEngine {
@@ -18,7 +18,8 @@ pub struct GateEngine {
 
 impl GateEngine {
     pub fn new(project_root: String, language: Language) -> Self {
-        let db = RulesDatabase::load_or_create(&project_root).unwrap_or_else(|_| RulesDatabase::new());
+        let db =
+            RulesDatabase::load_or_create(&project_root).unwrap_or_else(|_| RulesDatabase::new());
         Self {
             db,
             project_root,
@@ -48,14 +49,19 @@ impl GateEngine {
         all_violations.extend(self.db.check_content(content, &self.language));
 
         // 5. Repeated pattern detection
-        all_violations.extend(repeated_checks::find_repeated_patterns(content, &self.language));
+        all_violations.extend(repeated_checks::find_repeated_patterns(
+            content,
+            &self.language,
+        ));
 
         // Deduplicate by message + category
         all_violations.sort_by(|a, b| a.message.cmp(&b.message));
         all_violations.dedup_by(|a, b| a.message == b.message && a.category == b.category);
 
         // Track and promote repeated violations
-        let promoted = self.repeated_tracker.promote_to_db(&mut self.db, &self.language, &all_violations);
+        let promoted =
+            self.repeated_tracker
+                .promote_to_db(&mut self.db, &self.language, &all_violations);
         if promoted > 0 {
             log::info!("Gate: promoted {} new rules to database", promoted);
             // Persist promoted rules
@@ -88,7 +94,11 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         let mut engine = GateEngine::new(dir.to_str().unwrap().to_string(), Language::Rust);
         let result = engine.check_file("main.rs", "fn main() { println!(\"hello\"); }\n");
-        assert!(result.score >= 80, "Clean file should score >=80, got {}", result.score);
+        assert!(
+            result.score >= 80,
+            "Clean file should score >=80, got {}",
+            result.score
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -99,7 +109,11 @@ mod tests {
         let content = "unsafe { ptr.read() }\nfn CamelCase() {}\n";
         let mut engine = GateEngine::new(dir.to_str().unwrap().to_string(), Language::Rust);
         let result = engine.check_file("test.rs", content);
-        assert!(result.score < 100, "Should detect violations, got score {}", result.score);
+        assert!(
+            result.score < 100,
+            "Should detect violations, got score {}",
+            result.score
+        );
         assert!(!result.violations.is_empty(), "Should have violations");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -127,20 +141,32 @@ mod tests {
 
     #[test]
     fn test_scoring_threshold() {
-        let violations = vec![
-            Violation { category: ViolationCategory::Golden, message: "test".into(), tool_hint: None, line: None },
-        ];
+        let violations = vec![Violation {
+            category: ViolationCategory::Golden,
+            message: "test".into(),
+            tool_hint: None,
+            line: None,
+        }];
         let result = scoring::calculate_score(&violations);
         assert_eq!(result.score, 80, "Single golden violation should score 80");
         assert!(result.passed, "Score 80 should pass");
 
         let violations = vec![
-            Violation { category: ViolationCategory::Golden, message: "test1".into(), tool_hint: None, line: None },
-            Violation { category: ViolationCategory::Golden, message: "test2".into(), tool_hint: None, line: None },
+            Violation {
+                category: ViolationCategory::Golden,
+                message: "test1".into(),
+                tool_hint: None,
+                line: None,
+            },
+            Violation {
+                category: ViolationCategory::Golden,
+                message: "test2".into(),
+                tool_hint: None,
+                line: None,
+            },
         ];
         let result = scoring::calculate_score(&violations);
         assert_eq!(result.score, 60, "Two golden violations should score 60");
         assert!(!result.passed, "Score 60 should fail");
     }
 }
-

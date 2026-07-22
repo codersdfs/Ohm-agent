@@ -32,7 +32,8 @@ impl RulesDatabase {
             .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
 
         // Strip JSONC comments (lines starting with //)
-        let cleaned: Vec<&str> = content.lines()
+        let cleaned: Vec<&str> = content
+            .lines()
             .filter(|l| !l.trim().starts_with("//"))
             .collect();
         let json = cleaned.join("\n");
@@ -82,9 +83,14 @@ mod tests {
         let db = RulesDatabase::new();
         db.save_to(dir.to_str().unwrap()).unwrap();
 
-        let loaded = RulesDatabase::load_from(dir.to_str().unwrap()).unwrap().unwrap();
+        let loaded = RulesDatabase::load_from(dir.to_str().unwrap())
+            .unwrap()
+            .unwrap();
         let rust_rules = loaded.load_for_language(&Language::Rust);
-        assert!(!rust_rules.structural.is_empty(), "Rust structural rules should load");
+        assert!(
+            !rust_rules.structural.is_empty(),
+            "Rust structural rules should load"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

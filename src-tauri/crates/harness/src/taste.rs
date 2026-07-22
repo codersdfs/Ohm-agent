@@ -52,18 +52,24 @@ impl TasteCheck {
         if content.contains("-> Result<") && content.contains(", String>") {
             violations.push(Violation {
                 category: ViolationCategory::Taste,
-                message: "Using `String` as error type: prefer a proper error enum or `anyhow::Error`".into(),
-                tool_hint: Some("Define a custom error enum or use `anyhow::Error` / `thiserror`".into()),
+                message:
+                    "Using `String` as error type: prefer a proper error enum or `anyhow::Error`"
+                        .into(),
+                tool_hint: Some(
+                    "Define a custom error enum or use `anyhow::Error` / `thiserror`".into(),
+                ),
                 line: None,
             });
         }
 
         // Check for commented-out code
-        if let Ok(re) = regex::Regex::new(r"//\s*.*fn\s+\w+\s*\(|//\s*.*impl\s+\w+|//\s*.*pub\s+fn") {
+        if let Ok(re) = regex::Regex::new(r"//\s*.*fn\s+\w+\s*\(|//\s*.*impl\s+\w+|//\s*.*pub\s+fn")
+        {
             if re.is_match(content) {
                 violations.push(Violation {
                     category: ViolationCategory::Taste,
-                    message: "Commented-out code detected: remove dead code instead of commenting".into(),
+                    message: "Commented-out code detected: remove dead code instead of commenting"
+                        .into(),
                     tool_hint: Some("Delete commented-out code or move to a scratch file".into()),
                     line: None,
                 });
@@ -79,7 +85,10 @@ impl TasteCheck {
                 violations.push(Violation {
                     category: ViolationCategory::Taste,
                     message: "Using `any` type: prefer `unknown` or a proper interface".into(),
-                    tool_hint: Some("Replace `any` with `unknown` and add type guards, or define an interface".into()),
+                    tool_hint: Some(
+                        "Replace `any` with `unknown` and add type guards, or define an interface"
+                            .into(),
+                    ),
                     line: None,
                 });
             }
@@ -90,7 +99,9 @@ impl TasteCheck {
             violations.push(Violation {
                 category: ViolationCategory::Taste,
                 message: "Using `var`: prefer `const` or `let`".into(),
-                tool_hint: Some("Replace `var` with `const` for immutable bindings or `let` for mutable".into()),
+                tool_hint: Some(
+                    "Replace `var` with `const` for immutable bindings or `let` for mutable".into(),
+                ),
                 line: None,
             });
         }
@@ -140,7 +151,9 @@ impl TasteCheck {
                 violations.push(Violation {
                     category: ViolationCategory::Taste,
                     message: "Mutable default argument: use `None` instead of `[]` or `{}`".into(),
-                    tool_hint: Some("Use `def fn(x=None):` and assign inside the function body".into()),
+                    tool_hint: Some(
+                        "Use `def fn(x=None):` and assign inside the function body".into(),
+                    ),
                     line: None,
                 });
             }
@@ -155,10 +168,15 @@ mod tests {
 
     #[test]
     fn test_rust_excessive_clone() {
-        let content = "let a = x.clone();\nlet b = y.clone();\nlet c = z.clone();\nlet d = w.clone();";
+        let content =
+            "let a = x.clone();\nlet b = y.clone();\nlet c = z.clone();\nlet d = w.clone();";
         let violations = TasteCheck::check(content, "test.rs", &Language::Rust);
         let clone_v = violations.iter().find(|v| v.message.contains("clone()"));
-        assert!(clone_v.is_some(), "Should flag excessive cloning: {:?}", violations);
+        assert!(
+            clone_v.is_some(),
+            "Should flag excessive cloning: {:?}",
+            violations
+        );
     }
 
     #[test]
@@ -166,7 +184,11 @@ mod tests {
         let content = "let a = x.unwrap();\nlet b = y.unwrap();\nlet c = z.unwrap();";
         let violations = TasteCheck::check(content, "test.rs", &Language::Rust);
         let unwrap_v = violations.iter().find(|v| v.message.contains("unwrap()"));
-        assert!(unwrap_v.is_some(), "Should flag excessive unwrap: {:?}", violations);
+        assert!(
+            unwrap_v.is_some(),
+            "Should flag excessive unwrap: {:?}",
+            violations
+        );
     }
 
     #[test]
@@ -174,7 +196,11 @@ mod tests {
         let content = "fn do_stuff() -> Result<String, String> { Ok(\"hi\".into()) }";
         let violations = TasteCheck::check(content, "test.rs", &Language::Rust);
         let err_type = violations.iter().find(|v| v.message.contains("error type"));
-        assert!(err_type.is_some(), "Should flag String error type, got: {:?}", violations.iter().map(|v| &v.message).collect::<Vec<_>>());
+        assert!(
+            err_type.is_some(),
+            "Should flag String error type, got: {:?}",
+            violations.iter().map(|v| &v.message).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -198,22 +224,35 @@ mod tests {
         let content = "try:\n    pass\nexcept:\n    pass";
         let violations = TasteCheck::check(content, "test.py", &Language::Python);
         let except_v = violations.iter().find(|v| v.message.contains("except:"));
-        assert!(except_v.is_some(), "Should flag bare except: {:?}", violations);
+        assert!(
+            except_v.is_some(),
+            "Should flag bare except: {:?}",
+            violations
+        );
     }
 
     #[test]
     fn test_python_mutable_default() {
         let content = "def add(item, items=[]):\n    items.append(item)\n    return items";
         let violations = TasteCheck::check(content, "test.py", &Language::Python);
-        let default_v = violations.iter().find(|v| v.message.contains("Mutable default"));
-        assert!(default_v.is_some(), "Should flag mutable default: {:?}", violations);
+        let default_v = violations
+            .iter()
+            .find(|v| v.message.contains("Mutable default"));
+        assert!(
+            default_v.is_some(),
+            "Should flag mutable default: {:?}",
+            violations
+        );
     }
 
     #[test]
     fn test_typescript_passes_for_clean_code() {
         let content = "const x: number = 5;\nconst y = x?.foo ?? 'bar';";
         let violations = TasteCheck::check(content, "test.ts", &Language::TypeScript);
-        assert!(violations.is_empty(), "Should pass clean TS code: {:?}", violations);
+        assert!(
+            violations.is_empty(),
+            "Should pass clean TS code: {:?}",
+            violations
+        );
     }
 }
-

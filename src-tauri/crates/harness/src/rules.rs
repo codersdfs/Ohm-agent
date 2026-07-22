@@ -1,6 +1,6 @@
+use crate::Language;
 use crate::Violation;
 use crate::ViolationCategory;
-use crate::Language;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -40,13 +40,27 @@ impl CategoryGroup {
 
     pub fn all_rules(&self) -> Vec<(&RuleEntry, ViolationCategory)> {
         let mut out: Vec<(&RuleEntry, ViolationCategory)> = Vec::new();
-        for r in &self.structural { out.push((r, ViolationCategory::Structural)); }
-        for r in &self.taste { out.push((r, ViolationCategory::Taste)); }
-        for r in &self.golden { out.push((r, ViolationCategory::Golden)); }
-        for r in &self.repeated { out.push((r, ViolationCategory::Repeated)); }
-        for r in &self.frontend { out.push((r, ViolationCategory::Structural)); }
-        for r in &self.backend { out.push((r, ViolationCategory::Structural)); }
-        for r in &self.data { out.push((r, ViolationCategory::Structural)); }
+        for r in &self.structural {
+            out.push((r, ViolationCategory::Structural));
+        }
+        for r in &self.taste {
+            out.push((r, ViolationCategory::Taste));
+        }
+        for r in &self.golden {
+            out.push((r, ViolationCategory::Golden));
+        }
+        for r in &self.repeated {
+            out.push((r, ViolationCategory::Repeated));
+        }
+        for r in &self.frontend {
+            out.push((r, ViolationCategory::Structural));
+        }
+        for r in &self.backend {
+            out.push((r, ViolationCategory::Structural));
+        }
+        for r in &self.data {
+            out.push((r, ViolationCategory::Structural));
+        }
         out
     }
 
@@ -71,17 +85,29 @@ pub struct RulesDatabase {
 
 impl RulesDatabase {
     pub fn new() -> Self {
-        let mut db = Self { languages: HashMap::new() };
+        let mut db = Self {
+            languages: HashMap::new(),
+        };
         db.seed_defaults();
         db
     }
 
     pub fn load_for_language(&self, lang: &Language) -> CategoryGroup {
         let key = lang.to_key();
-        self.languages.get(&key).cloned().unwrap_or_else(CategoryGroup::new)
+        self.languages
+            .get(&key)
+            .cloned()
+            .unwrap_or_else(CategoryGroup::new)
     }
 
-    pub fn promote_or_increment(&mut self, lang: &Language, category: &str, pattern: &str, message: &str, severity: &str) {
+    pub fn promote_or_increment(
+        &mut self,
+        lang: &Language,
+        category: &str,
+        pattern: &str,
+        message: &str,
+        severity: &str,
+    ) {
         let key = lang.to_key();
         let group = self.languages.entry(key).or_insert_with(CategoryGroup::new);
         if let Some(rules) = group.category_mut(category) {
@@ -124,7 +150,10 @@ impl RulesDatabase {
 
     pub fn is_pattern_promoted(&self, lang: &Language, pattern: &str) -> bool {
         let group = self.load_for_language(lang);
-        group.all_rules().iter().any(|(r, _)| r.pattern == pattern && r.promoted)
+        group
+            .all_rules()
+            .iter()
+            .any(|(r, _)| r.pattern == pattern && r.promoted)
     }
 
     /// Demote rules that are promoted but have low frequency (stale).
@@ -156,38 +185,54 @@ impl RulesDatabase {
     }
 
     fn seed_defaults(&mut self) {
-        let rust = self.languages.entry("rust".into()).or_insert_with(CategoryGroup::new);
+        let rust = self
+            .languages
+            .entry("rust".into())
+            .or_insert_with(CategoryGroup::new);
         rust.structural.push(RuleEntry {
-            pattern: "use std".into(), severity: "warn".into(),
+            pattern: "use std".into(),
+            severity: "warn".into(),
             message: "Prefer `use crate` over `use std` in library code".into(),
             tool_hint: Some("Replace with `use crate::...`".into()),
-            frequency: 0, promoted: true,
+            frequency: 0,
+            promoted: true,
         });
         rust.taste.push(RuleEntry {
-            pattern: "fn main".into(), severity: "warn".into(),
+            pattern: "fn main".into(),
+            severity: "warn".into(),
             message: "Library crates should not have `fn main`".into(),
             tool_hint: Some("Remove `fn main` or move to binary crate".into()),
-            frequency: 0, promoted: true,
+            frequency: 0,
+            promoted: true,
         });
 
-        let ts = self.languages.entry("typescript".into()).or_insert_with(CategoryGroup::new);
+        let ts = self
+            .languages
+            .entry("typescript".into())
+            .or_insert_with(CategoryGroup::new);
         ts.frontend.push(RuleEntry {
-            pattern: "style=".into(), severity: "error".into(),
+            pattern: "style=".into(),
+            severity: "error".into(),
             message: "Use Tailwind classes, not inline styles".into(),
             tool_hint: Some("Replace `style={{...}}` with Tailwind utility classes".into()),
-            frequency: 0, promoted: true,
+            frequency: 0,
+            promoted: true,
         });
         ts.structural.push(RuleEntry {
-            pattern: ": any".into(), severity: "warn".into(),
+            pattern: ": any".into(),
+            severity: "warn".into(),
             message: "Avoid `any` type, use `unknown`".into(),
             tool_hint: Some("Replace `any` with `unknown` or a proper type".into()),
-            frequency: 0, promoted: true,
+            frequency: 0,
+            promoted: true,
         });
         ts.golden.push(RuleEntry {
-            pattern: "console.log".into(), severity: "error".into(),
+            pattern: "console.log".into(),
+            severity: "error".into(),
             message: "Use structured logging, not console.log".into(),
             tool_hint: Some("Replace with `log::info!` or a logger call".into()),
-            frequency: 0, promoted: true,
+            frequency: 0,
+            promoted: true,
         });
     }
 }
@@ -219,8 +264,14 @@ mod tests {
     fn test_seeded_rules_exist() {
         let db = RulesDatabase::new();
         let rust_rules = db.load_for_language(&Language::Rust);
-        assert!(!rust_rules.structural.is_empty(), "Rust should have seeded structural rules");
-        assert!(!rust_rules.taste.is_empty(), "Rust should have seeded taste rules");
+        assert!(
+            !rust_rules.structural.is_empty(),
+            "Rust should have seeded structural rules"
+        );
+        assert!(
+            !rust_rules.taste.is_empty(),
+            "Rust should have seeded taste rules"
+        );
     }
 
     #[test]
@@ -244,35 +295,67 @@ mod tests {
         let lang = Language::Rust;
 
         // First occurrence
-        db.promote_or_increment(&lang, "structural", "bad_pattern", "Avoid bad_pattern", "error");
+        db.promote_or_increment(
+            &lang,
+            "structural",
+            "bad_pattern",
+            "Avoid bad_pattern",
+            "error",
+        );
         let v1 = db.check_content("bad_pattern", &lang);
         assert!(v1.is_empty(), "Should not enforce at frequency 1");
 
         // Second occurrence
-        db.promote_or_increment(&lang, "structural", "bad_pattern", "Avoid bad_pattern", "error");
+        db.promote_or_increment(
+            &lang,
+            "structural",
+            "bad_pattern",
+            "Avoid bad_pattern",
+            "error",
+        );
         let v2 = db.check_content("bad_pattern", &lang);
         assert!(v2.is_empty(), "Should not enforce at frequency 2");
 
         // Third occurrence — should promote
-        db.promote_or_increment(&lang, "structural", "bad_pattern", "Avoid bad_pattern", "error");
+        db.promote_or_increment(
+            &lang,
+            "structural",
+            "bad_pattern",
+            "Avoid bad_pattern",
+            "error",
+        );
         let v3 = db.check_content("bad_pattern", &lang);
-        assert!(!v3.is_empty(), "Should enforce promoted rule at frequency 3");
+        assert!(
+            !v3.is_empty(),
+            "Should enforce promoted rule at frequency 3"
+        );
     }
 
     #[test]
     fn test_seeded_ts_rules() {
         let db = RulesDatabase::new();
         let ts_rules = db.load_for_language(&Language::TypeScript);
-        assert!(!ts_rules.frontend.is_empty(), "TypeScript should have seeded frontend rules");
-        assert!(!ts_rules.golden.is_empty(), "TypeScript should have seeded golden rules");
+        assert!(
+            !ts_rules.frontend.is_empty(),
+            "TypeScript should have seeded frontend rules"
+        );
+        assert!(
+            !ts_rules.golden.is_empty(),
+            "TypeScript should have seeded golden rules"
+        );
     }
 
     #[test]
     fn test_ts_inline_style_detected() {
         let db = RulesDatabase::new();
         let violations = db.check_content("style={{ color: 'red' }}", &Language::TypeScript);
-        let style_v = violations.iter().find(|v| v.message.contains("inline styles"));
-        assert!(style_v.is_some(), "Should detect inline style usage: {:?}", violations);
+        let style_v = violations
+            .iter()
+            .find(|v| v.message.contains("inline styles"));
+        assert!(
+            style_v.is_some(),
+            "Should detect inline style usage: {:?}",
+            violations
+        );
     }
 }
-

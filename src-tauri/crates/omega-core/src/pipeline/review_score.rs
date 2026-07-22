@@ -52,28 +52,54 @@ pub fn parse_llm_review(review: &str) -> Vec<LlmReviewIssue> {
 
         // Classify severity
         let lower = trimmed.to_lowercase();
-        let severity = if lower.starts_with("error") || lower.contains("critical") || lower.contains("vulnerability") || lower.contains("security") {
+        let severity = if lower.starts_with("error")
+            || lower.contains("critical")
+            || lower.contains("vulnerability")
+            || lower.contains("security")
+        {
             "error"
-        } else if lower.starts_with("warn") || lower.starts_with("caution") || lower.contains("should") || lower.contains("consider") || lower.contains("recommend") {
+        } else if lower.starts_with("warn")
+            || lower.starts_with("caution")
+            || lower.contains("should")
+            || lower.contains("consider")
+            || lower.contains("recommend")
+        {
             "warn"
         } else {
             continue;
         };
 
         // Classify category
-        let category = if lower.contains("bug") || lower.contains("logic") || lower.contains("incorrect") {
-            "logic"
-        } else if lower.contains("error") || lower.contains("handling") || lower.contains("panic") || lower.contains("unwrap") {
-            "error_handling"
-        } else if lower.contains("perform") || lower.contains("slow") || lower.contains("inefficient") || lower.contains("optim") {
-            "performance"
-        } else if lower.contains("security") || lower.contains("vulnerability") || lower.contains("injection") || lower.contains("xss") {
-            "security"
-        } else if lower.contains("architect") || lower.contains("design") || lower.contains("coupling") || lower.contains("structure") {
-            "architecture"
-        } else {
-            "general"
-        };
+        let category =
+            if lower.contains("bug") || lower.contains("logic") || lower.contains("incorrect") {
+                "logic"
+            } else if lower.contains("error")
+                || lower.contains("handling")
+                || lower.contains("panic")
+                || lower.contains("unwrap")
+            {
+                "error_handling"
+            } else if lower.contains("perform")
+                || lower.contains("slow")
+                || lower.contains("inefficient")
+                || lower.contains("optim")
+            {
+                "performance"
+            } else if lower.contains("security")
+                || lower.contains("vulnerability")
+                || lower.contains("injection")
+                || lower.contains("xss")
+            {
+                "security"
+            } else if lower.contains("architect")
+                || lower.contains("design")
+                || lower.contains("coupling")
+                || lower.contains("structure")
+            {
+                "architecture"
+            } else {
+                "general"
+            };
 
         issues.push(LlmReviewIssue {
             category: category.to_string(),
@@ -115,7 +141,8 @@ pub fn aggregate_scores(
         use std::collections::HashMap;
         let mut by_cat: HashMap<String, Vec<String>> = HashMap::new();
         for v in gate_violations {
-            by_cat.entry(v.category.clone())
+            by_cat
+                .entry(v.category.clone())
                 .or_insert_with(Vec::new)
                 .push(v.message.clone());
         }

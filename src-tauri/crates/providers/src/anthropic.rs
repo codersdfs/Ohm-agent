@@ -1,4 +1,6 @@
-use crate::{ChatRequest, ChatResponse, LlmProvider, StreamChunk, ToolCall, ToolCallFunction, Usage};
+use crate::{
+    ChatRequest, ChatResponse, LlmProvider, StreamChunk, ToolCall, ToolCallFunction, Usage,
+};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -125,8 +127,9 @@ impl AnthropicProvider {
                     }
                     if let Some(ref tool_calls) = msg.tool_calls {
                         for tc in tool_calls {
-                            let input: serde_json::Value = serde_json::from_str(&tc.function.arguments)
-                                .unwrap_or(serde_json::json!({}));
+                            let input: serde_json::Value =
+                                serde_json::from_str(&tc.function.arguments)
+                                    .unwrap_or(serde_json::json!({}));
                             blocks.push(serde_json::json!({
                                 "type": "tool_use",
                                 "id": tc.id,
@@ -163,13 +166,14 @@ impl AnthropicProvider {
     }
 
     fn convert_tools(tools: &[crate::ToolDefinition]) -> Vec<AnthropicToolDef> {
-        tools.iter().map(|t| {
-            AnthropicToolDef {
+        tools
+            .iter()
+            .map(|t| AnthropicToolDef {
                 name: t.function.name.clone(),
                 description: t.function.description.clone(),
                 input_schema: t.function.parameters.clone(),
-            }
-        }).collect()
+            })
+            .collect()
     }
 }
 
@@ -180,7 +184,9 @@ impl LlmProvider for AnthropicProvider {
         let messages = Self::convert_messages(&request);
         let tools = request.tools.as_ref().map(|t| Self::convert_tools(t));
 
-        let system = request.messages.iter()
+        let system = request
+            .messages
+            .iter()
             .find(|m| m.role == "system")
             .map(|m| m.content.clone())
             .filter(|s| !s.is_empty());
@@ -195,7 +201,8 @@ impl LlmProvider for AnthropicProvider {
             tools,
         };
 
-        let resp = client.post(format!("{}/messages", self.base_url.trim_end_matches('/')))
+        let resp = client
+            .post(format!("{}/messages", self.base_url.trim_end_matches('/')))
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
@@ -209,7 +216,10 @@ impl LlmProvider for AnthropicProvider {
             return Err(format!("Anthropic error: {}", text));
         }
 
-        let data: AnthropicResponse = resp.json().await.map_err(|e| format!("parse failed: {}", e))?;
+        let data: AnthropicResponse = resp
+            .json()
+            .await
+            .map_err(|e| format!("parse failed: {}", e))?;
 
         let mut text = String::new();
         let mut tool_calls = Vec::new();
@@ -238,7 +248,11 @@ impl LlmProvider for AnthropicProvider {
             }
         }
 
-        let tool_calls = if tool_calls.is_empty() { None } else { Some(tool_calls) };
+        let tool_calls = if tool_calls.is_empty() {
+            None
+        } else {
+            Some(tool_calls)
+        };
 
         Ok(ChatResponse {
             content: text,
@@ -248,12 +262,18 @@ impl LlmProvider for AnthropicProvider {
         })
     }
 
-    async fn chat_stream(&self, request: ChatRequest, tx: tokio::sync::mpsc::UnboundedSender<StreamChunk>) -> Result<(), String> {
+    async fn chat_stream(
+        &self,
+        request: ChatRequest,
+        tx: tokio::sync::mpsc::UnboundedSender<StreamChunk>,
+    ) -> Result<(), String> {
         let client = reqwest::Client::new();
         let messages = Self::convert_messages(&request);
         let tools = request.tools.as_ref().map(|t| Self::convert_tools(t));
 
-        let system = request.messages.iter()
+        let system = request
+            .messages
+            .iter()
             .find(|m| m.role == "system")
             .map(|m| m.content.clone())
             .filter(|s| !s.is_empty());
@@ -268,7 +288,8 @@ impl LlmProvider for AnthropicProvider {
             tools,
         };
 
-        let resp = client.post(format!("{}/messages", self.base_url.trim_end_matches('/')))
+        let resp = client
+            .post(format!("{}/messages", self.base_url.trim_end_matches('/')))
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
@@ -290,7 +311,8 @@ impl LlmProvider for AnthropicProvider {
         let mut current_tool_id = String::new();
         let mut tool_call_index: usize = 0;
         // Map from tool_use_id to (index, accumulated_name, accumulated_args)
-        let mut tool_calls_map: std::collections::HashMap<String, (usize, String, String)> = std::collections::HashMap::new();
+        let mut tool_calls_map: std::collections::HashMap<String, (usize, String, String)> =
+            std::collections::HashMap::new();
         let mut current_block_type = String::new();
 
         tokio::pin!(stream);
@@ -317,7 +339,10 @@ impl LlmProvider for AnthropicProvider {
                                         current_tool_id = block.id.clone();
                                         let idx = tool_call_index;
                                         tool_call_index += 1;
-                                        tool_calls_map.insert(current_tool_id.clone(), (idx, String::new(), String::new()));
+                                        tool_calls_map.insert(
+                                            current_tool_id.clone(),
+                                            (idx, String::new(), String::new()),
+                                        );
                                     }
                                 }
                             }
@@ -335,7 +360,9 @@ impl LlmProvider for AnthropicProvider {
                                             });
                                         }
                                         "input_json_delta" => {
-                                            if let Some(entry) = tool_calls_map.get_mut(&current_tool_id) {
+                                            if let Some(entry) =
+                                                tool_calls_map.get_mut(&current_tool_id)
+                                            {
                                                 entry.2.push_str(&delta.partial_json);
                                             }
                                         }
@@ -357,8 +384,9 @@ impl LlmProvider for AnthropicProvider {
 
                                 // Convert accumulated tool calls to delta format
                                 if !tool_calls_map.is_empty() {
-                                    let deltas: Vec<crate::DeltaToolCall> = tool_calls_map.iter().map(|(tool_id, (idx, name, args))| {
-                                        crate::DeltaToolCall {
+                                    let deltas: Vec<crate::DeltaToolCall> = tool_calls_map
+                                        .iter()
+                                        .map(|(tool_id, (idx, name, args))| crate::DeltaToolCall {
                                             index: *idx,
                                             id: Some(tool_id.clone()),
                                             tool_type: None,
@@ -366,8 +394,8 @@ impl LlmProvider for AnthropicProvider {
                                                 name: Some(name.clone()),
                                                 arguments: Some(args.clone()),
                                             }),
-                                        }
-                                    }).collect();
+                                        })
+                                        .collect();
 
                                     let _ = tx.send(StreamChunk {
                                         content: String::new(),

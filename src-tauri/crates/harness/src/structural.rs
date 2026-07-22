@@ -18,8 +18,14 @@ impl StructuralCheck {
         if total_lines > MAX_FILE_LINES {
             violations.push(Violation {
                 category: ViolationCategory::Structural,
-                message: format!("File too long: {} lines (max {})", total_lines, MAX_FILE_LINES),
-                tool_hint: Some(format!("Split into modules. Max {} lines per file.", MAX_FILE_LINES)),
+                message: format!(
+                    "File too long: {} lines (max {})",
+                    total_lines, MAX_FILE_LINES
+                ),
+                tool_hint: Some(format!(
+                    "Split into modules. Max {} lines per file.",
+                    MAX_FILE_LINES
+                )),
                 line: None,
             });
         }
@@ -33,12 +39,21 @@ impl StructuralCheck {
             if line.chars().count() > MAX_LINE_LENGTH {
                 violations.push(Violation {
                     category: ViolationCategory::Structural,
-                    message: format!("Line too long: {} chars (max {})", line.chars().count(), MAX_LINE_LENGTH),
+                    message: format!(
+                        "Line too long: {} chars (max {})",
+                        line.chars().count(),
+                        MAX_LINE_LENGTH
+                    ),
                     tool_hint: Some("Break line or extract expression".into()),
                     line: Some((i + 1) as u32),
                 });
                 // Cap at 5 line length violations to avoid noise
-                if violations.iter().filter(|v| v.message.contains("Line too long")).count() >= 5 {
+                if violations
+                    .iter()
+                    .filter(|v| v.message.contains("Line too long"))
+                    .count()
+                    >= 5
+                {
                     break;
                 }
             }
@@ -74,7 +89,8 @@ impl StructuralCheck {
                     in_fn = true;
                     fn_start_line = i;
                     fn_name = name;
-                    brace_depth = trimmed.matches('{').count() as u32 - trimmed.matches('}').count() as u32;
+                    brace_depth =
+                        trimmed.matches('{').count() as u32 - trimmed.matches('}').count() as u32;
                     // Single-line functions
                     if brace_depth == 0 {
                         in_fn = false;
@@ -94,8 +110,14 @@ impl StructuralCheck {
                     if fn_length > MAX_FUNCTION_LINES {
                         violations.push(Violation {
                             category: ViolationCategory::Structural,
-                            message: format!("Function `{}` too long: {} lines (max {})", fn_name, fn_length, MAX_FUNCTION_LINES),
-                            tool_hint: Some(format!("Refactor into smaller functions. Max {} lines per function.", MAX_FUNCTION_LINES)),
+                            message: format!(
+                                "Function `{}` too long: {} lines (max {})",
+                                fn_name, fn_length, MAX_FUNCTION_LINES
+                            ),
+                            tool_hint: Some(format!(
+                                "Refactor into smaller functions. Max {} lines per function.",
+                                MAX_FUNCTION_LINES
+                            )),
                             line: Some((fn_start_line + 1) as u32),
                         });
                     }
@@ -107,7 +129,8 @@ impl StructuralCheck {
 
     fn extract_fn_name(line: &str) -> Option<String> {
         let re = regex::Regex::new(r"\bfn\s+([a-zA-Z_]\w*)").ok()?;
-        re.captures(line).and_then(|c| c.get(1).map(|m| m.as_str().to_string()))
+        re.captures(line)
+            .and_then(|c| c.get(1).map(|m| m.as_str().to_string()))
     }
 
     fn check_naming(path: &str, content: &str, violations: &mut Vec<Violation>) {
@@ -119,8 +142,18 @@ impl StructuralCheck {
                     if let Some(name) = cap.get(1) {
                         violations.push(Violation {
                             category: ViolationCategory::Structural,
-                            message: format!("Function `{}` should use snake_case naming", name.as_str()),
-                            tool_hint: Some(format!("Rename to `{}`", name.as_str().chars().enumerate().map(|(i, c)| if i == 0 { c.to_ascii_lowercase() } else { c }).collect::<String>())),
+                            message: format!(
+                                "Function `{}` should use snake_case naming",
+                                name.as_str()
+                            ),
+                            tool_hint: Some(format!(
+                                "Rename to `{}`",
+                                name.as_str()
+                                    .chars()
+                                    .enumerate()
+                                    .map(|(i, c)| if i == 0 { c.to_ascii_lowercase() } else { c })
+                                    .collect::<String>()
+                            )),
                             line: None,
                         });
                     }
@@ -134,7 +167,14 @@ impl StructuralCheck {
             if let Some(re) = re {
                 for cap in re.captures_iter(content) {
                     if let Some(name) = cap.get(1) {
-                        let pascal = name.as_str().chars().next().unwrap_or(' ').to_ascii_uppercase().to_string() + &name.as_str()[1..];
+                        let pascal = name
+                            .as_str()
+                            .chars()
+                            .next()
+                            .unwrap_or(' ')
+                            .to_ascii_uppercase()
+                            .to_string()
+                            + &name.as_str()[1..];
                         violations.push(Violation {
                             category: ViolationCategory::Structural,
                             message: format!("Class `{}` should use PascalCase", name.as_str()),
@@ -148,18 +188,28 @@ impl StructuralCheck {
     }
 
     fn check_import_order(content: &str, violations: &mut Vec<Violation>) {
-        let use_lines: Vec<(usize, &str)> = content.lines()
+        let use_lines: Vec<(usize, &str)> = content
+            .lines()
             .enumerate()
-            .filter(|(_, l)| l.trim().starts_with("use ") && !l.trim().starts_with("use crate::") && !l.trim().starts_with("use self::"))
+            .filter(|(_, l)| {
+                l.trim().starts_with("use ")
+                    && !l.trim().starts_with("use crate::")
+                    && !l.trim().starts_with("use self::")
+            })
             .collect();
 
-        if use_lines.len() < 2 { return; }
+        if use_lines.len() < 2 {
+            return;
+        }
 
         // Check std imports come before external
         let mut saw_external = false;
         for (i, line) in &use_lines {
             let trimmed = line.trim();
-            if !trimmed.starts_with("use std::") && !trimmed.starts_with("use core::") && !trimmed.starts_with("use alloc::") {
+            if !trimmed.starts_with("use std::")
+                && !trimmed.starts_with("use core::")
+                && !trimmed.starts_with("use alloc::")
+            {
                 saw_external = true;
             } else if saw_external {
                 violations.push(Violation {
@@ -196,7 +246,10 @@ impl StructuralCheck {
             if name.contains('-') && path.ends_with(".rs") {
                 violations.push(Violation {
                     category: ViolationCategory::Structural,
-                    message: format!("Rust file names should use underscores, not hyphens: `{}`", name),
+                    message: format!(
+                        "Rust file names should use underscores, not hyphens: `{}`",
+                        name
+                    ),
                     tool_hint: Some(format!("Rename to `{}`", name.replace('-', "_"))),
                     line: None,
                 });
@@ -215,8 +268,14 @@ mod tests {
         let lines = vec!["// test"; 600];
         let content = lines.join("\n");
         let violations = StructuralCheck::check(&content, "test.rs", &Language::Rust);
-        let line_violation = violations.iter().find(|v| v.message.contains("File too long"));
-        assert!(line_violation.is_some(), "Should detect file too long: {:?}", violations);
+        let line_violation = violations
+            .iter()
+            .find(|v| v.message.contains("File too long"));
+        assert!(
+            line_violation.is_some(),
+            "Should detect file too long: {:?}",
+            violations
+        );
     }
 
     #[test]
@@ -225,7 +284,11 @@ mod tests {
         let content = format!("fn too_long() {{\n{}\n}}", lines.join("\n"));
         let violations = StructuralCheck::check(&content, "test.rs", &Language::Rust);
         let fn_violation = violations.iter().find(|v| v.message.contains("Function"));
-        assert!(fn_violation.is_some(), "Should detect function too long: {:?}", violations);
+        assert!(
+            fn_violation.is_some(),
+            "Should detect function too long: {:?}",
+            violations
+        );
     }
 
     #[test]
@@ -233,8 +296,14 @@ mod tests {
         let long_line = format!("let x = {};", "1 + ".repeat(40));
         let content = format!("fn test() {{}}\n{}", long_line);
         let violations = StructuralCheck::check(&content, "test.rs", &Language::Rust);
-        let line_len = violations.iter().find(|v| v.message.contains("Line too long"));
-        assert!(line_len.is_some(), "Should detect line too long: {:?}", violations);
+        let line_len = violations
+            .iter()
+            .find(|v| v.message.contains("Line too long"));
+        assert!(
+            line_len.is_some(),
+            "Should detect line too long: {:?}",
+            violations
+        );
     }
 
     #[test]
@@ -242,34 +311,52 @@ mod tests {
         let content = "fn CamelCase() {}";
         let violations = StructuralCheck::check(content, "test.rs", &Language::Rust);
         let naming = violations.iter().find(|v| v.message.contains("snake_case"));
-        assert!(naming.is_some(), "Should flag non-snake-case function names: {:?}", violations);
+        assert!(
+            naming.is_some(),
+            "Should flag non-snake-case function names: {:?}",
+            violations
+        );
     }
 
     #[test]
     fn test_import_order() {
         let content = "use serde::Serialize;\nuse std::collections::HashMap;\n";
         let violations = StructuralCheck::check(content, "test.rs", &Language::Rust);
-        let import = violations.iter().find(|v| v.message.contains("Import order"));
-        assert!(import.is_some(), "Should detect wrong import order: {:?}", violations);
+        let import = violations
+            .iter()
+            .find(|v| v.message.contains("Import order"));
+        assert!(
+            import.is_some(),
+            "Should detect wrong import order: {:?}",
+            violations
+        );
     }
 
     #[test]
     fn test_file_name_hyphen() {
         let violations = StructuralCheck::check_file_name("my-mod.rs");
-        assert!(!violations.is_empty(), "Should flag hyphen in Rust filename");
+        assert!(
+            !violations.is_empty(),
+            "Should flag hyphen in Rust filename"
+        );
     }
 
     #[test]
     fn test_file_name_underscore() {
         let violations = StructuralCheck::check_file_name("my_mod.rs");
-        assert!(violations.is_empty(), "Should accept underscores in Rust filename");
+        assert!(
+            violations.is_empty(),
+            "Should accept underscores in Rust filename"
+        );
     }
 
     #[test]
     fn test_short_file_passes() {
         let content = "fn main() { println!(\"hi\"); }";
         let violations = StructuralCheck::check(content, "main.rs", &Language::Rust);
-        let line_violation = violations.iter().find(|v| v.message.contains("File too long"));
+        let line_violation = violations
+            .iter()
+            .find(|v| v.message.contains("File too long"));
         assert!(line_violation.is_none(), "Should not flag short file");
     }
 
@@ -278,7 +365,10 @@ mod tests {
         let content = "fn short() {\n    let x = 1;\n    println!(\"{}\", x);\n}";
         let violations = StructuralCheck::check(content, "test.rs", &Language::Rust);
         let fn_violation = violations.iter().find(|v| v.message.contains("Function"));
-        assert!(fn_violation.is_none(), "Should not flag short function: {:?}", violations);
+        assert!(
+            fn_violation.is_none(),
+            "Should not flag short function: {:?}",
+            violations
+        );
     }
 }
-

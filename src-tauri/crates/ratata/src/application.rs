@@ -1,9 +1,9 @@
-use std::io::Write;
 use std::any::TypeId;
 use std::collections::HashMap;
-use std::{io, time, mem, thread};
+use std::io::Write;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, Receiver};
+use std::{io, mem, thread, time};
 
 use crossterm::event::Event;
 
@@ -11,12 +11,7 @@ use ratatui::backend::Backend;
 
 use thiserror::Error;
 
-use crate::{
-    events,
-    message::Message,
-    command::Command,
-    screen::Screen,
-};
+use crate::{command::Command, events, message::Message, screen::Screen};
 
 #[derive(Debug, Error)]
 #[error("the event source was disconnected")]
@@ -60,7 +55,10 @@ impl<B: Backend> Application<B> {
         Builder::new()
     }
 
-    fn try_read_events(&self, events: &Receiver<Event>) -> Result<Vec<Event>, EventSourceDisconnectedError> {
+    fn try_read_events(
+        &self,
+        events: &Receiver<Event>,
+    ) -> Result<Vec<Event>, EventSourceDisconnectedError> {
         // Allocate some default capacity.
         let mut buffer = Vec::with_capacity(5);
 
@@ -82,7 +80,9 @@ impl<B: Backend> Application<B> {
     }
 
     fn get_screen(&mut self, screen: TypeId) -> Result<ScreenEntry, MissingScreenError> {
-        self.screens.remove_entry(&screen).map_or_else(|| Err(MissingScreenError(screen)), Ok)
+        self.screens
+            .remove_entry(&screen)
+            .map_or_else(|| Err(MissingScreenError(screen)), Ok)
     }
 
     fn activate_screen(&mut self, screen: TypeId) -> Result<(), MissingScreenError> {
@@ -101,21 +101,25 @@ impl<B: Backend> Application<B> {
 
     fn handle_command(&mut self, command: Command) -> Result<(), RuntimeError> {
         match command {
-            | Command::Batch(commands) => {
+            Command::Batch(commands) => {
                 for command in commands {
                     self.handle_command(command)?;
                 }
                 Ok(())
-            },
-            | Command::EnableRawMode => crossterm::terminal::enable_raw_mode().map_err(RuntimeError::RawMode),
-            | Command::DisableRawMode => crossterm::terminal::disable_raw_mode().map_err(RuntimeError::RawMode),
-            | Command::Screen(ident) => Ok(self.activate_screen(ident)?),
-            | Command::Crossterm(command) =>
-                crossterm::execute!(self.sink, command).map_err(RuntimeError::CrosstermCommandExecution),
-            | Command::Quit => {
+            }
+            Command::EnableRawMode => {
+                crossterm::terminal::enable_raw_mode().map_err(RuntimeError::RawMode)
+            }
+            Command::DisableRawMode => {
+                crossterm::terminal::disable_raw_mode().map_err(RuntimeError::RawMode)
+            }
+            Command::Screen(ident) => Ok(self.activate_screen(ident)?),
+            Command::Crossterm(command) => crossterm::execute!(self.sink, command)
+                .map_err(RuntimeError::CrosstermCommandExecution),
+            Command::Quit => {
                 self.exiting = true;
                 Ok(())
-            },
+            }
         }
     }
 
@@ -141,7 +145,8 @@ impl<B: Backend> Application<B> {
 
             self.last_tick = Some(time::Instant::now());
 
-            let mut messages = self.try_read_events(&events)?
+            let mut messages = self
+                .try_read_events(&events)?
                 .into_iter()
                 .map(Message::from)
                 .collect::<Vec<_>>();
@@ -217,9 +222,13 @@ impl Builder {
     }
 
     pub fn build<W, B>(self, sink: W, backend: B) -> Result<Application<B>, io::Error>
-        where W: Write + 'static, B: Backend,
+    where
+        W: Write + 'static,
+        B: Backend,
     {
-        let tick_rate = self.tick_rate.unwrap_or(time::Duration::from_secs_f32(1. / 30.));
+        let tick_rate = self
+            .tick_rate
+            .unwrap_or(time::Duration::from_secs_f32(1. / 30.));
 
         let event_poll_rate = self.event_poll_rate.unwrap_or(tick_rate / 2);
 

@@ -56,7 +56,9 @@ pub fn render_markdown(text: &str) -> Text<'static> {
                         push_span(
                             &mut current_line,
                             "▍ ".to_string(),
-                            Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD),
+                            Style::default()
+                                .fg(theme::ACCENT)
+                                .add_modifier(Modifier::BOLD),
                         );
                     }
                 }
@@ -87,13 +89,25 @@ pub fn render_markdown(text: &str) -> Text<'static> {
                 let code_lines: Vec<&str> = code_buf.lines().collect();
                 if code_lines.len() > MAX_CODE_LINES {
                     let omitted = code_lines.len() - MAX_CODE_LINES;
-                    display_buf = code_lines.iter().take(MAX_CODE_LINES).cloned().collect::<Vec<_>>().join("\n");
-                    display_buf.push_str(&format!("\n… {} more lines ({} total)", omitted, code_lines.len()));
+                    display_buf = code_lines
+                        .iter()
+                        .take(MAX_CODE_LINES)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    display_buf.push_str(&format!(
+                        "\n… {} more lines ({} total)",
+                        omitted,
+                        code_lines.len()
+                    ));
                 } else if code_buf.chars().count() > MAX_CODE_CHARS {
                     let truncated: String = code_buf.chars().take(MAX_CODE_CHARS).collect();
                     display_buf = format!("{}…", truncated);
                 }
-                let highlighted = highlight_code(&display_buf, Some(code_lang.as_str()).filter(|l| !l.is_empty()));
+                let highlighted = highlight_code(
+                    &display_buf,
+                    Some(code_lang.as_str()).filter(|l| !l.is_empty()),
+                );
                 lines.push(highlighted);
                 code_buf.clear();
                 code_lang.clear();
@@ -162,7 +176,9 @@ pub fn render_markdown(text: &str) -> Text<'static> {
             }
             Event::Start(Tag::Link { .. }) => {
                 style_stack.push(base_style);
-                base_style = base_style.fg(theme::ACCENT).add_modifier(Modifier::UNDERLINED);
+                base_style = base_style
+                    .fg(theme::ACCENT)
+                    .add_modifier(Modifier::UNDERLINED);
             }
             Event::End(TagEnd::Link) => {
                 if let Some(saved) = style_stack.pop() {
@@ -271,7 +287,10 @@ fn highlight_code(code: &str, lang: Option<&str>) -> Line<'static> {
             if *text == "\n" || *text == "\r\n" {
                 continue;
             }
-            spans.push(Span::styled(text.to_string(), syntect_style_to_ratatui(*style)));
+            spans.push(Span::styled(
+                text.to_string(),
+                syntect_style_to_ratatui(*style),
+            ));
         }
     }
 
@@ -321,20 +340,37 @@ mod tests {
     #[test]
     fn test_plain_text() {
         let result = render_markdown("hello world");
-        let text = result.lines.iter().flat_map(|l| l.spans.iter().map(|s| s.content.clone())).collect::<String>();
+        let text = result
+            .lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.clone()))
+            .collect::<String>();
         assert!(text.contains("hello world"));
     }
 
     #[test]
     fn test_bold_text() {
         let result = render_markdown("hello **world**");
-        let _joined: String = result.lines.iter()
-            .flat_map(|l| l.spans.iter().map(|s| format!("{:?}", s.style.add_modifier(Modifier::BOLD))))
+        let _joined: String = result
+            .lines
+            .iter()
+            .flat_map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| format!("{:?}", s.style.add_modifier(Modifier::BOLD)))
+            })
             .collect();
-        let has_bold = result.lines.iter()
-            .any(|l| l.spans.iter().any(|s| s.style.add_modifier(Modifier::BOLD) == s.style));
+        let has_bold = result.lines.iter().any(|l| {
+            l.spans
+                .iter()
+                .any(|s| s.style.add_modifier(Modifier::BOLD) == s.style)
+        });
         assert!(has_bold || true); // Style comparison is tricky; just check content
-        let text: String = result.lines.iter().flat_map(|l| l.spans.iter().map(|s| s.content.clone())).collect();
+        let text: String = result
+            .lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.clone()))
+            .collect();
         assert!(text.contains("hello"));
         assert!(text.contains("world"));
     }
@@ -342,28 +378,44 @@ mod tests {
     #[test]
     fn test_inline_code() {
         let result = render_markdown("use `let` keyword");
-        let text: String = result.lines.iter().flat_map(|l| l.spans.iter().map(|s| s.content.clone())).collect();
+        let text: String = result
+            .lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.clone()))
+            .collect();
         assert!(text.contains("let"));
     }
 
     #[test]
     fn test_code_block() {
         let result = render_markdown("```rust\nfn main() {}\n```");
-        let text: String = result.lines.iter().flat_map(|l| l.spans.iter().map(|s| s.content.clone())).collect();
+        let text: String = result
+            .lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.clone()))
+            .collect();
         assert!(text.contains("fn main()"));
     }
 
     #[test]
     fn test_heading() {
         let result = render_markdown("# Title");
-        let text: String = result.lines.iter().flat_map(|l| l.spans.iter().map(|s| s.content.clone())).collect();
+        let text: String = result
+            .lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.clone()))
+            .collect();
         assert!(text.contains("Title"));
     }
 
     #[test]
     fn test_unordered_list() {
         let result = render_markdown("- item");
-        let text: String = result.lines.iter().flat_map(|l| l.spans.iter().map(|s| s.content.clone())).collect();
+        let text: String = result
+            .lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.clone()))
+            .collect();
         assert!(text.contains("•"));
         assert!(text.contains("item"));
     }
@@ -371,21 +423,33 @@ mod tests {
     #[test]
     fn test_horizontal_rule() {
         let result = render_markdown("---");
-        let text: String = result.lines.iter().flat_map(|l| l.spans.iter().map(|s| s.content.clone())).collect();
+        let text: String = result
+            .lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.clone()))
+            .collect();
         assert!(text.contains("─"));
     }
 
     #[test]
     fn test_blockquote() {
         let result = render_markdown("> quote");
-        let text: String = result.lines.iter().flat_map(|l| l.spans.iter().map(|s| s.content.clone())).collect();
+        let text: String = result
+            .lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.clone()))
+            .collect();
         assert!(text.contains("quote"));
     }
 
     #[test]
     fn test_link() {
         let result = render_markdown("[text](url)");
-        let text: String = result.lines.iter().flat_map(|l| l.spans.iter().map(|s| s.content.clone())).collect();
+        let text: String = result
+            .lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.clone()))
+            .collect();
         assert!(text.contains("text"));
     }
 }

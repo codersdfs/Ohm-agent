@@ -50,19 +50,19 @@ impl ToolCategory {
     /// Compact icon-like symbol for TUI rendering
     pub fn icon(&self) -> &'static str {
         match self {
-            Self::FileOperations => "\u{1F4C4}",   // 📄
-            Self::CodeExecution => "\u{25B6}",     // ▶
-            Self::SearchQuery => "\u{1F50D}",      // 🔍
-            Self::WebNetwork => "\u{1F310}",       // 🌐
-            Self::Communication => "\u{1F4AC}",    // 💬
-            Self::System => "\u{2699}",            // ⚙
-            Self::AgentManagement => "\u{1F916}",  // 🤖
-            Self::McpServices => "\u{1F50C}",      // 🔌
-            Self::MemoryStore => "\u{1F9E0}",      // 🧠
-            Self::CodingAssist => "\u{270F}",      // ✏
-            Self::DiffPatch => "\u{1F4DD}",        // 📝
-            Self::DataTransform => "\u{1F504}",    // 🔄
-            Self::HelpDocs => "\u{2753}",          // ❓
+            Self::FileOperations => "\u{1F4C4}",  // 📄
+            Self::CodeExecution => "\u{25B6}",    // ▶
+            Self::SearchQuery => "\u{1F50D}",     // 🔍
+            Self::WebNetwork => "\u{1F310}",      // 🌐
+            Self::Communication => "\u{1F4AC}",   // 💬
+            Self::System => "\u{2699}",           // ⚙
+            Self::AgentManagement => "\u{1F916}", // 🤖
+            Self::McpServices => "\u{1F50C}",     // 🔌
+            Self::MemoryStore => "\u{1F9E0}",     // 🧠
+            Self::CodingAssist => "\u{270F}",     // ✏
+            Self::DiffPatch => "\u{1F4DD}",       // 📝
+            Self::DataTransform => "\u{1F504}",   // 🔄
+            Self::HelpDocs => "\u{2753}",         // ❓
         }
     }
 }
@@ -342,11 +342,7 @@ impl ToolMetadata {
         let required: Vec<&str> = schema
             .get("required")
             .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str())
-                    .collect()
-            })
+            .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
             .unwrap_or_default();
 
         for (name, prop) in properties {
@@ -365,7 +361,10 @@ impl ToolMetadata {
             let required = required.contains(&name.as_str());
 
             let default = prop.get("default").cloned();
-            let example = prop.get("example").or_else(|| prop.get("examples")).cloned();
+            let example = prop
+                .get("example")
+                .or_else(|| prop.get("examples"))
+                .cloned();
 
             summaries.push(ParamSummary {
                 name: name.clone(),
@@ -439,7 +438,11 @@ mod tests {
             ToolCategory::DataTransform,
             ToolCategory::HelpDocs,
         ] {
-            assert!(!category.icon().is_empty(), "Icon for {:?} should not be empty", category);
+            assert!(
+                !category.icon().is_empty(),
+                "Icon for {:?} should not be empty",
+                category
+            );
         }
     }
 

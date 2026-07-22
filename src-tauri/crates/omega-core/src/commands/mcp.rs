@@ -1,10 +1,9 @@
 // MCP skills integration — load .mcp.json skills, invoke via JSON-RPC
 
-use mcp::Skill;
 use mcp::transport::JsonRpcTransport;
 use mcp::McpRequest;
+use mcp::Skill;
 use std::sync::OnceLock;
-
 
 static MCP_SKILLS: OnceLock<(Vec<Skill>, Vec<String>)> = OnceLock::new();
 
@@ -50,11 +49,13 @@ pub fn tool_definitions() -> Vec<providers::ToolDefinition> {
                 description: skill.description,
                 // Use the skill's own parameter schema if provided, otherwise fall back
                 // to an open schema so the LLM can still pass arbitrary JSON arguments.
-                parameters: skill.parameters.unwrap_or_else(|| serde_json::json!({
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": true,
-                })),
+                parameters: skill.parameters.unwrap_or_else(|| {
+                    serde_json::json!({
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": true,
+                    })
+                }),
             },
         })
         .collect()
@@ -68,13 +69,11 @@ pub async fn invoke_skill(
 ) -> Result<crate::commands::tools::ToolResult, String> {
     let transport = JsonRpcTransport::new(&skill.endpoint);
 
-    let params = args
-        .as_object()
-        .map(|obj| {
-            obj.iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect::<std::collections::HashMap<String, serde_json::Value>>()
-        });
+    let params = args.as_object().map(|obj| {
+        obj.iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect::<std::collections::HashMap<String, serde_json::Value>>()
+    });
 
     let request = McpRequest {
         method: skill.name.clone(),

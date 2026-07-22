@@ -1,13 +1,13 @@
 // Hermes Memory — Three-layer (session, project, user) with SQLite + FTS5 + embeddings
 // Every interaction is stored and retrievable via semantic search.
 
-pub mod session;
-pub mod project;
-pub mod user;
 pub mod embed;
+pub mod project;
+pub mod session;
+pub mod user;
 
-use serde::{Deserialize, Serialize};
 use rusqlite::{params, Connection};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryEntry {
@@ -61,8 +61,8 @@ impl MemoryStore {
     /// Open or create the SQLite database at `db_path`.
     /// Initializes schema (memory table + FTS5 virtual table) if needed.
     pub fn new(db_path: &str) -> Result<Self, String> {
-        let conn = Connection::open(db_path)
-            .map_err(|e| format!("Failed to open memory db: {}", e))?;
+        let conn =
+            Connection::open(db_path).map_err(|e| format!("Failed to open memory db: {}", e))?;
 
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS memory (
@@ -101,11 +101,11 @@ impl MemoryStore {
         let id = uuid::Uuid::new_v4().to_string();
         let timestamp = chrono::Utc::now().to_rfc3339();
 
-        let embedding = self.embedding.embed(value)
+        let embedding = self
+            .embedding
+            .embed(value)
             .map(|v| {
-                let bytes: Vec<u8> = v.iter()
-                    .flat_map(|f| f.to_le_bytes())
-                    .collect();
+                let bytes: Vec<u8> = v.iter().flat_map(|f| f.to_le_bytes()).collect();
                 Some(bytes)
             })
             .unwrap_or(None);
@@ -128,9 +128,15 @@ impl MemoryStore {
 
     /// Search memory using FTS5 full-text search.
     /// Results are combined with embedding similarity for ranking.
-    pub fn search(&self, query: &str, layer: Option<&str>, limit: usize) -> Result<SearchResult, String> {
+    pub fn search(
+        &self,
+        query: &str,
+        layer: Option<&str>,
+        limit: usize,
+    ) -> Result<SearchResult, String> {
         let query_vec = self.embedding.embed(query).unwrap_or_default();
-        let fts_query = query.split_whitespace()
+        let fts_query = query
+            .split_whitespace()
             .map(|w| format!("\"{}\"", w))
             .collect::<Vec<_>>()
             .join(" OR ");
@@ -140,8 +146,22 @@ impl MemoryStore {
 
         // Try FTS5 search first
         let fts_found = match layer {
-            Some(l) => self.search_fts(&fts_query, Some(l), limit, &query_vec, &mut entries, &mut relevances),
-            None => self.search_fts(&fts_query, None, limit, &query_vec, &mut entries, &mut relevances),
+            Some(l) => self.search_fts(
+                &fts_query,
+                Some(l),
+                limit,
+                &query_vec,
+                &mut entries,
+                &mut relevances,
+            ),
+            None => self.search_fts(
+                &fts_query,
+                None,
+                limit,
+                &query_vec,
+                &mut entries,
+                &mut relevances,
+            ),
         };
 
         // Fall back to full scan
@@ -149,12 +169,17 @@ impl MemoryStore {
             entries.clear();
             relevances.clear();
             match layer {
-                Some(l) => self.search_scan(Some(l), limit, &query_vec, &mut entries, &mut relevances),
+                Some(l) => {
+                    self.search_scan(Some(l), limit, &query_vec, &mut entries, &mut relevances)
+                }
                 None => self.search_scan(None, limit, &query_vec, &mut entries, &mut relevances),
             }
         }
 
-        Ok(SearchResult { entries, relevance: relevances })
+        Ok(SearchResult {
+            entries,
+            relevance: relevances,
+        })
     }
 
     fn search_fts(
@@ -167,14 +192,18 @@ impl MemoryStore {
         relevances: &mut Vec<f64>,
     ) -> bool {
         let sql = match layer {
-            Some(_) => "SELECT m.id, m.layer, m.key, m.value, m.embedding, m.timestamp
+            Some(_) => {
+                "SELECT m.id, m.layer, m.key, m.value, m.embedding, m.timestamp
                          FROM memory_fts f JOIN memory m ON f.rowid = m.rowid
                          WHERE m.layer = ?1 AND memory_fts MATCH ?2
-                         ORDER BY rank LIMIT ?3",
-            None => "SELECT m.id, m.layer, m.key, m.value, m.embedding, m.timestamp
+                         ORDER BY rank LIMIT ?3"
+            }
+            None => {
+                "SELECT m.id, m.layer, m.key, m.value, m.embedding, m.timestamp
                      FROM memory_fts f JOIN memory m ON f.rowid = m.rowid
                      WHERE memory_fts MATCH ?1
-                     ORDER BY rank LIMIT ?2",
+                     ORDER BY rank LIMIT ?2"
+            }
         };
 
         let mut stmt = match self.conn.prepare(sql) {
@@ -192,7 +221,9 @@ impl MemoryStore {
                 let mut found = false;
                 for row in rows.flatten() {
                     found = true;
-                    let relevance = row.embedding.as_ref()
+                    let relevance = row
+                        .embedding
+                        .as_ref()
                         .and_then(|emb| self.embedding.similarity(query_vec, emb).ok())
                         .unwrap_or(0.0);
                     entries.push(row);
@@ -229,7 +260,9 @@ impl MemoryStore {
 
         if let Ok(rows) = result {
             for row in rows.flatten() {
-                let relevance = row.embedding.as_ref()
+                let relevance = row
+                    .embedding
+                    .as_ref()
                     .and_then(|emb| self.embedding.similarity(query_vec, emb).ok())
                     .unwrap_or(0.0);
                 entries.push(row);
@@ -238,9 +271,11 @@ impl MemoryStore {
         }
 
         // Sort by relevance descending
-        let mut paired: Vec<(usize, f64)> = (0..entries.len()).map(|i| (i, relevances[i])).collect();
+        let mut paired: Vec<(usize, f64)> =
+            (0..entries.len()).map(|i| (i, relevances[i])).collect();
         paired.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        let sorted_entries: Vec<MemoryEntry> = paired.iter().map(|&(i, _)| entries[i].clone()).collect();
+        let sorted_entries: Vec<MemoryEntry> =
+            paired.iter().map(|&(i, _)| entries[i].clone()).collect();
         let sorted_relevances: Vec<f64> = paired.iter().map(|&(_, r)| r).collect();
         *entries = sorted_entries;
         *relevances = sorted_relevances;
@@ -253,7 +288,9 @@ impl MemoryStore {
             None => "SELECT value FROM memory WHERE key = ?1 ORDER BY timestamp DESC LIMIT 1",
         };
 
-        let mut stmt = self.conn.prepare(sql)
+        let mut stmt = self
+            .conn
+            .prepare(sql)
             .map_err(|e| format!("Failed to prepare: {}", e))?;
 
         let result = match layer {
@@ -275,18 +312,22 @@ impl MemoryStore {
             None => "SELECT COUNT(*) FROM memory",
         };
 
-        let mut stmt = self.conn.prepare(sql)
+        let mut stmt = self
+            .conn
+            .prepare(sql)
             .map_err(|e| format!("Failed to prepare: {}", e))?;
 
         match layer {
             Some(l) => stmt.query_row(params![l], |row| row.get::<_, usize>(0)),
             None => stmt.query_row([], |row| row.get::<_, usize>(0)),
-        }.map_err(|e| format!("Failed to count: {}", e))
+        }
+        .map_err(|e| format!("Failed to count: {}", e))
     }
 
     /// Delete a memory entry by ID.
     pub fn delete(&self, id: &str) -> Result<(), String> {
-        self.conn.execute("DELETE FROM memory WHERE id = ?1", params![id])
+        self.conn
+            .execute("DELETE FROM memory WHERE id = ?1", params![id])
             .map_err(|e| format!("Failed to delete: {}", e))?;
         Ok(())
     }
@@ -294,14 +335,14 @@ impl MemoryStore {
     /// Clear all memory entries, optionally for a specific layer.
     pub fn clear(&self, layer: Option<&str>) -> Result<usize, String> {
         let count = match layer {
-            Some(l) => {
-                self.conn.execute("DELETE FROM memory WHERE layer = ?1", params![l])
-                    .map_err(|e| format!("Failed to clear: {}", e))?
-            }
-            None => {
-                self.conn.execute("DELETE FROM memory", [])
-                    .map_err(|e| format!("Failed to clear: {}", e))?
-            }
+            Some(l) => self
+                .conn
+                .execute("DELETE FROM memory WHERE layer = ?1", params![l])
+                .map_err(|e| format!("Failed to clear: {}", e))?,
+            None => self
+                .conn
+                .execute("DELETE FROM memory", [])
+                .map_err(|e| format!("Failed to clear: {}", e))?,
         };
         Ok(count)
     }
@@ -349,7 +390,10 @@ mod tests {
         store.store(MemoryLayer::Project, "api_key", "sk-abc123")?;
         store.store(MemoryLayer::Project, "db_url", "postgres://localhost")?;
         let results = store.search("api", Some("project"), 10)?;
-        assert!(!results.entries.is_empty(), "Should find at least one result");
+        assert!(
+            !results.entries.is_empty(),
+            "Should find at least one result"
+        );
         Ok(())
     }
 

@@ -1,8 +1,11 @@
 // Bash tool implementation
 
-use crate::{Tool, ToolInput, ToolResult, ToolError, ToolUseContext};
+use crate::metadata::{
+    CostCategory, CostHint, LatencyHint, ToolCategory, ToolErrorSpec, ToolExample, ToolMetadata,
+    ToolSource,
+};
 use crate::schema::string_param;
-use crate::metadata::{ToolMetadata, ToolCategory, LatencyHint, ToolErrorSpec, ToolExample, ToolSource, CostHint, CostCategory};
+use crate::{Tool, ToolError, ToolInput, ToolResult, ToolUseContext};
 use async_trait::async_trait;
 
 pub struct BashTool;
@@ -21,8 +24,12 @@ impl Default for BashTool {
 
 #[async_trait]
 impl Tool for BashTool {
-    fn name(&self) -> &str { "bash" }
-    fn description(&self) -> &str { "Execute a shell command on the system. Use for running scripts, installing packages, building projects, etc." }
+    fn name(&self) -> &str {
+        "bash"
+    }
+    fn description(&self) -> &str {
+        "Execute a shell command on the system. Use for running scripts, installing packages, building projects, etc."
+    }
 
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({
@@ -105,7 +112,9 @@ For long-running commands, consider using timeout mechanisms.".into()),
     }
 
     fn is_read_only(&self, input: &ToolInput) -> bool {
-        let cmd = input.args.get("command")
+        let cmd = input
+            .args
+            .get("command")
             .and_then(|v| v.as_str())
             .unwrap_or("");
         // Basic read-only detection
@@ -114,7 +123,9 @@ For long-running commands, consider using timeout mechanisms.".into()),
     }
 
     async fn call(&self, input: ToolInput, _ctx: &ToolUseContext) -> Result<ToolResult, ToolError> {
-        let command = input.args.get("command")
+        let command = input
+            .args
+            .get("command")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::new("Missing argument: command"))?;
 
@@ -135,7 +146,8 @@ For long-running commands, consider using timeout mechanisms.".into()),
                 .await
         };
 
-        let output = output.map_err(|e| ToolError::new(format!("Failed to execute command: {}", e)))?;
+        let output =
+            output.map_err(|e| ToolError::new(format!("Failed to execute command: {}", e)))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();

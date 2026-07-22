@@ -1,8 +1,11 @@
 // 14-step execution pipeline
 
-use crate::{ToolRegistry, ToolUseContext, ToolInput, ToolResult, ToolError, ToolErrorKind, PermissionResult, BudgetCheck, Tool};
-use crate::{PermissionResolver, ResultBudget};
 use crate::HooksRegistry;
+use crate::{
+    BudgetCheck, PermissionResult, Tool, ToolError, ToolErrorKind, ToolInput, ToolRegistry,
+    ToolResult, ToolUseContext,
+};
+use crate::{PermissionResolver, ResultBudget};
 
 /// Execution pipeline for tools
 pub struct ExecutionPipeline {
@@ -57,13 +60,21 @@ impl ExecutionPipeline {
         ctx: &ToolUseContext,
     ) -> Result<(ToolResult, BudgetCheck), ToolError> {
         // Step 1: Tool Lookup
-        let tool = self.registry.get(tool_name)
-            .ok_or_else(|| ToolError::with_kind_and_source(ToolErrorKind::NotFound, format!("Tool not found: {}", tool_name), tool_name))?;
+        let tool = self.registry.get(tool_name).ok_or_else(|| {
+            ToolError::with_kind_and_source(
+                ToolErrorKind::NotFound,
+                format!("Tool not found: {}", tool_name),
+                tool_name,
+            )
+        })?;
 
         // Step 2: Abort check (via CancellationToken)
         if let Some(token) = &ctx.abort_token {
             if token.is_cancelled() {
-                return Err(ToolError::with_kind(ToolErrorKind::Aborted, "Execution aborted"));
+                return Err(ToolError::with_kind(
+                    ToolErrorKind::Aborted,
+                    "Execution aborted",
+                ));
             }
         }
 
@@ -84,26 +95,35 @@ impl ExecutionPipeline {
         self.hooks.run_pre_hooks(tool_name, &input).await;
 
         // Step 8: Permission resolution — includes tool.check_permissions()
-        let perm_result = self.permission_resolver.resolve(tool_name, &input, ctx, Some(tool)).await;
+        let perm_result = self
+            .permission_resolver
+            .resolve(tool_name, &input, ctx, Some(tool))
+            .await;
 
         // Step 9: If denied → return denied result
         match perm_result {
             PermissionResult::Deny => {
-                return Ok((ToolResult::error(format!("Tool '{}' denied by permissions", tool_name)), BudgetCheck {
-                    within_limit: true,
-                    truncated: false,
-                    persisted_path: None,
-                }));
+                return Ok((
+                    ToolResult::error(format!("Tool '{}' denied by permissions", tool_name)),
+                    BudgetCheck {
+                        within_limit: true,
+                        truncated: false,
+                        persisted_path: None,
+                    },
+                ));
             }
             PermissionResult::Prompt(msg) => {
                 // Interactive prompt handling via callback
                 if let Some(ref cb) = ctx.prompt_callback {
                     if !cb(&msg) {
-                        return Ok((ToolResult::error(format!("Tool '{}' denied by user", tool_name)), BudgetCheck {
-                            within_limit: true,
-                            truncated: false,
-                            persisted_path: None,
-                        }));
+                        return Ok((
+                            ToolResult::error(format!("Tool '{}' denied by user", tool_name)),
+                            BudgetCheck {
+                                within_limit: true,
+                                truncated: false,
+                                persisted_path: None,
+                            },
+                        ));
                     }
                 }
             }
@@ -111,11 +131,10 @@ impl ExecutionPipeline {
         }
 
         // Step 10: Execute tool.call()
-        let mut result = tool.call(input.clone(), ctx).await
-            .map_err(|e| {
-                log::error!("Tool {} execution failed: {}", tool_name, e);
-                e
-            })?;
+        let mut result = tool.call(input.clone(), ctx).await.map_err(|e| {
+            log::error!("Tool {} execution failed: {}", tool_name, e);
+            e
+        })?;
 
         // Step 11: Result budgeting — use the truncated string from truncate()
         let (truncated_output, budget_check) = self.budget.truncate(&result.output).await;
@@ -131,27 +150,33 @@ impl ExecutionPipeline {
 
         // Step 14: Error classification + telemetry-safe logging
         if !result.success {
-            log::warn!("Tool {} completed with error: {:?}", tool_name, result.error);
+            log::warn!(
+                "Tool {} completed with error: {:?}",
+                tool_name,
+                result.error
+            );
         }
 
-        Ok((result, BudgetCheck {
-            within_limit: !truncated,
-            truncated,
-            persisted_path,
-        }))
+        Ok((
+            result,
+            BudgetCheck {
+                within_limit: !truncated,
+                truncated,
+                persisted_path,
+            },
+        ))
     }
 
     fn validate_input_schema(&self, tool: &dyn Tool, input: &ToolInput) -> Result<(), ToolError> {
         let schema = tool.parameters_schema();
 
-        crate::schema::validate_input(&schema, &input.args)
-            .map_err(|e| ToolError {
-                kind: ToolErrorKind::SchemaValidation,
-                message: "Schema validation failed".into(),
-                details: Some(e.to_string()),
-                retryable: false,
-                source_tool: tool.name().to_string().into(),
-            })
+        crate::schema::validate_input(&schema, &input.args).map_err(|e| ToolError {
+            kind: ToolErrorKind::SchemaValidation,
+            message: "Schema validation failed".into(),
+            details: Some(e.to_string()),
+            retryable: false,
+            source_tool: tool.name().to_string().into(),
+        })
     }
 
     fn backfill_input(&self, mut input: ToolInput) -> Result<ToolInput, ToolError> {
@@ -184,8 +209,12 @@ mod tests {
 
     #[async_trait]
     impl Tool for MockTool {
-        fn name(&self) -> &str { "mock" }
-        fn description(&self) -> &str { "Mock tool" }
+        fn name(&self) -> &str {
+            "mock"
+        }
+        fn description(&self) -> &str {
+            "Mock tool"
+        }
         fn parameters_schema(&self) -> serde_json::Value {
             serde_json::json!({
                 "type": "object",
@@ -195,8 +224,14 @@ mod tests {
                 "required": ["input"]
             })
         }
-        async fn call(&self, input: ToolInput, _ctx: &ToolUseContext) -> Result<ToolResult, ToolError> {
-            let input_val = input.args.get("input")
+        async fn call(
+            &self,
+            input: ToolInput,
+            _ctx: &ToolUseContext,
+        ) -> Result<ToolResult, ToolError> {
+            let input_val = input
+                .args
+                .get("input")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             Ok(ToolResult::success(format!("output: {}", input_val)))
@@ -210,8 +245,9 @@ mod tests {
 
         let pipeline = ExecutionPipeline::new()
             .with_registry(registry)
-            .with_permission_resolver(PermissionResolver::new()
-                .with_mode(PermissionMode::BypassPermissions));
+            .with_permission_resolver(
+                PermissionResolver::new().with_mode(PermissionMode::BypassPermissions),
+            );
 
         let input = ToolInput {
             tool: "mock".into(),

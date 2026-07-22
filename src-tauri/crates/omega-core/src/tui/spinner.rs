@@ -1,5 +1,5 @@
-use ratatui::style::{Modifier, Style};
 use super::theme;
+use ratatui::style::{Modifier, Style};
 
 /// Short, Claude Code-inspired activity words. The phrase changes slowly so
 /// it adds personality without making the status line visually noisy.
@@ -11,17 +11,9 @@ const THINKING_PHRASES: &[&str] = &[
     "Considering…",
 ];
 
-const STREAMING_PHRASES: &[&str] = &[
-    "Writing…",
-    "Composing…",
-    "Shaping…",
-];
+const STREAMING_PHRASES: &[&str] = &["Writing…", "Composing…", "Shaping…"];
 
-const TOOL_PHRASES: &[&str] = &[
-    "Working…",
-    "Inspecting…",
-    "Gathering…",
-];
+const TOOL_PHRASES: &[&str] = &["Working…", "Inspecting…", "Gathering…"];
 
 /// Conventional terminal spinner frames.
 const SPINNER_FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -99,7 +91,9 @@ impl OmegaSpinner {
             SpinnerState::Thinking | SpinnerState::Streaming | SpinnerState::ToolCall => {
                 Style::default().fg(theme::PRIMARY_CONTAINER)
             }
-            SpinnerState::Error => Style::default().fg(theme::ERROR).add_modifier(Modifier::BOLD),
+            SpinnerState::Error => Style::default()
+                .fg(theme::ERROR)
+                .add_modifier(Modifier::BOLD),
         }
     }
 }
@@ -129,7 +123,9 @@ mod tests {
         let mut spinner = OmegaSpinner::new();
         spinner.state = SpinnerState::Thinking;
         assert_eq!(spinner.current_phrase(), "Cooking…");
-        for _ in 0..24 { spinner.tick(); }
+        for _ in 0..24 {
+            spinner.tick();
+        }
         assert_eq!(spinner.current_phrase(), "Pondering…");
         assert!(!spinner.current_phrase().to_lowercase().contains("thinking"));
     }

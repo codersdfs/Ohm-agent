@@ -59,7 +59,11 @@ impl ToolError {
         }
     }
 
-    pub fn with_kind_and_source(kind: ToolErrorKind, message: impl Into<String>, tool: impl Into<String>) -> Self {
+    pub fn with_kind_and_source(
+        kind: ToolErrorKind,
+        message: impl Into<String>,
+        tool: impl Into<String>,
+    ) -> Self {
         Self {
             kind,
             message: message.into(),
@@ -212,8 +216,7 @@ impl GateCheckResult {
         let score = if violations.is_empty() {
             100
         } else {
-            100usize
-                .saturating_sub(violations.len() * 15) as u32
+            100usize.saturating_sub(violations.len() * 15) as u32
         };
         Self {
             passed: score >= 80,

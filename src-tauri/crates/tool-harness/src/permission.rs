@@ -1,7 +1,7 @@
 // Permission system for tool execution
 
+use crate::{PermissionResult, Tool, ToolInput, ToolUseContext};
 use serde::{Deserialize, Serialize};
-use crate::{ToolInput, ToolUseContext, PermissionResult, Tool};
 
 /// Permission mode enum
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
@@ -47,7 +47,11 @@ pub enum PermissionBehavior {
 }
 
 impl PermissionRule {
-    pub fn new(source: impl Into<String>, behavior: PermissionBehavior, tool_pattern: impl Into<String>) -> Self {
+    pub fn new(
+        source: impl Into<String>,
+        behavior: PermissionBehavior,
+        tool_pattern: impl Into<String>,
+    ) -> Self {
         Self {
             source: source.into(),
             behavior,
@@ -101,7 +105,9 @@ impl PermissionResolver {
                 return match rule.behavior {
                     PermissionBehavior::Allow => PermissionResult::Allow,
                     PermissionBehavior::Deny => PermissionResult::Deny,
-                    PermissionBehavior::Prompt => PermissionResult::Prompt(format!("Allow {}?", tool_name)),
+                    PermissionBehavior::Prompt => {
+                        PermissionResult::Prompt(format!("Allow {}?", tool_name))
+                    }
                 };
             }
         }
@@ -153,10 +159,22 @@ mod tests {
 
     #[test]
     fn test_permission_mode_from_str() {
-        assert!(matches!(PermissionMode::from_str("default"), PermissionMode::Default));
-        assert!(matches!(PermissionMode::from_str("bypass"), PermissionMode::BypassPermissions));
-        assert!(matches!(PermissionMode::from_str("auto"), PermissionMode::Auto));
-        assert!(matches!(PermissionMode::from_str("unknown"), PermissionMode::Default));
+        assert!(matches!(
+            PermissionMode::from_str("default"),
+            PermissionMode::Default
+        ));
+        assert!(matches!(
+            PermissionMode::from_str("bypass"),
+            PermissionMode::BypassPermissions
+        ));
+        assert!(matches!(
+            PermissionMode::from_str("auto"),
+            PermissionMode::Auto
+        ));
+        assert!(matches!(
+            PermissionMode::from_str("unknown"),
+            PermissionMode::Default
+        ));
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use crate::commands::tools::GateViolationInfo;
-use crate::pipeline::review_score::{aggregate_scores, ScoreBreakdown, PromotionStats};
+use crate::pipeline::review_score::{aggregate_scores, PromotionStats, ScoreBreakdown};
 use crate::{AppState, MutexExt};
 use serde::{Deserialize, Serialize};
 
@@ -27,20 +27,19 @@ impl ReviewAgent {
             return vec![];
         }
 
-        violations.iter().map(|v| GateViolationInfo {
-            category: format!("{:?}", v.category),
-            message: v.message.clone(),
-            tool_hint: v.tool_hint.clone(),
-            line: v.line,
-        }).collect()
+        violations
+            .iter()
+            .map(|v| GateViolationInfo {
+                category: format!("{:?}", v.category),
+                message: v.message.clone(),
+                tool_hint: v.tool_hint.clone(),
+                line: v.line,
+            })
+            .collect()
     }
 
     /// Run LLM review (togglable).
-    pub async fn llm_review(
-        state: &AppState,
-        code: &str,
-        context: &str,
-    ) -> Result<String, String> {
+    pub async fn llm_review(state: &AppState, code: &str, context: &str) -> Result<String, String> {
         let config = state.provider_config.lock_guard().clone();
         let review_prompt = format!(
             "You are a Code Review agent. Analyze this code for:\n\
@@ -56,9 +55,13 @@ impl ReviewAgent {
         );
 
         let provider = providers::create_provider(&config)?;
-        let messages = vec![
-            providers::ChatMessage { role: "user".into(), content: review_prompt, tool_calls: None, tool_call_id: None, name: None },
-        ];
+        let messages = vec![providers::ChatMessage {
+            role: "user".into(),
+            content: review_prompt,
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        }];
 
         let chat_request = providers::ChatRequest {
             messages,
@@ -80,21 +83,24 @@ impl ReviewAgent {
         let gate_violations = Self::gate_check(state, code);
 
         // Convert to harness violations for scoring
-        let har_violations: Vec<harness::Violation> = gate_violations.iter().map(|v| {
-            let cat = match v.category.to_lowercase().as_str() {
-                "structural" => harness::ViolationCategory::Structural,
-                "taste" => harness::ViolationCategory::Taste,
-                "golden" => harness::ViolationCategory::Golden,
-                "repeated" => harness::ViolationCategory::Repeated,
-                _ => harness::ViolationCategory::Structural,
-            };
-            harness::Violation {
-                category: cat,
-                message: v.message.clone(),
-                tool_hint: v.tool_hint.clone(),
-                line: v.line,
-            }
-        }).collect();
+        let har_violations: Vec<harness::Violation> = gate_violations
+            .iter()
+            .map(|v| {
+                let cat = match v.category.to_lowercase().as_str() {
+                    "structural" => harness::ViolationCategory::Structural,
+                    "taste" => harness::ViolationCategory::Taste,
+                    "golden" => harness::ViolationCategory::Golden,
+                    "repeated" => harness::ViolationCategory::Repeated,
+                    _ => harness::ViolationCategory::Structural,
+                };
+                harness::Violation {
+                    category: cat,
+                    message: v.message.clone(),
+                    tool_hint: v.tool_hint.clone(),
+                    line: v.line,
+                }
+            })
+            .collect();
 
         let gate_result = harness::scoring::calculate_score(&har_violations);
 
@@ -103,15 +109,11 @@ impl ReviewAgent {
 
         let (llm_review, llm_review_str) = match config.mode {
             crate::pipeline::ReviewMode::Off => (None, None),
-            _ => {
-                match Self::llm_review(state, code, context).await {
-                    Ok(review) if review.len() > 50 => {
-                        (Some(review.clone()), Some(review))
-                    }
-                    Ok(_) => (None, None),
-                    Err(e) => (Some(format!("LLM review failed: {}", e)), None),
-                }
-            }
+            _ => match Self::llm_review(state, code, context).await {
+                Ok(review) if review.len() > 50 => (Some(review.clone()), Some(review)),
+                Ok(_) => (None, None),
+                Err(e) => (Some(format!("LLM review failed: {}", e)), None),
+            },
         };
 
         let score_breakdown = aggregate_scores(

@@ -1,8 +1,8 @@
 // MCP Client — JSON-RPC transport for Model Context Protocol
 // Discovers and invokes skills via the MCP registry.
 
-pub mod transport;
 pub mod skills;
+pub mod transport;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -41,8 +41,8 @@ pub struct Skill {
 
 impl Skill {
     pub fn from_file(path: &std::path::Path) -> Result<Self, String> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| format!("failed to read file: {e}"))?;
+        let content =
+            std::fs::read_to_string(path).map_err(|e| format!("failed to read file: {e}"))?;
 
         let mut skill: Skill =
             serde_json::from_str(&content).map_err(|e| format!("invalid JSON: {e}"))?;

@@ -1,8 +1,8 @@
 // Entropy GC — Drift scanner, domain scorer, auto-GC PR generator
 // Runs daily to detect structural drift and generate remediation PRs.
 
-pub mod scanner;
 pub mod gc;
+pub mod scanner;
 
 use serde::{Deserialize, Serialize};
 

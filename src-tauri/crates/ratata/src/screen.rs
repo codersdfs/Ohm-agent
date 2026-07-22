@@ -1,6 +1,6 @@
 use ratatui::Frame;
 
-use crate::{message::Message, command::Command};
+use crate::{command::Command, message::Message};
 
 pub trait Screen {
     fn render(&mut self, f: &mut Frame<'_>);

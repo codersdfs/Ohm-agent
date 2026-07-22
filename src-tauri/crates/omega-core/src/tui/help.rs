@@ -29,13 +29,22 @@ pub fn render(area: Rect, buf: &mut Buffer) {
 
     let lines = vec![
         Line::from(vec![
-            Span::styled(" OMEGA_AGENT ", Style::default().fg(theme::PRIMARY).add_modifier(Modifier::BOLD)),
-            Span::styled("v".to_string() + env!("CARGO_PKG_VERSION"), theme::style_dim()),
+            Span::styled(
+                " OMEGA_AGENT ",
+                Style::default()
+                    .fg(theme::PRIMARY)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "v".to_string() + env!("CARGO_PKG_VERSION"),
+                theme::style_dim(),
+            ),
         ]),
         Line::from(""),
-        Line::from(vec![
-            Span::styled(" [F1] HELP  [F2] LOGS  [F3] NET  [F10] EXIT", theme::style_dim()),
-        ]),
+        Line::from(vec![Span::styled(
+            " [F1] HELP  [F2] LOGS  [F3] NET  [F10] EXIT",
+            theme::style_dim(),
+        )]),
         Line::from(""),
         Line::from(vec![
             Span::styled("  Enter       ", theme::style_dim()),

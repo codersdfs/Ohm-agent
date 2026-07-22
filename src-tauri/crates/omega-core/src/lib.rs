@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod error;
 pub mod pipeline;
+pub mod session;
 pub mod tui;
 
 use serde::{Deserialize, Serialize};
@@ -35,18 +36,28 @@ pub trait ChatEmitter: Send + Sync {
     fn emit_error(&self, error: &str) -> Result<(), String>;
 
     /// Called when the model emits a thinking/reasoning token.
-    fn emit_thinking(&self, _token: &str) -> Result<(), String> { Ok(()) }
+    fn emit_thinking(&self, _token: &str) -> Result<(), String> {
+        Ok(())
+    }
     /// Called when thinking is complete. `full` is the entire thinking text.
-    fn emit_thinking_done(&self, _full: &str) -> Result<(), String> { Ok(()) }
+    fn emit_thinking_done(&self, _full: &str) -> Result<(), String> {
+        Ok(())
+    }
     /// Called when a tool call starts. `args` is the JSON arguments string.
-    fn emit_tool_call(&self, _name: &str, _args: &str) -> Result<(), String> { Ok(()) }
+    fn emit_tool_call(&self, _name: &str, _args: &str) -> Result<(), String> {
+        Ok(())
+    }
     /// Called when a tool call completes. `success` and `output` describe the result.
-    fn emit_tool_result(&self, _name: &str, _success: bool, _output: &str) -> Result<(), String> { Ok(()) }
+    fn emit_tool_result(&self, _name: &str, _success: bool, _output: &str) -> Result<(), String> {
+        Ok(())
+    }
 
     /// Whether shared command code may write diagnostics directly to the
     /// process terminal. Full-screen TUI emitters must keep this false because
     /// stdout/stderr writes bypass Ratatui and corrupt the alternate screen.
-    fn allows_direct_terminal_output(&self) -> bool { false }
+    fn allows_direct_terminal_output(&self) -> bool {
+        false
+    }
 }
 
 /// CLI emitter — streams tokens live, ensures a final newline on done.
@@ -131,7 +142,10 @@ impl AppState {
         Self::new_with_provider_config(db_path, providers::ProviderConfig::default())
     }
 
-    pub fn new_with_provider_config(db_path: &str, provider_config: providers::ProviderConfig) -> Self {
+    pub fn new_with_provider_config(
+        db_path: &str,
+        provider_config: providers::ProviderConfig,
+    ) -> Self {
         let task_id = uuid::Uuid::new_v4().to_string();
         let memory_store =
             memory::MemoryStore::new(db_path).expect("Failed to initialise memory store");

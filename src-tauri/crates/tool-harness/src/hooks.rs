@@ -1,7 +1,7 @@
 // Hook system for pre/post tool execution
 
-use async_trait::async_trait;
 use crate::{ToolInput, ToolResult};
+use async_trait::async_trait;
 
 /// Hook trait for pre-tool-use callbacks
 #[async_trait]
@@ -107,8 +107,12 @@ mod tests {
     async fn test_hooks_registry_runs_pre_hooks() {
         let count = Arc::new(AtomicUsize::new(0));
         let mut registry = HooksRegistry::new();
-        registry.register_pre(Box::new(CountingPreHook { count: count.clone() }));
-        registry.register_pre(Box::new(CountingPreHook { count: count.clone() }));
+        registry.register_pre(Box::new(CountingPreHook {
+            count: count.clone(),
+        }));
+        registry.register_pre(Box::new(CountingPreHook {
+            count: count.clone(),
+        }));
 
         let input = ToolInput {
             tool: "test".into(),

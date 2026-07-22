@@ -1,7 +1,7 @@
-pub mod openai;
 pub mod anthropic;
 pub mod google;
 pub mod local;
+pub mod openai;
 
 use serde::{Deserialize, Serialize};
 
@@ -86,10 +86,20 @@ impl ProviderKind {
 
     pub fn all() -> Vec<Self> {
         vec![
-            Self::Anthropic, Self::OpenAI, Self::Google, Self::Mistral,
-            Self::XAI, Self::Cerebras, Self::Azure, Self::Bedrock,
-            Self::HuggingFace, Self::Groq, Self::Kimi, Self::MiniMax,
-            Self::OpenRouter, Self::Local,
+            Self::Anthropic,
+            Self::OpenAI,
+            Self::Google,
+            Self::Mistral,
+            Self::XAI,
+            Self::Cerebras,
+            Self::Azure,
+            Self::Bedrock,
+            Self::HuggingFace,
+            Self::Groq,
+            Self::Kimi,
+            Self::MiniMax,
+            Self::OpenRouter,
+            Self::Local,
         ]
     }
 
@@ -113,24 +123,56 @@ impl ProviderKind {
     }
 
     pub fn is_openai_compatible(&self) -> bool {
-        matches!(self, Self::OpenAI | Self::XAI | Self::Cerebras | Self::Groq
-            | Self::Kimi | Self::MiniMax | Self::OpenRouter | Self::Azure
-            | Self::Bedrock | Self::HuggingFace | Self::Mistral)
+        matches!(
+            self,
+            Self::OpenAI
+                | Self::XAI
+                | Self::Cerebras
+                | Self::Groq
+                | Self::Kimi
+                | Self::MiniMax
+                | Self::OpenRouter
+                | Self::Azure
+                | Self::Bedrock
+                | Self::HuggingFace
+                | Self::Mistral
+        )
     }
 
     pub fn supports_streaming(&self) -> bool {
-        matches!(self, Self::OpenAI | Self::XAI | Self::Cerebras | Self::Groq
-            | Self::Kimi | Self::MiniMax | Self::OpenRouter | Self::Azure
-            | Self::Bedrock | Self::HuggingFace | Self::Mistral | Self::Local)
+        matches!(
+            self,
+            Self::OpenAI
+                | Self::XAI
+                | Self::Cerebras
+                | Self::Groq
+                | Self::Kimi
+                | Self::MiniMax
+                | Self::OpenRouter
+                | Self::Azure
+                | Self::Bedrock
+                | Self::HuggingFace
+                | Self::Mistral
+                | Self::Local
+        )
     }
 
     /// Default context window size (input + output) for this provider's models.
     /// Used for the context-length indicator.
     pub fn context_window(&self) -> u64 {
         match self {
-            Self::OpenAI | Self::XAI | Self::Cerebras | Self::Groq
-            | Self::Kimi | Self::MiniMax | Self::OpenRouter | Self::Azure
-            | Self::Bedrock | Self::HuggingFace | Self::Mistral | Self::Local => 128_000,
+            Self::OpenAI
+            | Self::XAI
+            | Self::Cerebras
+            | Self::Groq
+            | Self::Kimi
+            | Self::MiniMax
+            | Self::OpenRouter
+            | Self::Azure
+            | Self::Bedrock
+            | Self::HuggingFace
+            | Self::Mistral
+            | Self::Local => 128_000,
             Self::Anthropic => 200_000,
             Self::Google => 1_048_576,
         }
@@ -174,7 +216,7 @@ pub struct ToolFunctionDef {
     pub parameters: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolCall {
     pub id: String,
     #[serde(rename = "type")]
@@ -182,7 +224,7 @@ pub struct ToolCall {
     pub function: ToolCallFunction,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolCallFunction {
     pub name: String,
     pub arguments: String,
@@ -256,7 +298,11 @@ pub struct StreamChunk {
 #[async_trait::async_trait]
 pub trait LlmProvider: Send + Sync {
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, String>;
-    async fn chat_stream(&self, request: ChatRequest, tx: tokio::sync::mpsc::UnboundedSender<StreamChunk>) -> Result<(), String>;
+    async fn chat_stream(
+        &self,
+        request: ChatRequest,
+        tx: tokio::sync::mpsc::UnboundedSender<StreamChunk>,
+    ) -> Result<(), String>;
 }
 
 pub fn create_provider(config: &ProviderConfig) -> Result<Box<dyn LlmProvider>, String> {
@@ -264,10 +310,17 @@ pub fn create_provider(config: &ProviderConfig) -> Result<Box<dyn LlmProvider>, 
     let base_url = config.base_url.clone();
 
     match config.kind {
-        ProviderKind::OpenAI | ProviderKind::XAI | ProviderKind::Cerebras
-        | ProviderKind::Groq | ProviderKind::Kimi | ProviderKind::MiniMax
-        | ProviderKind::OpenRouter | ProviderKind::Azure | ProviderKind::Bedrock
-        | ProviderKind::HuggingFace | ProviderKind::Mistral => {
+        ProviderKind::OpenAI
+        | ProviderKind::XAI
+        | ProviderKind::Cerebras
+        | ProviderKind::Groq
+        | ProviderKind::Kimi
+        | ProviderKind::MiniMax
+        | ProviderKind::OpenRouter
+        | ProviderKind::Azure
+        | ProviderKind::Bedrock
+        | ProviderKind::HuggingFace
+        | ProviderKind::Mistral => {
             let url = base_url.clone().unwrap_or_else(|| match config.kind {
                 ProviderKind::OpenAI => "https://api.openai.com/v1".into(),
                 ProviderKind::XAI => "https://api.x.ai/v1".into(),
@@ -284,12 +337,10 @@ pub fn create_provider(config: &ProviderConfig) -> Result<Box<dyn LlmProvider>, 
             });
             Ok(Box::new(openai::OpenAIProvider::new(api_key, url)))
         }
-        ProviderKind::Anthropic => {
-            Ok(Box::new(anthropic::AnthropicProvider::new(api_key, base_url)))
-        }
-        ProviderKind::Google => {
-            Ok(Box::new(google::GoogleProvider::new(api_key, base_url)))
-        }
+        ProviderKind::Anthropic => Ok(Box::new(anthropic::AnthropicProvider::new(
+            api_key, base_url,
+        ))),
+        ProviderKind::Google => Ok(Box::new(google::GoogleProvider::new(api_key, base_url))),
         ProviderKind::Local => {
             let mut url = base_url.unwrap_or_else(|| "http://127.0.0.1:11434".into());
             if !url.ends_with("/v1") {
@@ -303,21 +354,26 @@ pub fn create_provider(config: &ProviderConfig) -> Result<Box<dyn LlmProvider>, 
 // ─── Model fetching ─────────────────────────────────────────────────────────
 
 pub async fn fetch_models(config: &ProviderConfig) -> Result<Vec<ModelInfo>, String> {
-    let base_url = config.base_url.clone().unwrap_or_else(|| config.kind.default_base_url());
+    let base_url = config
+        .base_url
+        .clone()
+        .unwrap_or_else(|| config.kind.default_base_url());
 
     if config.kind.is_openai_compatible() {
         fetch_openai_compatible_models(&base_url, config.api_key.as_deref()).await
     } else {
         match config.kind {
-            ProviderKind::Local => {
-                match fetch_local_models(&base_url).await {
-                    Ok(models) if !models.is_empty() => Ok(models),
-                    _ => fetch_openai_compatible_models(&format!("{}/v1", base_url.trim_end_matches('/')), None).await,
+            ProviderKind::Local => match fetch_local_models(&base_url).await {
+                Ok(models) if !models.is_empty() => Ok(models),
+                _ => {
+                    fetch_openai_compatible_models(
+                        &format!("{}/v1", base_url.trim_end_matches('/')),
+                        None,
+                    )
+                    .await
                 }
-            }
-            ProviderKind::Google => {
-                fetch_google_models(&base_url, config.api_key.as_deref()).await
-            }
+            },
+            ProviderKind::Google => fetch_google_models(&base_url, config.api_key.as_deref()).await,
             ProviderKind::Anthropic => {
                 fetch_anthropic_models(&base_url, config.api_key.as_deref()).await
             }
@@ -326,7 +382,10 @@ pub async fn fetch_models(config: &ProviderConfig) -> Result<Vec<ModelInfo>, Str
     }
 }
 
-async fn fetch_openai_compatible_models(base_url: &str, api_key: Option<&str>) -> Result<Vec<ModelInfo>, String> {
+async fn fetch_openai_compatible_models(
+    base_url: &str,
+    api_key: Option<&str>,
+) -> Result<Vec<ModelInfo>, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
@@ -344,15 +403,28 @@ async fn fetch_openai_compatible_models(base_url: &str, api_key: Option<&str>) -
         }
         match req.send().await {
             Ok(resp) if resp.status().is_success() => {
-                let data: serde_json::Value = resp.json().await.map_err(|e| format!("Parse error: {}", e))?;
+                let data: serde_json::Value = resp
+                    .json()
+                    .await
+                    .map_err(|e| format!("Parse error: {}", e))?;
                 let provider_name = extract_provider_name(&url);
 
                 if let Some(models) = data.get("data").and_then(|d| d.as_array()) {
-                    let mut result: Vec<ModelInfo> = models.iter().filter_map(|m| {
-                        let id = m.get("id").and_then(|v| v.as_str())?.to_string();
-                        let name = m.get("name").and_then(|v| v.as_str()).map(|s| s.to_string());
-                        Some(ModelInfo { id, name, provider: provider_name.clone() })
-                    }).collect();
+                    let mut result: Vec<ModelInfo> = models
+                        .iter()
+                        .filter_map(|m| {
+                            let id = m.get("id").and_then(|v| v.as_str())?.to_string();
+                            let name = m
+                                .get("name")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
+                            Some(ModelInfo {
+                                id,
+                                name,
+                                provider: provider_name.clone(),
+                            })
+                        })
+                        .collect();
                     if !result.is_empty() {
                         result.sort_by(|a, b| a.id.cmp(&b.id));
                         return Ok(dedup_models(result));
@@ -373,13 +445,24 @@ async fn fetch_local_models(base_url: &str) -> Result<Vec<ModelInfo>, String> {
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 
     let url = format!("{}/api/tags", base_url.trim_end_matches('/'));
-    let resp = client.get(&url).send().await.map_err(|e| format!("Request failed: {}", e))?;
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
 
     if !resp.status().is_success() {
-        return Err(format!("API error {}: {}", resp.status(), resp.text().await.unwrap_or_default()));
+        return Err(format!(
+            "API error {}: {}",
+            resp.status(),
+            resp.text().await.unwrap_or_default()
+        ));
     }
 
-    let data: serde_json::Value = resp.json().await.map_err(|e| format!("Parse error: {}", e))?;
+    let data: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Parse error: {}", e))?;
     let mut result = Vec::new();
 
     if let Some(models) = data.get("models").and_then(|d| d.as_array()) {
@@ -402,27 +485,47 @@ async fn fetch_local_models(base_url: &str) -> Result<Vec<ModelInfo>, String> {
     Ok(result)
 }
 
-async fn fetch_google_models(base_url: &str, api_key: Option<&str>) -> Result<Vec<ModelInfo>, String> {
+async fn fetch_google_models(
+    base_url: &str,
+    api_key: Option<&str>,
+) -> Result<Vec<ModelInfo>, String> {
     let key = api_key.ok_or_else(|| "API key required for Google provider".to_string())?;
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 
-    let url = format!("{}/v1beta/models?key={}", base_url.trim_end_matches('/'), key);
-    let resp = client.get(&url).send().await.map_err(|e| format!("Request failed: {}", e))?;
+    let url = format!(
+        "{}/v1beta/models?key={}",
+        base_url.trim_end_matches('/'),
+        key
+    );
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
 
     if !resp.status().is_success() {
-        return Err(format!("API error {}: {}", resp.status(), resp.text().await.unwrap_or_default()));
+        return Err(format!(
+            "API error {}: {}",
+            resp.status(),
+            resp.text().await.unwrap_or_default()
+        ));
     }
 
-    let data: serde_json::Value = resp.json().await.map_err(|e| format!("Parse error: {}", e))?;
+    let data: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Parse error: {}", e))?;
     let mut result = Vec::new();
 
     if let Some(models) = data.get("models").and_then(|d| d.as_array()) {
         for m in models {
             if let Some(id) = m.get("name").and_then(|v| v.as_str()) {
-                let name = m.get("displayName").and_then(|v| v.as_str())
+                let name = m
+                    .get("displayName")
+                    .and_then(|v| v.as_str())
                     .or_else(|| m.get("description").and_then(|v| v.as_str()));
                 result.push(ModelInfo {
                     id: id.to_string(),
@@ -441,7 +544,10 @@ async fn fetch_google_models(base_url: &str, api_key: Option<&str>) -> Result<Ve
     Ok(result)
 }
 
-async fn fetch_anthropic_models(base_url: &str, api_key: Option<&str>) -> Result<Vec<ModelInfo>, String> {
+async fn fetch_anthropic_models(
+    base_url: &str,
+    api_key: Option<&str>,
+) -> Result<Vec<ModelInfo>, String> {
     let key = api_key.ok_or_else(|| "API key required for Anthropic provider".to_string())?;
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -449,7 +555,8 @@ async fn fetch_anthropic_models(base_url: &str, api_key: Option<&str>) -> Result
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 
     let url = format!("{}/v1/models", base_url.trim_end_matches('/'));
-    let resp = client.get(&url)
+    let resp = client
+        .get(&url)
         .header("x-api-key", key)
         .header("anthropic-version", "2023-06-01")
         .send()
@@ -457,16 +564,25 @@ async fn fetch_anthropic_models(base_url: &str, api_key: Option<&str>) -> Result
         .map_err(|e| format!("Request failed: {}", e))?;
 
     if !resp.status().is_success() {
-        return Err(format!("API error {}: {}", resp.status(), resp.text().await.unwrap_or_default()));
+        return Err(format!(
+            "API error {}: {}",
+            resp.status(),
+            resp.text().await.unwrap_or_default()
+        ));
     }
 
-    let data: serde_json::Value = resp.json().await.map_err(|e| format!("Parse error: {}", e))?;
+    let data: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Parse error: {}", e))?;
     let mut result = Vec::new();
 
     if let Some(models) = data.get("data").and_then(|d| d.as_array()) {
         for m in models {
             if let Some(id) = m.get("id").and_then(|v| v.as_str()) {
-                let name = m.get("name").and_then(|v| v.as_str())
+                let name = m
+                    .get("name")
+                    .and_then(|v| v.as_str())
                     .or_else(|| m.get("display_name").and_then(|v| v.as_str()));
                 result.push(ModelInfo {
                     id: id.to_string(),
@@ -487,24 +603,42 @@ async fn fetch_anthropic_models(base_url: &str, api_key: Option<&str>) -> Result
 
 fn dedup_models(models: Vec<ModelInfo>) -> Vec<ModelInfo> {
     let mut seen = std::collections::HashSet::new();
-    models.into_iter().filter(|m| seen.insert(m.id.clone())).collect()
+    models
+        .into_iter()
+        .filter(|m| seen.insert(m.id.clone()))
+        .collect()
 }
 
 fn extract_provider_name(url: &str) -> String {
-    if url.contains("openai") { "openai".into() }
-    else if url.contains("anthropic") { "anthropic".into() }
-    else if url.contains("x.ai") || url.contains("xai") { "xai".into() }
-    else if url.contains("cerebras") { "cerebras".into() }
-    else if url.contains("groq") { "groq".into() }
-    else if url.contains("moonshot") || url.contains("kimi") { "kimi".into() }
-    else if url.contains("minimax") { "minimax".into() }
-    else if url.contains("openrouter") { "openrouter".into() }
-    else if url.contains("azure") { "azure".into() }
-    else if url.contains("bedrock") { "bedrock".into() }
-    else if url.contains("huggingface") { "huggingface".into() }
-    else if url.contains("mistral") { "mistral".into() }
-    else if url.contains("google") || url.contains("generativelanguage") { "google".into() }
-    else { "unknown".into() }
+    if url.contains("openai") {
+        "openai".into()
+    } else if url.contains("anthropic") {
+        "anthropic".into()
+    } else if url.contains("x.ai") || url.contains("xai") {
+        "xai".into()
+    } else if url.contains("cerebras") {
+        "cerebras".into()
+    } else if url.contains("groq") {
+        "groq".into()
+    } else if url.contains("moonshot") || url.contains("kimi") {
+        "kimi".into()
+    } else if url.contains("minimax") {
+        "minimax".into()
+    } else if url.contains("openrouter") {
+        "openrouter".into()
+    } else if url.contains("azure") {
+        "azure".into()
+    } else if url.contains("bedrock") {
+        "bedrock".into()
+    } else if url.contains("huggingface") {
+        "huggingface".into()
+    } else if url.contains("mistral") {
+        "mistral".into()
+    } else if url.contains("google") || url.contains("generativelanguage") {
+        "google".into()
+    } else {
+        "unknown".into()
+    }
 }
 
 #[cfg(test)]
@@ -609,7 +743,8 @@ mod tests {
                 tool_type: "function".into(),
                 function: ToolCallFunction {
                     name: "edit".into(),
-                    arguments: r#"{"filePath": "test.txt", "oldString": "foo", "newString": "bar"}"#.into(),
+                    arguments:
+                        r#"{"filePath": "test.txt", "oldString": "foo", "newString": "bar"}"#.into(),
                 },
             }]),
         };
@@ -659,27 +794,28 @@ mod tests {
         assert!(parsed.delta_tool_calls.is_some());
         let deltas = parsed.delta_tool_calls.unwrap();
         assert_eq!(deltas[0].index, 0);
-        assert_eq!(deltas[0].function.as_ref().unwrap().name.as_deref(), Some("read"));
+        assert_eq!(
+            deltas[0].function.as_ref().unwrap().name.as_deref(),
+            Some("read")
+        );
     }
 
     #[test]
     fn test_tool_definitions_json() {
-        let tools = vec![
-            ToolDefinition {
-                tool_type: "function".into(),
-                function: ToolFunctionDef {
-                    name: "test_tool".into(),
-                    description: "A test".into(),
-                    parameters: serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "input": { "type": "string" }
-                        },
-                        "required": ["input"],
-                    }),
-                },
+        let tools = vec![ToolDefinition {
+            tool_type: "function".into(),
+            function: ToolFunctionDef {
+                name: "test_tool".into(),
+                description: "A test".into(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "input": { "type": "string" }
+                    },
+                    "required": ["input"],
+                }),
             },
-        ];
+        }];
         let json = serde_json::to_string_pretty(&tools).unwrap();
         assert!(json.contains("\"name\": \"test_tool\""));
         assert!(json.contains("\"required\": ["));

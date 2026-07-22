@@ -1,8 +1,11 @@
 // Write tool implementation
 
-use crate::{Tool, ToolInput, ToolResult, ToolError, ToolUseContext};
+use crate::metadata::{
+    CostCategory, CostHint, LatencyHint, ToolCategory, ToolErrorSpec, ToolExample, ToolMetadata,
+    ToolSource,
+};
 use crate::schema::string_param;
-use crate::metadata::{ToolMetadata, ToolCategory, LatencyHint, ToolErrorSpec, ToolExample, ToolSource, CostHint, CostCategory};
+use crate::{Tool, ToolError, ToolInput, ToolResult, ToolUseContext};
 use async_trait::async_trait;
 use std::path::PathBuf;
 
@@ -22,8 +25,12 @@ impl Default for WriteTool {
 
 #[async_trait]
 impl Tool for WriteTool {
-    fn name(&self) -> &str { "write" }
-    fn description(&self) -> &str { "Write content to a file, creating it if it doesn't exist. Overwrites existing content." }
+    fn name(&self) -> &str {
+        "write"
+    }
+    fn description(&self) -> &str {
+        "Write content to a file, creating it if it doesn't exist. Overwrites existing content."
+    }
 
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({
@@ -99,26 +106,38 @@ For new files, ensure parent directories exist or they will be created automatic
     }
 
     async fn call(&self, input: ToolInput, _ctx: &ToolUseContext) -> Result<ToolResult, ToolError> {
-        let path = input.args.get("filePath")
+        let path = input
+            .args
+            .get("filePath")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::new("Missing argument: filePath"))?;
 
-        let content = input.args.get("content")
+        let content = input
+            .args
+            .get("content")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::new("Missing argument: content"))?;
 
         // Create parent directories if needed
         if let Some(parent) = PathBuf::from(path).parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|e| ToolError::new(format!("Failed to create directory {}: {}", parent.display(), e)))?;
+            tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                ToolError::new(format!(
+                    "Failed to create directory {}: {}",
+                    parent.display(),
+                    e
+                ))
+            })?;
         }
 
         tokio::fs::write(path, content)
             .await
             .map_err(|e| ToolError::new(format!("Failed to write {}: {}", path, e)))?;
 
-        Ok(ToolResult::success(format!("Wrote {} bytes to {}", content.len(), path)))
+        Ok(ToolResult::success(format!(
+            "Wrote {} bytes to {}",
+            content.len(),
+            path
+        )))
     }
 }
 
@@ -150,7 +169,13 @@ mod tests {
     #[tokio::test]
     async fn test_write_tool_creates_directories() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let path = temp_dir.path().join("subdir").join("file.txt").to_str().unwrap().to_string();
+        let path = temp_dir
+            .path()
+            .join("subdir")
+            .join("file.txt")
+            .to_str()
+            .unwrap()
+            .to_string();
 
         let tool = WriteTool::new();
         let input = ToolInput {

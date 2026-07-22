@@ -32,7 +32,8 @@ pub enum ToolErrorKind {
 
 impl ToolErrorKind {
     pub fn is_recoverable(&self) -> bool {
-        matches!(self,
+        matches!(
+            self,
             ToolErrorKind::Timeout | ToolErrorKind::ExecutionFailed | ToolErrorKind::ParseFailed
         )
     }
@@ -40,36 +41,36 @@ impl ToolErrorKind {
     /// Short uppercase chip label for the redesigned tool bar.
     pub fn chip_label(&self) -> &'static str {
         match self {
-            ToolErrorKind::NotFound          => "NOT_FOUND",
-            ToolErrorKind::PermissionDenied  => "PERM",
-            ToolErrorKind::Timeout           => "TIMEOUT",
-            ToolErrorKind::ParseFailed       => "PARSE",
-            ToolErrorKind::ExecutionFailed   => "FAIL",
-            ToolErrorKind::Aborted           => "ABORT",
+            ToolErrorKind::NotFound => "NOT_FOUND",
+            ToolErrorKind::PermissionDenied => "PERM",
+            ToolErrorKind::Timeout => "TIMEOUT",
+            ToolErrorKind::ParseFailed => "PARSE",
+            ToolErrorKind::ExecutionFailed => "FAIL",
+            ToolErrorKind::Aborted => "ABORT",
         }
     }
 
     /// Chip color on the cyber-noir palette.
     pub fn chip_color(&self) -> Color {
         match self {
-            ToolErrorKind::NotFound          => Color::Rgb(186, 201, 204), // dim
-            ToolErrorKind::PermissionDenied  => Color::Rgb(255, 180, 171), // error red
-            ToolErrorKind::Timeout           => Color::Rgb(255, 190, 70),  // warn amber
-            ToolErrorKind::ParseFailed       => Color::Rgb(0, 218, 243),   // cyan
-            ToolErrorKind::ExecutionFailed   => Color::Rgb(255, 180, 171), // error red
-            ToolErrorKind::Aborted           => Color::Rgb(186, 201, 204), // dim
+            ToolErrorKind::NotFound => Color::Rgb(186, 201, 204), // dim
+            ToolErrorKind::PermissionDenied => Color::Rgb(255, 180, 171), // error red
+            ToolErrorKind::Timeout => Color::Rgb(255, 190, 70),   // warn amber
+            ToolErrorKind::ParseFailed => Color::Rgb(0, 218, 243), // cyan
+            ToolErrorKind::ExecutionFailed => Color::Rgb(255, 180, 171), // error red
+            ToolErrorKind::Aborted => Color::Rgb(186, 201, 204),  // dim
         }
     }
 
     /// 1-glyph icon shown before the tool name in the bar.
     pub fn icon(&self) -> &'static str {
         match self {
-            ToolErrorKind::NotFound          => "?",
-            ToolErrorKind::PermissionDenied  => "⊘",
-            ToolErrorKind::Timeout           => "⏱",
-            ToolErrorKind::ParseFailed       => "ﯦ",
-            ToolErrorKind::ExecutionFailed   => "✗",
-            ToolErrorKind::Aborted           => "⏹",
+            ToolErrorKind::NotFound => "?",
+            ToolErrorKind::PermissionDenied => "⊘",
+            ToolErrorKind::Timeout => "⏱",
+            ToolErrorKind::ParseFailed => "ﯦ",
+            ToolErrorKind::ExecutionFailed => "✗",
+            ToolErrorKind::Aborted => "⏹",
         }
     }
 }
@@ -89,7 +90,12 @@ pub struct ToolCallError {
 impl ToolCallError {
     pub fn new(tool: impl Into<String>, kind: ToolErrorKind, message: impl Into<String>) -> Self {
         let recoverable = kind.is_recoverable();
-        Self { tool: tool.into(), kind, message: message.into(), recoverable }
+        Self {
+            tool: tool.into(),
+            kind,
+            message: message.into(),
+            recoverable,
+        }
     }
 
     /// Stable prefix used when the error is flattened into a String for the
@@ -97,12 +103,12 @@ impl ToolCallError {
     /// back into a typed view without losing information.
     pub fn prefix(&self) -> &'static str {
         match self.kind {
-            ToolErrorKind::NotFound          => "TOOL_NOT_FOUND",
-            ToolErrorKind::PermissionDenied  => "TOOL_PERM",
-            ToolErrorKind::Timeout           => "TOOL_TIMEOUT",
-            ToolErrorKind::ParseFailed       => "TOOL_PARSE",
-            ToolErrorKind::ExecutionFailed   => "TOOL_FAIL",
-            ToolErrorKind::Aborted           => "TOOL_ABORT",
+            ToolErrorKind::NotFound => "TOOL_NOT_FOUND",
+            ToolErrorKind::PermissionDenied => "TOOL_PERM",
+            ToolErrorKind::Timeout => "TOOL_TIMEOUT",
+            ToolErrorKind::ParseFailed => "TOOL_PARSE",
+            ToolErrorKind::ExecutionFailed => "TOOL_FAIL",
+            ToolErrorKind::Aborted => "TOOL_ABORT",
         }
     }
 
@@ -121,18 +127,20 @@ impl ToolCallError {
         };
         let kind = match prefix {
             "TOOL_NOT_FOUND" => ToolErrorKind::NotFound,
-            "TOOL_PERM"      => ToolErrorKind::PermissionDenied,
-            "TOOL_TIMEOUT"   => ToolErrorKind::Timeout,
-            "TOOL_PARSE"     => ToolErrorKind::ParseFailed,
-            "TOOL_FAIL"      => ToolErrorKind::ExecutionFailed,
-            "TOOL_ABORT"     => ToolErrorKind::Aborted,
+            "TOOL_PERM" => ToolErrorKind::PermissionDenied,
+            "TOOL_TIMEOUT" => ToolErrorKind::Timeout,
+            "TOOL_PARSE" => ToolErrorKind::ParseFailed,
+            "TOOL_FAIL" => ToolErrorKind::ExecutionFailed,
+            "TOOL_ABORT" => ToolErrorKind::Aborted,
             _ => return None,
         };
         Some(ToolCallError::new(tool, kind, message))
     }
 
     pub fn style(&self) -> Style {
-        Style::default().fg(self.kind.chip_color()).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(self.kind.chip_color())
+            .add_modifier(Modifier::BOLD)
     }
 }
 
@@ -157,39 +165,44 @@ pub enum ProviderErrorKind {
 
 impl ProviderErrorKind {
     pub fn is_recoverable(&self) -> bool {
-        matches!(self, ProviderErrorKind::RateLimited | ProviderErrorKind::ServerError | ProviderErrorKind::Network)
+        matches!(
+            self,
+            ProviderErrorKind::RateLimited
+                | ProviderErrorKind::ServerError
+                | ProviderErrorKind::Network
+        )
     }
 
     pub fn chip_label(&self) -> &'static str {
         match self {
-            ProviderErrorKind::Auth         => "AUTH",
-            ProviderErrorKind::RateLimited  => "RATE",
-            ProviderErrorKind::BadRequest   => "4xx",
-            ProviderErrorKind::ServerError  => "5xx",
-            ProviderErrorKind::Network      => "NET",
-            ProviderErrorKind::Decode       => "DECODE",
+            ProviderErrorKind::Auth => "AUTH",
+            ProviderErrorKind::RateLimited => "RATE",
+            ProviderErrorKind::BadRequest => "4xx",
+            ProviderErrorKind::ServerError => "5xx",
+            ProviderErrorKind::Network => "NET",
+            ProviderErrorKind::Decode => "DECODE",
         }
     }
 
     pub fn chip_color(&self) -> Color {
         match self {
-            ProviderErrorKind::Auth         => Color::Rgb(255, 180, 171), // error red
-            ProviderErrorKind::RateLimited  => Color::Rgb(255, 190, 70),   // warn amber
-            ProviderErrorKind::BadRequest   => Color::Rgb(255, 180, 171), // error red
-            ProviderErrorKind::ServerError  => Color::Rgb(255, 190, 70),   // warn amber
-            ProviderErrorKind::Network      => Color::Rgb(0, 218, 243),    // cyan
-            ProviderErrorKind::Decode       => Color::Rgb(0, 218, 243),    // cyan
+            ProviderErrorKind::Auth => Color::Rgb(255, 180, 171), // error red
+            ProviderErrorKind::RateLimited => Color::Rgb(255, 190, 70), // warn amber
+            ProviderErrorKind::BadRequest => Color::Rgb(255, 180, 171), // error red
+            ProviderErrorKind::ServerError => Color::Rgb(255, 190, 70), // warn amber
+            ProviderErrorKind::Network => Color::Rgb(0, 218, 243), // cyan
+            ProviderErrorKind::Decode => Color::Rgb(0, 218, 243), // cyan
         }
     }
 
     pub fn icon(&self) -> &'static str {
         match self {
-            ProviderErrorKind::Auth         => "⊘",
-            ProviderErrorKind::RateLimited  => "⚠",
-            ProviderErrorKind::BadRequest   => "✗",
-            ProviderErrorKind::ServerError  => "⚠",
-            ProviderErrorKind::Network      => "↻",
-            ProviderErrorKind::Decode       => "ﯦ",
+            ProviderErrorKind::Auth => "⊘",
+            ProviderErrorKind::RateLimited => "⚠",
+            ProviderErrorKind::BadRequest => "✗",
+            ProviderErrorKind::ServerError => "⚠",
+            ProviderErrorKind::Network => "↻",
+            ProviderErrorKind::Decode => "ﯦ",
         }
     }
 }
@@ -198,7 +211,10 @@ impl ProviderErrorKind {
 /// UI can render distinct chips and the runtime can decide retry/abort.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentError {
-    Provider { kind: ProviderErrorKind, message: String },
+    Provider {
+        kind: ProviderErrorKind,
+        message: String,
+    },
     Network(String),
     Tool(ToolCallError),
     Stream(String),
@@ -212,13 +228,13 @@ impl AgentError {
     pub fn is_recoverable(&self) -> bool {
         match self {
             AgentError::Provider { kind, .. } => kind.is_recoverable(),
-            AgentError::Network(_)          => true,
-            AgentError::Tool(t)              => t.recoverable,
-            AgentError::Stream(_)            => false,
-            AgentError::Config(_)            => false,
-            AgentError::Cancelled            => false, // not an error to recover from
-            AgentError::Io(_)                => true,
-            AgentError::Unknown(_)           => false,
+            AgentError::Network(_) => true,
+            AgentError::Tool(t) => t.recoverable,
+            AgentError::Stream(_) => false,
+            AgentError::Config(_) => false,
+            AgentError::Cancelled => false, // not an error to recover from
+            AgentError::Io(_) => true,
+            AgentError::Unknown(_) => false,
         }
     }
 
@@ -232,27 +248,28 @@ impl AgentError {
     pub fn prefix(&self) -> &'static str {
         match self {
             AgentError::Provider { .. } => "PROVIDER",
-            AgentError::Network(_)      => "NETWORK",
-            AgentError::Tool(_)         => "TOOL",
-            AgentError::Stream(_)       => "STREAM",
-            AgentError::Config(_)       => "CONFIG",
-            AgentError::Cancelled       => "CANCELLED",
-            AgentError::Io(_)           => "IO",
-            AgentError::Unknown(_)      => "UNKNOWN",
+            AgentError::Network(_) => "NETWORK",
+            AgentError::Tool(_) => "TOOL",
+            AgentError::Stream(_) => "STREAM",
+            AgentError::Config(_) => "CONFIG",
+            AgentError::Cancelled => "CANCELLED",
+            AgentError::Io(_) => "IO",
+            AgentError::Unknown(_) => "UNKNOWN",
         }
     }
 
     pub fn to_flat_string(&self) -> String {
         match self {
-            AgentError::Provider { kind, message } =>
-                format!("PROVIDER:{}:{}", kind.chip_label(), message),
-            AgentError::Tool(t)      => format!("TOOL:{}", t.to_flat_string()),
-            AgentError::Network(m)   => format!("NETWORK:{}", m),
-            AgentError::Stream(m)    => format!("STREAM:{}", m),
-            AgentError::Config(m)    => format!("CONFIG:{}", m),
-            AgentError::Cancelled    => "CANCELLED".to_string(),
-            AgentError::Io(m)        => format!("IO:{}", m),
-            AgentError::Unknown(m)   => format!("UNKNOWN:{}", m),
+            AgentError::Provider { kind, message } => {
+                format!("PROVIDER:{}:{}", kind.chip_label(), message)
+            }
+            AgentError::Tool(t) => format!("TOOL:{}", t.to_flat_string()),
+            AgentError::Network(m) => format!("NETWORK:{}", m),
+            AgentError::Stream(m) => format!("STREAM:{}", m),
+            AgentError::Config(m) => format!("CONFIG:{}", m),
+            AgentError::Cancelled => "CANCELLED".to_string(),
+            AgentError::Io(m) => format!("IO:{}", m),
+            AgentError::Unknown(m) => format!("UNKNOWN:{}", m),
         }
     }
 
@@ -265,30 +282,31 @@ impl AgentError {
         };
         match prefix {
             "PROVIDER" => {
-                let (kind_label, msg) = rest.split_once(':')
+                let (kind_label, msg) = rest
+                    .split_once(':')
                     .map(|(k, m)| (k, m.to_string()))
                     .unwrap_or(("", rest.to_string()));
                 let kind = match kind_label {
-                    "AUTH"  => ProviderErrorKind::Auth,
-                    "RATE"  => ProviderErrorKind::RateLimited,
-                    "4xx"   => ProviderErrorKind::BadRequest,
-                    "5xx"   => ProviderErrorKind::ServerError,
-                    "NET"   => ProviderErrorKind::Network,
-                    "DECODE"=> ProviderErrorKind::Decode,
-                    _       => ProviderErrorKind::BadRequest,
+                    "AUTH" => ProviderErrorKind::Auth,
+                    "RATE" => ProviderErrorKind::RateLimited,
+                    "4xx" => ProviderErrorKind::BadRequest,
+                    "5xx" => ProviderErrorKind::ServerError,
+                    "NET" => ProviderErrorKind::Network,
+                    "DECODE" => ProviderErrorKind::Decode,
+                    _ => ProviderErrorKind::BadRequest,
                 };
                 AgentError::Provider { kind, message: msg }
             }
-            "NETWORK"  => AgentError::Network(rest.to_string()),
-            "TOOL"     => ToolCallError::from_flat_string(rest)
+            "NETWORK" => AgentError::Network(rest.to_string()),
+            "TOOL" => ToolCallError::from_flat_string(rest)
                 .map(AgentError::Tool)
                 .unwrap_or_else(|| AgentError::Unknown(s.to_string())),
-            "STREAM"   => AgentError::Stream(rest.to_string()),
-            "CONFIG"   => AgentError::Config(rest.to_string()),
+            "STREAM" => AgentError::Stream(rest.to_string()),
+            "CONFIG" => AgentError::Config(rest.to_string()),
             "CANCELLED" => AgentError::Cancelled,
-            "IO"       => AgentError::Io(rest.to_string()),
-            "UNKNOWN"  => AgentError::Unknown(rest.to_string()),
-            _          => AgentError::Unknown(s.to_string()),
+            "IO" => AgentError::Io(rest.to_string()),
+            "UNKNOWN" => AgentError::Unknown(rest.to_string()),
+            _ => AgentError::Unknown(s.to_string()),
         }
     }
 
@@ -296,52 +314,52 @@ impl AgentError {
     pub fn chip_label(&self) -> &'static str {
         match self {
             AgentError::Provider { kind, .. } => kind.chip_label(),
-            AgentError::Network(_)      => "NET",
-            AgentError::Tool(t)         => t.kind.chip_label(),
-            AgentError::Stream(_)       => "STREAM",
-            AgentError::Config(_)       => "CONFIG",
-            AgentError::Cancelled       => "STOP",
-            AgentError::Io(_)           => "IO",
-            AgentError::Unknown(_)       => "ERR",
+            AgentError::Network(_) => "NET",
+            AgentError::Tool(t) => t.kind.chip_label(),
+            AgentError::Stream(_) => "STREAM",
+            AgentError::Config(_) => "CONFIG",
+            AgentError::Cancelled => "STOP",
+            AgentError::Io(_) => "IO",
+            AgentError::Unknown(_) => "ERR",
         }
     }
 
     pub fn chip_color(&self) -> Color {
         match self {
             AgentError::Provider { kind, .. } => kind.chip_color(),
-            AgentError::Network(_)      => Color::Rgb(0, 218, 243),
-            AgentError::Tool(t)         => t.kind.chip_color(),
-            AgentError::Stream(_)       => Color::Rgb(0, 218, 243),
-            AgentError::Config(_)       => Color::Rgb(255, 180, 171),
-            AgentError::Cancelled       => Color::Rgb(186, 201, 204),
-            AgentError::Io(_)           => Color::Rgb(255, 190, 70),
-            AgentError::Unknown(_)      => Color::Rgb(255, 180, 171),
+            AgentError::Network(_) => Color::Rgb(0, 218, 243),
+            AgentError::Tool(t) => t.kind.chip_color(),
+            AgentError::Stream(_) => Color::Rgb(0, 218, 243),
+            AgentError::Config(_) => Color::Rgb(255, 180, 171),
+            AgentError::Cancelled => Color::Rgb(186, 201, 204),
+            AgentError::Io(_) => Color::Rgb(255, 190, 70),
+            AgentError::Unknown(_) => Color::Rgb(255, 180, 171),
         }
     }
 
     pub fn icon(&self) -> &'static str {
         match self {
             AgentError::Provider { kind, .. } => kind.icon(),
-            AgentError::Network(_)      => "↻",
-            AgentError::Tool(t)         => t.kind.icon(),
-            AgentError::Stream(_)       => "ﯦ",
-            AgentError::Config(_)      => "⊘",
-            AgentError::Cancelled       => "⏹",
-            AgentError::Io(_)           => "⏱",
-            AgentError::Unknown(_)      => "✗",
+            AgentError::Network(_) => "↻",
+            AgentError::Tool(t) => t.kind.icon(),
+            AgentError::Stream(_) => "ﯦ",
+            AgentError::Config(_) => "⊘",
+            AgentError::Cancelled => "⏹",
+            AgentError::Io(_) => "⏱",
+            AgentError::Unknown(_) => "✗",
         }
     }
 
     pub fn message(&self) -> String {
         match self {
             AgentError::Provider { message, .. } => message.clone(),
-            AgentError::Network(m)   => m.clone(),
-            AgentError::Tool(t)      => t.message.clone(),
-            AgentError::Stream(m)    => m.clone(),
-            AgentError::Config(m)    => m.clone(),
-            AgentError::Cancelled    => "Cancelled by user".to_string(),
-            AgentError::Io(m)        => m.clone(),
-            AgentError::Unknown(m)    => m.clone(),
+            AgentError::Network(m) => m.clone(),
+            AgentError::Tool(t) => t.message.clone(),
+            AgentError::Stream(m) => m.clone(),
+            AgentError::Config(m) => m.clone(),
+            AgentError::Cancelled => "Cancelled by user".to_string(),
+            AgentError::Io(m) => m.clone(),
+            AgentError::Unknown(m) => m.clone(),
         }
     }
 
@@ -349,7 +367,9 @@ impl AgentError {
         if self.is_quiet() {
             Style::default().fg(self.chip_color())
         } else {
-            Style::default().fg(self.chip_color()).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(self.chip_color())
+                .add_modifier(Modifier::BOLD)
         }
     }
 
@@ -357,7 +377,11 @@ impl AgentError {
     /// renderer to attach typed errors to a `ToolCallState` when the error
     /// arrives on the legacy flat-string channel.
     pub fn typed_tool_error(&self) -> Option<ToolCallError> {
-        if let AgentError::Tool(t) = self { Some(t.clone()) } else { None }
+        if let AgentError::Tool(t) = self {
+            Some(t.clone())
+        } else {
+            None
+        }
     }
 }
 
@@ -379,7 +403,11 @@ mod tests {
 
     #[test]
     fn flat_roundtrip_agent_error_tool() {
-        let e = AgentError::Tool(ToolCallError::new("bash", ToolErrorKind::Timeout, "timed out"));
+        let e = AgentError::Tool(ToolCallError::new(
+            "bash",
+            ToolErrorKind::Timeout,
+            "timed out",
+        ));
         let flat = e.to_flat_string();
         let back = AgentError::from_flat_string(&flat);
         match back {
@@ -393,7 +421,10 @@ mod tests {
 
     #[test]
     fn flat_roundtrip_agent_error_provider() {
-        let e = AgentError::Provider { kind: ProviderErrorKind::RateLimited, message: "slow down".into() };
+        let e = AgentError::Provider {
+            kind: ProviderErrorKind::RateLimited,
+            message: "slow down".into(),
+        };
         let flat = e.to_flat_string();
         let back = AgentError::from_flat_string(&flat);
         match back {

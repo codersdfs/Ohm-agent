@@ -19,7 +19,10 @@ pub fn check_patterns(content: &str, patterns: &[NegativePattern]) -> Vec<Violat
         if content.contains(pattern.pattern) {
             violations.push(Violation {
                 category: pattern.category.clone(),
-                message: format!("Found pattern '{}': {}", pattern.pattern, pattern.description),
+                message: format!(
+                    "Found pattern '{}': {}",
+                    pattern.pattern, pattern.description
+                ),
                 tool_hint: None,
                 line: None,
             });

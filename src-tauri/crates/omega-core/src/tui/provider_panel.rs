@@ -8,7 +8,6 @@ use super::theme;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 const VISIBLE_MODELS: usize = 10;
-const PROVIDER_COLS: usize = 3;
 
 /// Actions the panel can return to the caller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,6 +62,12 @@ pub struct ProviderPanelState {
 
 impl ProviderPanelState {
     pub fn from_config(config: &providers::ProviderConfig) -> Self {
+        Self::from_config_at(config, WizardStep::Provider)
+    }
+
+    /// Build panel state opened on a specific wizard step.
+    /// `/provider` → Provider, `/model` → Model.
+    pub fn from_config_at(config: &providers::ProviderConfig, step: WizardStep) -> Self {
         let all = providers::ProviderKind::all();
         let selected = all
             .iter()
@@ -74,9 +79,9 @@ impl ProviderPanelState {
             .unwrap_or_else(|| config.kind.default_base_url());
         let mut state = Self {
             visible: true,
-            // Model-first: open on model step with provider pre-selected.
-            step: WizardStep::Model,
-            focus: PanelFocus::ModelSearch,
+            // Temporary; `set_step` below sets the real step + focus.
+            step: WizardStep::Provider,
+            focus: PanelFocus::ProviderGrid,
             selected_provider: selected,
             model_buffer: config.model.clone(),
             model_cursor: config.model.len(),
@@ -96,6 +101,7 @@ impl ProviderPanelState {
             models_rx: None,
             config: config.clone(),
         };
+        set_step(&mut state, step);
         state.recompute_filter();
         state
     }
@@ -160,11 +166,9 @@ impl ProviderPanelState {
             self.model_scroll = 0;
         } else {
             // Prefer current model if still in filtered set.
-            if let Some(pos) = self
-                .filtered
-                .iter()
-                .position(|&i| self.models.get(i).map(|m| m.as_str()) == Some(self.model_buffer.as_str()))
-            {
+            if let Some(pos) = self.filtered.iter().position(|&i| {
+                self.models.get(i).map(|m| m.as_str()) == Some(self.model_buffer.as_str())
+            }) {
                 self.selected_model = pos;
             } else {
                 self.selected_model = self.selected_model.min(self.filtered.len() - 1);
@@ -284,27 +288,20 @@ fn accept_model_selection(state: &mut ProviderPanelState) {
 }
 
 fn move_provider(state: &mut ProviderPanelState, code: KeyCode) {
-    let max = providers::ProviderKind::all().len().saturating_sub(1);
-    let cur = state.selected_provider;
+    let len = providers::ProviderKind::all().len();
+    if len == 0 {
+        return;
+    }
+    let cur = state.selected_provider.min(len - 1);
     let next = match code {
-        KeyCode::Up | KeyCode::Char('k') if cur >= PROVIDER_COLS => cur - PROVIDER_COLS,
-        KeyCode::Down | KeyCode::Char('j') => (cur + PROVIDER_COLS).min(max),
-        KeyCode::Left | KeyCode::Char('h') => {
-            let row_start = (cur / PROVIDER_COLS) * PROVIDER_COLS;
-            if cur > row_start {
+        KeyCode::Up | KeyCode::Char('k') | KeyCode::Left | KeyCode::Char('h') => {
+            if cur == 0 {
+                len - 1
+            } else {
                 cur - 1
-            } else {
-                cur
             }
         }
-        KeyCode::Right | KeyCode::Char('l') => {
-            let row_end = ((cur / PROVIDER_COLS) * PROVIDER_COLS + (PROVIDER_COLS - 1)).min(max);
-            if cur < row_end {
-                cur + 1
-            } else {
-                cur
-            }
-        }
+        KeyCode::Down | KeyCode::Char('j') | KeyCode::Right | KeyCode::Char('l') => (cur + 1) % len,
         _ => cur,
     };
     if next != cur {
@@ -392,11 +389,14 @@ pub fn handle_key(state: &mut ProviderPanelState, key: KeyEvent) -> PanelAction 
 fn handle_step_provider(state: &mut ProviderPanelState, key: KeyEvent) -> PanelAction {
     match key.code {
         KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Tab => go_next(state),
-        KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right => {
-            move_provider(state, key.code);
-            PanelAction::None
-        }
-        KeyCode::Char('h') | KeyCode::Char('j') | KeyCode::Char('k') | KeyCode::Char('l') => {
+        KeyCode::Up
+        | KeyCode::Down
+        | KeyCode::Left
+        | KeyCode::Right
+        | KeyCode::Char('h')
+        | KeyCode::Char('j')
+        | KeyCode::Char('k')
+        | KeyCode::Char('l') => {
             move_provider(state, key.code);
             PanelAction::None
         }
@@ -491,8 +491,8 @@ fn handle_step_advanced(state: &mut ProviderPanelState, key: KeyEvent) -> PanelA
             PanelAction::None
         }
         KeyCode::Enter | KeyCode::Char(' ') => {
-            if state.focus == PanelFocus::ApplyButton || key.code == KeyCode::Enter
-                && key.modifiers.contains(KeyModifiers::CONTROL)
+            if state.focus == PanelFocus::ApplyButton
+                || key.code == KeyCode::Enter && key.modifiers.contains(KeyModifiers::CONTROL)
             {
                 return PanelAction::Apply;
             }
@@ -564,11 +564,13 @@ fn handle_step_advanced(state: &mut ProviderPanelState, key: KeyEvent) -> PanelA
 
 // ── Render ─────────────────────────────────────────────────────────────────
 
-fn dim_bg(area: Rect, buf: &mut Buffer) {
+fn clear_area(area: Rect, buf: &mut Buffer, bg: ratatui::style::Color) {
     for y in area.y..area.y + area.height {
         for x in area.x..area.x + area.width {
             if let Some(cell) = theme::buf_cell_mut(buf, x, y) {
-                cell.set_style(Style::default().fg(theme::DIM).bg(theme::BG));
+                // Wipe glyph + style so underlying chat/tool chrome cannot bleed through.
+                cell.set_symbol(" ");
+                cell.set_style(Style::default().fg(theme::FG).bg(bg));
             }
         }
     }
@@ -581,7 +583,7 @@ fn section_block(title: &str) -> Block<'static> {
         .border_style(Style::default().fg(theme::OUTLINE))
         .title(format!(" {} ", title))
         .title_style(Style::default().fg(theme::PRIMARY))
-        .style(Style::default().bg(theme::BG))
+        .style(Style::default().bg(theme::SURFACE))
 }
 
 pub fn render(
@@ -594,7 +596,8 @@ pub fn render(
         return;
     }
 
-    dim_bg(area, buf);
+    // Full opaque wipe — modal owns the entire screen.
+    clear_area(area, buf, theme::SURFACE);
 
     // Outer frame
     let title = match state.step {
@@ -612,13 +615,16 @@ pub fn render(
                 .fg(theme::PRIMARY)
                 .add_modifier(Modifier::BOLD),
         )
-        .style(Style::default().bg(theme::BG));
+        .style(Style::default().bg(theme::SURFACE));
     let inner = outer.inner(area);
     outer.render(area, buf);
 
     if inner.height < 6 || inner.width < 20 {
         return;
     }
+
+    // Clear inner content area again after border paint (belt + suspenders).
+    clear_area(inner, buf, theme::SURFACE);
 
     // Header summary
     let summary = format!(
@@ -630,10 +636,9 @@ pub fn render(
             &state.model_buffer
         }
     );
-    Paragraph::new(Line::from(Span::styled(summary, theme::style_dim()))).render(
-        Rect::new(inner.x, inner.y, inner.width, 1),
-        buf,
-    );
+    Paragraph::new(Line::from(Span::styled(summary, theme::style_dim())))
+        .style(Style::default().bg(theme::SURFACE))
+        .render(Rect::new(inner.x, inner.y, inner.width, 1), buf);
 
     // Body + footer
     let body = Rect::new(
@@ -657,16 +662,16 @@ pub fn render(
 
     let hints = match state.step {
         WizardStep::Provider => {
-            " ↑↓←→/hjkl move · 1-9/0 jump · Enter next · Esc cancel · Ctrl+Enter apply "
+            " ↑↓/jk move · 1-9/0 jump · Enter next · Esc cancel · Ctrl+Enter apply "
         }
         WizardStep::Model => {
             " type filter · ↑↓ wrap · Enter next · Esc providers · Ctrl+Enter apply "
         }
-        WizardStep::Advanced => {
-            " Tab fields · Enter apply · Esc back · Ctrl+Enter apply "
-        }
+        WizardStep::Advanced => " Tab fields · Enter apply · Esc back · Ctrl+Enter apply ",
     };
-    Paragraph::new(Line::from(Span::styled(hints, theme::style_dim()))).render(footer, buf);
+    Paragraph::new(Line::from(Span::styled(hints, theme::style_dim())))
+        .style(Style::default().bg(theme::SURFACE))
+        .render(footer, buf);
 }
 
 fn render_step_provider(area: Rect, buf: &mut Buffer, state: &ProviderPanelState) {
@@ -676,47 +681,32 @@ fn render_step_provider(area: Rect, buf: &mut Buffer, state: &ProviderPanelState
 
     let all = providers::ProviderKind::all();
     let mut lines: Vec<Line<'static>> = Vec::new();
-    for chunk in all.chunks(PROVIDER_COLS) {
-        let mut spans = Vec::new();
-        for (ci, kind) in chunk.iter().enumerate() {
-            let idx = all
-                .iter()
-                .position(|k| std::mem::discriminant(k) == std::mem::discriminant(kind))
-                .unwrap_or(0);
-            let sel = idx == state.selected_provider;
-            let style = if sel {
-                Style::default()
-                    .fg(theme::PRIMARY_CONTAINER)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                theme::style_dim()
-            };
-            let marker = if sel { "▸◉ " } else { " ○ " };
-            let label = format!("{}{}", marker, kind);
-            spans.push(Span::styled(label, style));
-            let num = idx + 1;
-            let hint = if num <= 9 {
-                format!("[{}]", num)
-            } else if num == 10 {
-                "[0]".into()
-            } else {
-                String::new()
-            };
-            if !hint.is_empty() {
-                spans.push(Span::styled(hint, theme::style_dim()));
-            }
-            let pad = 18usize.saturating_sub(format!("{}", kind).len() + 6);
-            if ci + 1 < chunk.len() {
-                spans.push(Span::raw(" ".repeat(pad.max(1))));
-            }
-        }
-        lines.push(Line::from(spans));
+
+    for (idx, kind) in all.iter().enumerate() {
+        let sel = idx == state.selected_provider;
+        let style = if sel {
+            Style::default()
+                .fg(theme::PRIMARY_CONTAINER)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            theme::style_dim()
+        };
+        let marker = if sel { "▸ " } else { "  " };
+        let num = idx + 1;
+        let hint = if num <= 9 {
+            format!("  [{}]", num)
+        } else if num == 10 {
+            "  [0]".into()
+        } else {
+            String::new()
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("{}{}", marker, kind), style),
+            Span::styled(hint, theme::style_dim()),
+        ]));
     }
+
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        format!(" Selected: {} ", state.provider_name()),
-        theme::style_dim(),
-    )));
     if let Some(kind) = all.get(state.selected_provider) {
         lines.push(Line::from(Span::styled(
             format!(" Default URL: {} ", kind.default_base_url()),
@@ -727,6 +717,7 @@ fn render_step_provider(area: Rect, buf: &mut Buffer, state: &ProviderPanelState
     Paragraph::new(Text::from(lines))
         .alignment(Alignment::Left)
         .wrap(Wrap { trim: false })
+        .style(Style::default().bg(theme::SURFACE))
         .render(inner, buf);
 }
 
@@ -759,6 +750,7 @@ fn render_step_model(area: Rect, buf: &mut Buffer, state: &ProviderPanelState) {
             .fg(theme::FG)
             .add_modifier(Modifier::UNDERLINED),
     )))
+    .style(Style::default().bg(theme::SURFACE))
     .render(search_inner, buf);
 
     let total = state.models.len();
@@ -794,11 +786,17 @@ fn render_step_model(area: Rect, buf: &mut Buffer, state: &ProviderPanelState) {
             )));
         }
     } else {
-        let start = state.model_scroll.min(state.filtered.len().saturating_sub(1));
+        let start = state
+            .model_scroll
+            .min(state.filtered.len().saturating_sub(1));
         let end = (start + VISIBLE_MODELS).min(state.filtered.len());
         for (vis_i, &model_idx) in state.filtered[start..end].iter().enumerate() {
             let index = start + vis_i;
-            let name = state.models.get(model_idx).map(|s| s.as_str()).unwrap_or("?");
+            let name = state
+                .models
+                .get(model_idx)
+                .map(|s| s.as_str())
+                .unwrap_or("?");
             let is_sel = index == state.selected_model;
             let is_current = name == state.model_buffer;
             let style = if is_sel {
@@ -819,6 +817,7 @@ fn render_step_model(area: Rect, buf: &mut Buffer, state: &ProviderPanelState) {
 
     Paragraph::new(Text::from(lines))
         .alignment(Alignment::Left)
+        .style(Style::default().bg(theme::SURFACE))
         .render(list_inner, buf);
 }
 
@@ -847,7 +846,11 @@ fn render_step_advanced(
     conn_block.render(conn_area, buf);
 
     let url_foc = state.focus == PanelFocus::BaseUrlField;
-    let url_label = if url_foc { "▸ Base URL" } else { "  Base URL" };
+    let url_label = if url_foc {
+        "▸ Base URL"
+    } else {
+        "  Base URL"
+    };
     let url_style = if url_foc {
         Style::default()
             .fg(theme::PRIMARY_CONTAINER)
@@ -876,7 +879,9 @@ fn render_step_advanced(
         Line::from(Span::styled(
             format!("  {}", state.url_buffer),
             if url_foc {
-                Style::default().fg(theme::FG).add_modifier(Modifier::UNDERLINED)
+                Style::default()
+                    .fg(theme::FG)
+                    .add_modifier(Modifier::UNDERLINED)
             } else {
                 theme::style_dim()
             },
@@ -887,7 +892,9 @@ fn render_step_advanced(
             Span::styled(key_display, Style::default().fg(key_color)),
         ]),
     ];
-    Paragraph::new(Text::from(conn_lines)).render(conn_inner, buf);
+    Paragraph::new(Text::from(conn_lines))
+        .style(Style::default().bg(theme::SURFACE))
+        .render(conn_inner, buf);
 
     // Generation + Apply
     let gen_block = section_block("Generation & Apply");
@@ -901,7 +908,11 @@ fn render_step_advanced(
     let gen_lines = vec![
         Line::from(vec![
             Span::styled(
-                if tkn_foc { "▸ Max tokens  " } else { "  Max tokens  " },
+                if tkn_foc {
+                    "▸ Max tokens  "
+                } else {
+                    "  Max tokens  "
+                },
                 if tkn_foc {
                     Style::default()
                         .fg(theme::PRIMARY_CONTAINER)
@@ -971,7 +982,9 @@ fn render_step_advanced(
             theme::style_dim(),
         )),
     ];
-    Paragraph::new(Text::from(gen_lines)).render(gen_inner, buf);
+    Paragraph::new(Text::from(gen_lines))
+        .style(Style::default().bg(theme::SURFACE))
+        .render(gen_inner, buf);
 }
 
 // ── Component impl ──────────────────────────────────────────────────────────
@@ -1018,10 +1031,10 @@ mod tests {
     }
 
     #[test]
-    fn from_config_opens_on_model_step() {
+    fn from_config_opens_on_provider_step() {
         let state = ProviderPanelState::from_config(&config(providers::ProviderKind::OpenAI, None));
-        assert_eq!(state.step, WizardStep::Model);
-        assert_eq!(state.focus, PanelFocus::ModelSearch);
+        assert_eq!(state.step, WizardStep::Provider);
+        assert_eq!(state.focus, PanelFocus::ProviderGrid);
         assert_eq!(
             state.selected_provider,
             providers::ProviderKind::all()
@@ -1029,6 +1042,16 @@ mod tests {
                 .position(|k| matches!(k, providers::ProviderKind::OpenAI))
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn from_config_at_opens_on_model_step() {
+        let state = ProviderPanelState::from_config_at(
+            &config(providers::ProviderKind::OpenAI, None),
+            WizardStep::Model,
+        );
+        assert_eq!(state.step, WizardStep::Model);
+        assert_eq!(state.focus, PanelFocus::ModelSearch);
     }
 
     #[test]
@@ -1061,8 +1084,10 @@ mod tests {
 
     #[test]
     fn enter_on_model_advances_to_advanced_and_selects() {
-        let mut state =
-            ProviderPanelState::from_config(&config(providers::ProviderKind::OpenAI, None));
+        let mut state = ProviderPanelState::from_config_at(
+            &config(providers::ProviderKind::OpenAI, None),
+            WizardStep::Model,
+        );
         state.models = vec!["a".into(), "b".into(), "c".into()];
         state.recompute_filter();
         state.selected_model = 1;
@@ -1076,8 +1101,10 @@ mod tests {
 
     #[test]
     fn enter_accepts_custom_model_when_no_matches() {
-        let mut state =
-            ProviderPanelState::from_config(&config(providers::ProviderKind::OpenAI, None));
+        let mut state = ProviderPanelState::from_config_at(
+            &config(providers::ProviderKind::OpenAI, None),
+            WizardStep::Model,
+        );
         state.models = vec!["alpha".into(), "beta".into()];
         state.recompute_filter();
         state.search_buffer = "custom-id".into();
@@ -1091,8 +1118,10 @@ mod tests {
 
     #[test]
     fn filter_narrows_and_resets_selection() {
-        let mut state =
-            ProviderPanelState::from_config(&config(providers::ProviderKind::OpenAI, None));
+        let mut state = ProviderPanelState::from_config_at(
+            &config(providers::ProviderKind::OpenAI, None),
+            WizardStep::Model,
+        );
         state.models = vec![
             "claude-opus".into(),
             "claude-sonnet".into(),
@@ -1112,19 +1141,17 @@ mod tests {
         let mut state =
             ProviderPanelState::from_config(&config(providers::ProviderKind::OpenAI, None));
         state.model_buffer = "gpt-4o".into();
-        state.models = vec![
-            "alpha".into(),
-            "gpt-4o".into(),
-            "beta".into(),
-        ];
+        state.models = vec!["alpha".into(), "gpt-4o".into(), "beta".into()];
         state.recompute_filter();
         assert_eq!(state.models[state.filtered[0]], "gpt-4o");
     }
 
     #[test]
     fn model_list_wraps_scrolls_and_selects() {
-        let mut state =
-            ProviderPanelState::from_config(&config(providers::ProviderKind::OpenAI, None));
+        let mut state = ProviderPanelState::from_config_at(
+            &config(providers::ProviderKind::OpenAI, None),
+            WizardStep::Model,
+        );
         state.models = (0..15).map(|i| format!("model-{i}")).collect();
         state.recompute_filter();
         handle_key(&mut state, key(KeyCode::Up));
@@ -1137,8 +1164,10 @@ mod tests {
 
     #[test]
     fn ctrl_enter_applies_from_model_step() {
-        let mut state =
-            ProviderPanelState::from_config(&config(providers::ProviderKind::OpenAI, None));
+        let mut state = ProviderPanelState::from_config_at(
+            &config(providers::ProviderKind::OpenAI, None),
+            WizardStep::Model,
+        );
         assert_eq!(state.step, WizardStep::Model);
         assert_eq!(handle_key(&mut state, ctrl_enter()), PanelAction::Apply);
     }
@@ -1161,8 +1190,10 @@ mod tests {
 
     #[test]
     fn hjkl_not_nav_in_search() {
-        let mut state =
-            ProviderPanelState::from_config(&config(providers::ProviderKind::OpenAI, None));
+        let mut state = ProviderPanelState::from_config_at(
+            &config(providers::ProviderKind::OpenAI, None),
+            WizardStep::Model,
+        );
         state.models = vec!["a".into(), "b".into(), "c".into()];
         state.recompute_filter();
         let before = state.selected_model;
@@ -1186,18 +1217,27 @@ mod tests {
     }
 
     #[test]
-    fn provider_grid_uses_three_column_navigation() {
+    fn provider_list_moves_and_wraps() {
         let mut state =
             ProviderPanelState::from_config(&config(providers::ProviderKind::Anthropic, None));
         set_step(&mut state, WizardStep::Provider);
         state.selected_provider = 0;
-        handle_key(&mut state, key(KeyCode::Right));
+        handle_key(&mut state, key(KeyCode::Down));
         assert_eq!(state.selected_provider, 1);
         handle_key(&mut state, key(KeyCode::Down));
-        assert_eq!(state.selected_provider, 4);
-        handle_key(&mut state, key(KeyCode::Left));
-        assert_eq!(state.selected_provider, 3);
+        assert_eq!(state.selected_provider, 2);
         handle_key(&mut state, key(KeyCode::Up));
+        assert_eq!(state.selected_provider, 1);
+
+        // Wrap from first → last
+        state.selected_provider = 0;
+        handle_key(&mut state, key(KeyCode::Up));
+        assert_eq!(
+            state.selected_provider,
+            providers::ProviderKind::all().len() - 1
+        );
+        // Wrap from last → first
+        handle_key(&mut state, key(KeyCode::Down));
         assert_eq!(state.selected_provider, 0);
     }
 
@@ -1206,11 +1246,11 @@ mod tests {
         let mut default_state =
             ProviderPanelState::from_config(&config(providers::ProviderKind::OpenAI, None));
         set_step(&mut default_state, WizardStep::Provider);
-        // OpenAI is index 1; Down moves +3 → index 4 (XAI)
+        // OpenAI is index 1; Down moves +1 → index 2 (Google)
         handle_key(&mut default_state, key(KeyCode::Down));
         assert_eq!(
             default_state.url_buffer,
-            providers::ProviderKind::XAI.default_base_url()
+            providers::ProviderKind::Google.default_base_url()
         );
 
         let mut custom_state = ProviderPanelState::from_config(&config(

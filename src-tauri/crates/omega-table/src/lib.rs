@@ -1,10 +1,10 @@
 // Omega Tables — .otable format with three-level progressive loading
 // Index -> Meta -> Content with LRU caching, FTS5 search, and embedding support.
 
-pub mod index;
-pub mod meta;
 pub mod content;
+pub mod index;
 pub mod lru;
+pub mod meta;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

@@ -1,7 +1,7 @@
 // JSON schema validation for tool inputs
 
-use serde_json::Value;
 use crate::ToolError;
+use serde_json::Value;
 
 /// Validate input JSON against a JSON schema
 pub fn validate_input(schema: &Value, input: &Value) -> Result<(), ToolError> {
@@ -24,7 +24,10 @@ pub fn validate_input(schema: &Value, input: &Value) -> Result<(), ToolError> {
     }
 }
 
-fn validate_object_input(schema: &serde_json::Map<String, Value>, input: &Value) -> Result<(), ToolError> {
+fn validate_object_input(
+    schema: &serde_json::Map<String, Value>,
+    input: &Value,
+) -> Result<(), ToolError> {
     if let Value::Object(obj) = input {
         // Check required fields — "required" is at the schema root, not under "properties"
         if let Some(required) = schema.get("required") {
@@ -32,7 +35,10 @@ fn validate_object_input(schema: &serde_json::Map<String, Value>, input: &Value)
                 for req_field in req_arr {
                     if let Some(field_name) = req_field.as_str() {
                         if !obj.contains_key(field_name) {
-                            return Err(ToolError::new(format!("Missing required field: {}", field_name)));
+                            return Err(ToolError::new(format!(
+                                "Missing required field: {}",
+                                field_name
+                            )));
                         }
                     }
                 }
@@ -59,7 +65,10 @@ fn validate_object_input(schema: &serde_json::Map<String, Value>, input: &Value)
                         if let Some(props_obj) = props.as_object() {
                             for field_name in obj.keys() {
                                 if !props_obj.contains_key(field_name) {
-                                    return Err(ToolError::new(format!("Unexpected field: {}", field_name)));
+                                    return Err(ToolError::new(format!(
+                                        "Unexpected field: {}",
+                                        field_name
+                                    )));
                                 }
                             }
                         }
@@ -73,14 +82,20 @@ fn validate_object_input(schema: &serde_json::Map<String, Value>, input: &Value)
     Ok(())
 }
 
-fn validate_string_input(schema: &serde_json::Map<String, Value>, input: &Value) -> Result<(), ToolError> {
+fn validate_string_input(
+    schema: &serde_json::Map<String, Value>,
+    input: &Value,
+) -> Result<(), ToolError> {
     if let Value::String(_) = input {
         // Validate length constraints if specified
         if let Some(min_len) = schema.get("minLength") {
             if let Some(len) = input.as_str().map(|s| s.len()) {
                 if let Some(min) = min_len.as_u64() {
                     if len < min as usize {
-                        return Err(ToolError::new(format!("String length {} is less than minimum {}", len, min)));
+                        return Err(ToolError::new(format!(
+                            "String length {} is less than minimum {}",
+                            len, min
+                        )));
                     }
                 }
             }
@@ -89,7 +104,10 @@ fn validate_string_input(schema: &serde_json::Map<String, Value>, input: &Value)
             if let Some(len) = input.as_str().map(|s| s.len()) {
                 if let Some(max) = max_len.as_u64() {
                     if len > max as usize {
-                        return Err(ToolError::new(format!("String length {} exceeds maximum {}", len, max)));
+                        return Err(ToolError::new(format!(
+                            "String length {} exceeds maximum {}",
+                            len, max
+                        )));
                     }
                 }
             }
@@ -100,7 +118,10 @@ fn validate_string_input(schema: &serde_json::Map<String, Value>, input: &Value)
                 if let Ok(regex) = regex::Regex::new(pattern_str) {
                     if let Some(s) = input.as_str() {
                         if !regex.is_match(s) {
-                            return Err(ToolError::new(format!("String '{}' does not match pattern '{}'", s, pattern_str)));
+                            return Err(ToolError::new(format!(
+                                "String '{}' does not match pattern '{}'",
+                                s, pattern_str
+                            )));
                         }
                     }
                 }
@@ -112,28 +133,43 @@ fn validate_string_input(schema: &serde_json::Map<String, Value>, input: &Value)
     Ok(())
 }
 
-fn validate_array_input(schema: &serde_json::Map<String, Value>, input: &Value) -> Result<(), ToolError> {
+fn validate_array_input(
+    schema: &serde_json::Map<String, Value>,
+    input: &Value,
+) -> Result<(), ToolError> {
     if let Value::Array(arr) = input {
         // Validate item count
         if let Some(min_items) = schema.get("minItems") {
             if let Some(min) = min_items.as_u64() {
                 if arr.len() < min as usize {
-                    return Err(ToolError::new(format!("Array has {} items, less than minimum {}", arr.len(), min)));
+                    return Err(ToolError::new(format!(
+                        "Array has {} items, less than minimum {}",
+                        arr.len(),
+                        min
+                    )));
                 }
             }
         }
         if let Some(max_items) = schema.get("maxItems") {
             if let Some(max) = max_items.as_u64() {
                 if arr.len() > max as usize {
-                    return Err(ToolError::new(format!("Array has {} items, exceeds maximum {}", arr.len(), max)));
+                    return Err(ToolError::new(format!(
+                        "Array has {} items, exceeds maximum {}",
+                        arr.len(),
+                        max
+                    )));
                 }
             }
         }
         // Validate item schemas if items schema is specified
         if let Some(items_schema) = schema.get("items") {
             for (i, item) in arr.iter().enumerate() {
-                validate_field_value(items_schema, item).map_err(|e| ToolError::with_details(
-                    format!("Item at index {} validation failed", i), e.to_string()))?
+                validate_field_value(items_schema, item).map_err(|e| {
+                    ToolError::with_details(
+                        format!("Item at index {} validation failed", i),
+                        e.to_string(),
+                    )
+                })?
             }
         }
     } else {
@@ -142,13 +178,19 @@ fn validate_array_input(schema: &serde_json::Map<String, Value>, input: &Value) 
     Ok(())
 }
 
-fn validate_number_input(schema: &serde_json::Map<String, Value>, input: &Value) -> Result<(), ToolError> {
+fn validate_number_input(
+    schema: &serde_json::Map<String, Value>,
+    input: &Value,
+) -> Result<(), ToolError> {
     if let Value::Number(num) = input {
         if let Some(min) = schema.get("minimum") {
             if let Some(min_val) = min.as_f64() {
                 if let Some(n) = num.as_f64() {
                     if n < min_val {
-                        return Err(ToolError::new(format!("Number {} is less than minimum {}", n, min_val)));
+                        return Err(ToolError::new(format!(
+                            "Number {} is less than minimum {}",
+                            n, min_val
+                        )));
                     }
                 }
             }
@@ -157,7 +199,10 @@ fn validate_number_input(schema: &serde_json::Map<String, Value>, input: &Value)
             if let Some(max_val) = max.as_f64() {
                 if let Some(n) = num.as_f64() {
                     if n > max_val {
-                        return Err(ToolError::new(format!("Number {} exceeds maximum {}", n, max_val)));
+                        return Err(ToolError::new(format!(
+                            "Number {} exceeds maximum {}",
+                            n, max_val
+                        )));
                     }
                 }
             }
@@ -168,7 +213,10 @@ fn validate_number_input(schema: &serde_json::Map<String, Value>, input: &Value)
     Ok(())
 }
 
-fn validate_boolean_input(_schema: &serde_json::Map<String, Value>, input: &Value) -> Result<(), ToolError> {
+fn validate_boolean_input(
+    _schema: &serde_json::Map<String, Value>,
+    input: &Value,
+) -> Result<(), ToolError> {
     if !input.is_boolean() {
         return Err(ToolError::new("Expected boolean but got other type"));
     }
@@ -204,7 +252,7 @@ fn validate_field_value(schema: &Value, value: &Value) -> Result<(), ToolError> 
             Value::Number(_) if schema.is_number() => Ok(()),
             Value::Bool(_) if schema.is_boolean() => Ok(()),
             Value::Null if schema.is_null() => Ok(()),
-            _ => Err(ToolError::new("Value type does not match schema"))
+            _ => Err(ToolError::new("Value type does not match schema")),
         }
     }
 }
@@ -275,7 +323,10 @@ mod tests {
         let result = validate_input(&schema, &invalid_input);
         assert!(result.is_err(), "Should error on missing required field");
         assert!(
-            result.unwrap_err().to_string().contains("Missing required field: content"),
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Missing required field: content"),
             "Error should name the missing field"
         );
 
