@@ -5,7 +5,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Widget, Wrap};
+use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use super::theme;
 
@@ -70,6 +70,27 @@ pub static COMMANDS: &[CommandEntry] = &[
         aliases: &["/quit"],
         description: "Quit Omega",
         keywords: &["quit", "close", "leave"],
+    },
+    CommandEntry {
+        id: "/fetch",
+        label: "Fetch URL",
+        aliases: &["/web", "/url"],
+        description: "Fetch and display content from a URL",
+        keywords: &["http", "web", "internet", "download", "curl", "get"],
+    },
+    CommandEntry {
+        id: "/status",
+        label: "System status",
+        aliases: &["/ping", "/health", "/net"],
+        description: "Check network connectivity and provider status",
+        keywords: &["network", "connectivity", "reachable", "health", "ping"],
+    },
+    CommandEntry {
+        id: "/search",
+        label: "Web search",
+        aliases: &["/google", "/websearch"],
+        description: "Search the web",
+        keywords: &["google", "duckduckgo", "web", "browse", "find"],
     },
 ];
 
@@ -241,67 +262,58 @@ pub fn handle_key(state: &mut CommandPaletteState, key: KeyEvent) -> PaletteActi
     }
 }
 
-/// Render centered command palette overlay.
+/// Render command palette docked inline in the given area with a glass-style
+/// thin-rule edge that matches the editor panel.
 pub fn render(area: Rect, buf: &mut Buffer, state: &CommandPaletteState) {
-    if !state.visible || area.width < 20 || area.height < 6 {
+    if !state.visible || area.width < 20 || area.height < 3 {
         return;
     }
 
-    // Dim full area (same approach as help overlay).
-    for cy in area.y..area.y + area.height {
-        for cx in area.x..area.x + area.width {
-            if let Some(cell) = theme::buf_cell_mut(buf, cx, cy) {
-                cell.set_style(Style::default().fg(theme::DIM));
-            }
+    let line_style = Style::default().fg(theme::OUTLINE);
+    let top_y = area.y;
+    let bottom_y = area.y + area.height - 1;
+
+    // Top rule with " commands " label:  ── commands ──
+    let title = " commands ";
+    let title_w = title.chars().count() as u16;
+    let left_dash = (area.width.saturating_sub(title_w)) / 2;
+    for x in area.x..area.x + area.width {
+        buf.get_mut(x, top_y)
+            .set_char('─')
+            .set_style(line_style);
+    }
+    for (i, ch) in title.chars().enumerate() {
+        let cx = area.x + left_dash + i as u16;
+        if cx < area.x + area.width {
+            buf.get_mut(cx, top_y)
+                .set_char(ch)
+                .set_fg(theme::DIM);
         }
     }
 
-    // Prefer 48 cols, clamp to available width with a small margin; min 20.
-    let popup_width = area.width.saturating_sub(4).min(48).max(20).min(area.width);
-    // chrome: borders + title + search line + optional description + empty/rows
-    let row_count = if state.filtered.is_empty() {
-        1usize
-    } else {
-        state.filtered.len().min(8)
-    };
-    // 2 border + 1 search + rows + 1 description footer
-    let popup_height = (row_count as u16)
-        .saturating_add(5)
-        .min(area.height.saturating_sub(2))
-        .max(6);
-    let x = area.x + (area.width.saturating_sub(popup_width)) / 2;
-    let y = area.y + (area.height.saturating_sub(popup_height)) / 2;
-    let popup_area = Rect::new(x, y, popup_width, popup_height);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
-        .border_style(Style::default().fg(theme::PRIMARY))
-        .title(Line::from(Span::styled(
-            " commands ",
-            Style::default().fg(theme::DIM),
-        )))
-        .style(Style::default().bg(theme::SURFACE_HIGH));
-    let inner = block.inner(popup_area);
-    block.render(popup_area, buf);
-
-    if inner.height < 2 || inner.width < 4 {
-        return;
+    // Bottom rule
+    for x in area.x..area.x + area.width {
+        buf.get_mut(x, bottom_y)
+            .set_char('─')
+            .set_style(line_style);
     }
 
     // Search line: "> query█"
+    let search_y = area.y + 1;
     let search_display = format!("> {}_", state.query);
-    let search_line = Line::from(Span::styled(
-        truncate_to_width(&search_display, inner.width as usize),
+    let search_text = Line::from(Span::styled(
+        search_display,
         Style::default().fg(theme::PRIMARY_CONTAINER),
     ));
-    Paragraph::new(search_line)
-        .style(Style::default().bg(theme::SURFACE_HIGH))
-        .render(Rect::new(inner.x, inner.y, inner.width, 1), buf);
+    Paragraph::new(search_text)
+        .render(Rect::new(area.x + 1, search_y, area.width.saturating_sub(2), 1), buf);
 
-    let list_y = inner.y + 1;
-    let list_h = inner.height.saturating_sub(2); // leave 1 for description
-    let list_area = Rect::new(inner.x, list_y, inner.width, list_h);
+    // Compact: list fills remaining rows; selected id + description shown when possible.
+    let body_y = area.y + 2;
+    let body_h = area.height.saturating_sub(3); // top rule + search + list + bottom rule
+    if body_h < 1 {
+        return;
+    }
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     if state.filtered.is_empty() {
@@ -310,8 +322,7 @@ pub fn render(area: Rect, buf: &mut Buffer, state: &CommandPaletteState) {
             theme::style_dim(),
         )));
     } else {
-        // Scroll window so selected stays visible.
-        let max_rows = list_h as usize;
+        let max_rows = body_h as usize;
         let sel = state.selected;
         let start = if sel >= max_rows {
             sel + 1 - max_rows
@@ -335,9 +346,12 @@ pub fn render(area: Rect, buf: &mut Buffer, state: &CommandPaletteState) {
                 Style::default().fg(theme::FG)
             };
             let marker = if is_sel { "▸ " } else { "  " };
-            let text = format!("{}{}  {}", marker, entry.id, entry.label);
+            let text = format!(
+                "{}{}  {} — {}",
+                marker, entry.id, entry.label, entry.description
+            );
             lines.push(Line::from(Span::styled(
-                truncate_to_width(&text, inner.width as usize),
+                truncate_to_width(&text, inner_width(area)),
                 style,
             )));
         }
@@ -346,22 +360,11 @@ pub fn render(area: Rect, buf: &mut Buffer, state: &CommandPaletteState) {
     Paragraph::new(Text::from(lines))
         .alignment(Alignment::Left)
         .wrap(Wrap { trim: false })
-        .style(Style::default().bg(theme::SURFACE_HIGH))
-        .render(list_area, buf);
+        .render(Rect::new(area.x + 1, body_y, area.width.saturating_sub(2), body_h), buf);
+}
 
-    // Description footer for selected row.
-    let desc = state
-        .selected_id()
-        .and_then(|id| COMMANDS.iter().find(|e| e.id == id))
-        .map(|e| e.description)
-        .unwrap_or("");
-    let desc_y = inner.y + inner.height.saturating_sub(1);
-    Paragraph::new(Line::from(Span::styled(
-        truncate_to_width(&format!(" {desc}"), inner.width as usize),
-        theme::style_dim(),
-    )))
-    .style(Style::default().bg(theme::SURFACE_HIGH))
-    .render(Rect::new(inner.x, desc_y, inner.width, 1), buf);
+fn inner_width(area: Rect) -> usize {
+    area.width.saturating_sub(2) as usize
 }
 
 fn truncate_to_width(s: &str, width: usize) -> String {
@@ -401,7 +404,10 @@ mod tests {
                 "/model",
                 "/provider",
                 "/cost",
-                "/exit"
+                "/exit",
+                "/fetch",
+                "/status",
+                "/search",
             ]
         );
     }
@@ -517,5 +523,32 @@ mod tests {
         let action = handle_key(&mut s, press(KeyCode::BackTab));
         assert_eq!(action, PaletteAction::None);
         assert_eq!(s.selected, 0);
+    }
+
+    #[test]
+    fn filter_fetch_matches_new_command() {
+        let ids: Vec<_> = filter_commands("fetch")
+            .into_iter()
+            .map(|i| COMMANDS[i].id)
+            .collect();
+        assert!(ids.contains(&"/fetch"), "fetch command should appear when searching 'fetch'");
+    }
+
+    #[test]
+    fn filter_status_matches_new_command() {
+        let ids: Vec<_> = filter_commands("status")
+            .into_iter()
+            .map(|i| COMMANDS[i].id)
+            .collect();
+        assert!(ids.contains(&"/status"), "status command should appear when searching 'status'");
+    }
+
+    #[test]
+    fn filter_search_matches_new_command() {
+        let ids: Vec<_> = filter_commands("search web")
+            .into_iter()
+            .map(|i| COMMANDS[i].id)
+            .collect();
+        assert!(ids.contains(&"/search"), "search command should appear when searching 'search web'");
     }
 }
