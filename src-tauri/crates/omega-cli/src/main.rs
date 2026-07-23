@@ -1919,11 +1919,13 @@ fn run_mcp_server(port: u16, host: String, auth_token: Option<String>) -> Result
 
         // Build the MCP server with tool harness
         let registry = tool_harness::tools::default_tool_registry();
-        let _server = mcp_server::McpServer::new()
-            .with_tool_registry(registry);
+        let server = Arc::new(
+            mcp_server::McpServer::new()
+                .with_tool_registry(registry),
+        );
 
-        // Start serving
-        let handle = transport.serve().await
+        // Start serving — server is passed to transport to wire into Axum state
+        let handle = transport.serve(server).await
             .map_err(|e| anyhow::anyhow!("Failed to start MCP server: {e}"))?;
 
         // Ctrl+C handler
