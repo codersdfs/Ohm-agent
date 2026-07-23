@@ -92,6 +92,34 @@ pub static COMMANDS: &[CommandEntry] = &[
         description: "Search the web",
         keywords: &["google", "duckduckgo", "web", "browse", "find"],
     },
+    CommandEntry {
+        id: "/gate",
+        label: "Run Gate",
+        aliases: &[],
+        description: "Run Mechanized Gate on a file",
+        keywords: &["gate", "lint", "rules", "check", "score", "violations"],
+    },
+    CommandEntry {
+        id: "/rules",
+        label: "List rules",
+        aliases: &["/pattern"],
+        description: "List promoted negative patterns",
+        keywords: &["rules", "pattern", "negative", "promoted", "frequency"],
+    },
+    CommandEntry {
+        id: "/score",
+        label: "Quality score",
+        aliases: &[],
+        description: "Quick quality score for a file",
+        keywords: &["score", "quality", "grade", "pass", "fail"],
+    },
+    CommandEntry {
+        id: "/memory",
+        label: "Search memory",
+        aliases: &["/mem"],
+        description: "Search Hermes memory",
+        keywords: &["memory", "hermes", "search", "remember", "session", "project", "user"],
+    },
 ];
 
 /// Build lowercase haystack for keyword search.
@@ -408,6 +436,10 @@ mod tests {
                 "/fetch",
                 "/status",
                 "/search",
+                "/gate",
+                "/rules",
+                "/score",
+                "/memory",
             ]
         );
     }
@@ -550,5 +582,41 @@ mod tests {
             .map(|i| COMMANDS[i].id)
             .collect();
         assert!(ids.contains(&"/search"), "search command should appear when searching 'search web'");
+    }
+
+    #[test]
+    fn filter_gate_matches() {
+        let ids: Vec<_> = filter_commands("gate")
+            .into_iter()
+            .map(|i| COMMANDS[i].id)
+            .collect();
+        assert!(ids.contains(&"/gate"), "/gate should appear when searching 'gate'");
+    }
+
+    #[test]
+    fn filter_rules_matches() {
+        let ids: Vec<_> = filter_commands("rules")
+            .into_iter()
+            .map(|i| COMMANDS[i].id)
+            .collect();
+        assert!(ids.contains(&"/rules"), "/rules should appear when searching 'rules'");
+    }
+
+    #[test]
+    fn filter_score_matches() {
+        let ids: Vec<_> = filter_commands("score")
+            .into_iter()
+            .map(|i| COMMANDS[i].id)
+            .collect();
+        assert!(ids.contains(&"/score"), "/score should appear when searching 'score'");
+    }
+
+    #[test]
+    fn filter_memory_matches() {
+        let ids: Vec<_> = filter_commands("memory")
+            .into_iter()
+            .map(|i| COMMANDS[i].id)
+            .collect();
+        assert!(ids.contains(&"/memory"), "/memory should appear when searching 'memory'");
     }
 }

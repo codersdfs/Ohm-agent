@@ -533,7 +533,7 @@ impl App {
         match cmd.to_lowercase().trim() {
             "/help" | "/?" | "/h" => {
                 self.transcript.entries.push(TranscriptEntry::Notice {
-                    text: "Commands: /help, /clear, /tools, /model, /provider, /cost, /exit, /fetch, /status, /search".into(),
+                    text: "Commands: /help, /clear, /tools, /model, /provider, /cost, /exit, /fetch, /status, /search, /gate, /rules, /score, /memory".into(),
                     is_error: false,
                 });
             }
@@ -750,6 +750,190 @@ impl App {
                     }
                 }
             }
+            "/gate" => {
+                let (path, content) = match self.read_file_or_buffer(cmd, "/gate") {
+                    Ok(v) => v,
+                    Err(e) => {
+                        self.transcript.entries.push(TranscriptEntry::Notice {
+                            text: e,
+                            is_error: true,
+                        });
+                        return;
+                    }
+                };
+                self.transcript.entries.push(TranscriptEntry::Notice {
+                    text: format!("Running gate on {path}…"),
+                    is_error: false,
+                });
+                let request = commands::gate::GateCheckRequest {
+                    content,
+                    context: path.to_string(),
+                    language: None,
+                };
+                let result = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current()
+                        .block_on(commands::gate::check_gate(&self.state, request))
+                });
+                match result {
+                    Ok(g) => {
+                        let status = if g.passed { "PASSED" } else { "FAILED" };
+                        let mut lines = format!("Gate {path}: {}/100 — {status}\n", g.score);
+                        if g.violations.is_empty() {
+                            lines.push_str("No violations");
+                        } else {
+                            lines.push_str(&format!("{} violation(s):\n", g.violations.len()));
+                            for v in &g.violations {
+                                let line = v.line.map(|l| format!(" L{l}")).unwrap_or_default();
+                                lines.push_str(&format!("  [{}]{}: {}\n", v.category, line, v.message));
+                            }
+                        }
+                        self.transcript.entries.push(TranscriptEntry::Notice {
+                            text: lines,
+                            is_error: false,
+                        });
+                    }
+                    Err(e) => {
+                        self.transcript.entries.push(TranscriptEntry::Notice {
+                            text: format!("Gate failed: {e}"),
+                            is_error: true,
+                        });
+                    }
+                }
+            }
+            "/rules" | "/pattern" => {
+                self.transcript.entries.push(TranscriptEntry::Notice {
+                    text: "Loading rules…".into(),
+                    is_error: false,
+                });
+                let result = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current()
+                        .block_on(commands::gate::get_rules(&self.state))
+                });
+                match result {
+                    Ok(rules) => {
+                        if rules.is_empty() {
+                            self.transcript.entries.push(TranscriptEntry::Notice {
+                                text: "No promoted rules yet".into(),
+                                is_error: false,
+                            });
+                        } else {
+                            let header = format!("Promoted rules ({} total):\n", rules.len());
+                            let lines = rules.iter().map(|r| format!("  {r}")).collect::<Vec<_>>().join("\n");
+                            self.transcript.entries.push(TranscriptEntry::Notice {
+                                text: format!("{header}{lines}"),
+                                is_error: false,
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        self.transcript.entries.push(TranscriptEntry::Notice {
+                            text: format!("Failed to load rules: {e}"),
+                            is_error: true,
+                        });
+                    }
+                }
+            }
+            "/score" => {
+                let (path, content) = match self.read_file_or_buffer(cmd, "/score") {
+                    Ok(v) => v,
+                    Err(e) => {
+                        self.transcript.entries.push(TranscriptEntry::Notice {
+                            text: e,
+                            is_error: true,
+                        });
+                        return;
+                    }
+                };
+                let request = commands::gate::GateCheckRequest {
+                    content,
+                    context: path.to_string(),
+                    language: None,
+                };
+                let result = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current()
+                        .block_on(commands::gate::check_gate(&self.state, request))
+                });
+                match result {
+                    Ok(g) => {
+                        let status = if g.passed { "PASSED" } else { "FAILED" };
+                        self.transcript.entries.push(TranscriptEntry::Notice {
+                            text: format!("Score: {}/100 — {} ({} violations)", g.score, status, g.violations.len()),
+                            is_error: !g.passed,
+                        });
+                    }
+                    Err(e) => {
+                        self.transcript.entries.push(TranscriptEntry::Notice {
+                            text: format!("Score failed: {e}"),
+                            is_error: true,
+                        });
+                    }
+                }
+            }
+            "/memory" | "/mem" => {
+                let query = cmd.trim_start_matches("/memory").trim_start_matches("/mem").trim();
+                if query.is_empty() {
+                    // Show memory stats
+                    let count_session = tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current()
+                            .block_on(commands::memory::memory_count(&self.state, Some("session".into())))
+                    });
+                    let count_project = tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current()
+                            .block_on(commands::memory::memory_count(&self.state, Some("project".into())))
+                    });
+                    let count_user = tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current()
+                            .block_on(commands::memory::memory_count(&self.state, Some("user".into())))
+                    });
+                    let s = count_session.unwrap_or(0);
+                    let p = count_project.unwrap_or(0);
+                    let u = count_user.unwrap_or(0);
+                    self.transcript.entries.push(TranscriptEntry::Notice {
+                        text: format!("Memory stats:\n  session: {s} entries\n  project: {p} entries\n  user:    {u} entries"),
+                        is_error: false,
+                    });
+                } else {
+                    self.transcript.entries.push(TranscriptEntry::Notice {
+                        text: format!("Searching memory for \"{query}\"…"),
+                        is_error: false,
+                    });
+                    let request = commands::memory::MemorySearchRequest {
+                        query: query.to_string(),
+                        layer: None,
+                        limit: Some(10),
+                    };
+                    let result = tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current()
+                            .block_on(commands::memory::memory_search(&self.state, request))
+                    });
+                    match result {
+                        Ok(response) => {
+                            if response.entries.is_empty() {
+                                self.transcript.entries.push(TranscriptEntry::Notice {
+                                    text: format!("No results found for \"{query}\""),
+                                    is_error: false,
+                                });
+                            } else {
+                                let mut lines = format!("Memory results ({}):\n", response.entries.len());
+                                for (i, entry) in response.entries.iter().enumerate() {
+                                    let rel = response.relevance.get(i).map(|r| format!(" [{:.2}]", r)).unwrap_or_default();
+                                    lines.push_str(&format!("  [{}] {} — {}{}\n", entry.layer.as_str(), entry.key, entry.value.chars().take(80).collect::<String>(), rel));
+                                }
+                                self.transcript.entries.push(TranscriptEntry::Notice {
+                                    text: lines,
+                                    is_error: false,
+                                });
+                            }
+                        }
+                        Err(e) => {
+                            self.transcript.entries.push(TranscriptEntry::Notice {
+                                text: format!("Memory search failed: {e}"),
+                                is_error: true,
+                            });
+                        }
+                    }
+                }
+            }
             other => {
                 self.transcript.entries.push(TranscriptEntry::Notice {
                     text: format!("Unknown command: {}. Type /help for commands.", other),
@@ -757,6 +941,22 @@ impl App {
                 });
             }
         }
+    }
+
+    /// Read a file by path, or fall back to the editor buffer if path is empty.
+    /// Returns Ok((path_display, content)) or Err with an error message.
+    fn read_file_or_buffer(&self, cmd: &str, prefix: &str) -> Result<(String, String), String> {
+        let path = cmd.trim_start_matches(prefix).trim();
+        let content = if path.is_empty() {
+            self.editor.buffer.clone()
+        } else {
+            std::fs::read_to_string(path)
+                .map_err(|e| format!("Failed to read {path}: {e}"))?
+        };
+        if content.is_empty() {
+            return Err("File is empty".into());
+        }
+        Ok((path.to_string(), content))
     }
 
     /// Start streaming a response from the LLM.
