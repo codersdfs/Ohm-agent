@@ -7,3 +7,4 @@ pub mod plan_cmd;
 pub mod review_cmd;
 pub mod tables;
 pub mod tools;
+pub mod web;
