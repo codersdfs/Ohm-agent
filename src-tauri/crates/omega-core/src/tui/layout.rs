@@ -45,6 +45,7 @@ pub struct LayoutChrome<'a> {
 
     // ── Streaming / misc flags (Copy from App) ──
     pub is_streaming: bool,
+    pub is_command_mode: bool,
     pub session_messages: u64,
     pub anim_tick: u64,
 }
@@ -72,7 +73,7 @@ pub fn render_full_layout(frame: &mut Frame, area: Rect, chrome: &mut LayoutChro
     let top_bar_h = 1u16;
     let metrics_h = 3u16;
     let footer_h = 1u16;
-    let editor_h = 3u16;
+    let editor_h: u16 = if chrome.is_command_mode { 5 } else { 3 };
 
     let vert = Layout::default()
         .direction(Direction::Vertical)
@@ -94,11 +95,13 @@ pub fn render_full_layout(frame: &mut Frame, area: Rect, chrome: &mut LayoutChro
     // ── Main process panel ───────────────────────────────────────────────
     render_process_panel(frame, vert[2], chrome.transcript, chrome.show_help);
 
-    // ── Command input ────────────────────────────────────────────────────
-    render_command_input(
+    // ── Command panel ────────────────────────────────────────────────────
+    render_command_panel(
         frame,
         vert[3],
         chrome.editor,
+        chrome.command_palette,
+        chrome.is_command_mode,
         chrome.is_streaming,
         chrome.status,
     );
@@ -115,9 +118,6 @@ pub fn render_full_layout(frame: &mut Frame, area: Rect, chrome: &mut LayoutChro
     // ── Overlays ─────────────────────────────────────────────────────────
     if chrome.show_help {
         help::render(area, frame.buffer_mut());
-    }
-    if chrome.show_command_palette {
-        command_palette::render(area, frame.buffer_mut(), chrome.command_palette);
     }
 }
 
