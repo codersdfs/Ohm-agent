@@ -112,6 +112,8 @@ pub enum PaletteAction {
     Close,
     /// Canonical command id, e.g. `"/clear"`.
     Select(&'static str),
+    /// Enter pressed but no command matched — send buffer as chat message.
+    SendText,
 }
 
 #[derive(Debug, Clone)]
@@ -175,6 +177,11 @@ impl CommandPaletteState {
             .and_then(|&i| COMMANDS.get(i))
             .map(|e| e.id)
     }
+
+    /// True when the query is empty or whitespace-only (no text to send).
+    pub fn is_empty(&self) -> bool {
+        self.query.trim().is_empty()
+    }
 }
 
 impl Default for CommandPaletteState {
@@ -198,7 +205,7 @@ pub fn handle_key(state: &mut CommandPaletteState, key: KeyEvent) -> PaletteActi
         KeyCode::Esc => PaletteAction::Close,
         KeyCode::Enter => match state.selected_id() {
             Some(id) => PaletteAction::Select(id),
-            None => PaletteAction::None,
+            None => PaletteAction::SendText,
         },
         KeyCode::Up => {
             state.move_sel(-1);
@@ -483,12 +490,12 @@ mod tests {
     }
 
     #[test]
-    fn enter_noop_when_empty_filter() {
+    fn enter_sends_text_when_empty_filter() {
         let mut s = CommandPaletteState::new();
         s.open("zzz");
         assert!(s.filtered.is_empty());
         let action = handle_key(&mut s, press(KeyCode::Enter));
-        assert_eq!(action, PaletteAction::None);
+        assert_eq!(action, PaletteAction::SendText);
     }
 
     #[test]
