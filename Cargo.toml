@@ -7,6 +7,7 @@ members = [
     "src-tauri/crates/providers",
     "src-tauri/crates/memory",
     "src-tauri/crates/mcp",
+    "src-tauri/crates/mcp-server",
     "src-tauri/crates/tool-harness",
     "src-tauri/crates/omega-core",
     "src-tauri/crates/omega-cli",
