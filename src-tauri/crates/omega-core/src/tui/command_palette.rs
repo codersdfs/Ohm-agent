@@ -241,40 +241,17 @@ pub fn handle_key(state: &mut CommandPaletteState, key: KeyEvent) -> PaletteActi
     }
 }
 
-/// Render centered command palette overlay.
+/// Render command palette docked in the given area (like the editor panel).
 pub fn render(area: Rect, buf: &mut Buffer, state: &CommandPaletteState) {
-    if !state.visible || area.width < 20 || area.height < 6 {
+    if !state.visible || area.width < 20 || area.height < 3 {
         return;
     }
 
-    // Dim full area (same approach as help overlay).
-    for cy in area.y..area.y + area.height {
-        for cx in area.x..area.x + area.width {
-            if let Some(cell) = theme::buf_cell_mut(buf, cx, cy) {
-                cell.set_style(Style::default().fg(theme::DIM));
-            }
-        }
-    }
+    // No background dimming — this is a docked panel, not an overlay.
 
-    // Prefer 48 cols, clamp to available width with a small margin; min 20.
-    let popup_width = area.width.saturating_sub(4).min(48).max(20).min(area.width);
-    // chrome: borders + title + search line + optional description + empty/rows
-    let row_count = if state.filtered.is_empty() {
-        1usize
-    } else {
-        state.filtered.len().min(8)
-    };
-    // 2 border + 1 search + rows + 1 description footer
-    let popup_height = (row_count as u16)
-        .saturating_add(5)
-        .min(area.height.saturating_sub(2))
-        .max(6);
-    let x = area.x + (area.width.saturating_sub(popup_width)) / 2;
-    let y = area.y + (area.height.saturating_sub(popup_height)) / 2;
-    let popup_area = Rect::new(x, y, popup_width, popup_height);
-
+    // Use the provided area directly (no centering; no width clamp).
     let block = Block::default()
-        .borders(Borders::ALL)
+        .borders(Borders::TOP)
         .border_type(BorderType::Plain)
         .border_style(Style::default().fg(theme::PRIMARY))
         .title(Line::from(Span::styled(
@@ -282,8 +259,8 @@ pub fn render(area: Rect, buf: &mut Buffer, state: &CommandPaletteState) {
             Style::default().fg(theme::DIM),
         )))
         .style(Style::default().bg(theme::SURFACE_HIGH));
-    let inner = block.inner(popup_area);
-    block.render(popup_area, buf);
+    let inner = block.inner(area);
+    block.render(area, buf);
 
     if inner.height < 2 || inner.width < 4 {
         return;
@@ -299,9 +276,12 @@ pub fn render(area: Rect, buf: &mut Buffer, state: &CommandPaletteState) {
         .style(Style::default().bg(theme::SURFACE_HIGH))
         .render(Rect::new(inner.x, inner.y, inner.width, 1), buf);
 
-    let list_y = inner.y + 1;
-    let list_h = inner.height.saturating_sub(2); // leave 1 for description
-    let list_area = Rect::new(inner.x, list_y, inner.width, list_h);
+    // Compact: list fills remaining rows; selected id + description shown when possible.
+    let body_y = inner.y + 1;
+    let body_h = inner.height.saturating_sub(1);
+    if body_h < 1 {
+        return;
+    }
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     if state.filtered.is_empty() {
@@ -310,8 +290,7 @@ pub fn render(area: Rect, buf: &mut Buffer, state: &CommandPaletteState) {
             theme::style_dim(),
         )));
     } else {
-        // Scroll window so selected stays visible.
-        let max_rows = list_h as usize;
+        let max_rows = body_h as usize;
         let sel = state.selected;
         let start = if sel >= max_rows {
             sel + 1 - max_rows
@@ -335,7 +314,7 @@ pub fn render(area: Rect, buf: &mut Buffer, state: &CommandPaletteState) {
                 Style::default().fg(theme::FG)
             };
             let marker = if is_sel { "▸ " } else { "  " };
-            let text = format!("{}{}  {}", marker, entry.id, entry.label);
+            let text = format!("{}{}  {} — {}", marker, entry.id, entry.label, entry.description);
             lines.push(Line::from(Span::styled(
                 truncate_to_width(&text, inner.width as usize),
                 style,
@@ -347,21 +326,7 @@ pub fn render(area: Rect, buf: &mut Buffer, state: &CommandPaletteState) {
         .alignment(Alignment::Left)
         .wrap(Wrap { trim: false })
         .style(Style::default().bg(theme::SURFACE_HIGH))
-        .render(list_area, buf);
-
-    // Description footer for selected row.
-    let desc = state
-        .selected_id()
-        .and_then(|id| COMMANDS.iter().find(|e| e.id == id))
-        .map(|e| e.description)
-        .unwrap_or("");
-    let desc_y = inner.y + inner.height.saturating_sub(1);
-    Paragraph::new(Line::from(Span::styled(
-        truncate_to_width(&format!(" {desc}"), inner.width as usize),
-        theme::style_dim(),
-    )))
-    .style(Style::default().bg(theme::SURFACE_HIGH))
-    .render(Rect::new(inner.x, desc_y, inner.width, 1), buf);
+        .render(Rect::new(inner.x, body_y, inner.width, body_h), buf);
 }
 
 fn truncate_to_width(s: &str, width: usize) -> String {

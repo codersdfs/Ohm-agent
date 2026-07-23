@@ -918,14 +918,22 @@ impl App {
         // ── Main process panel (glass-bordered) ──────────────────────────
         render_process_panel(frame, process_area, &mut self.transcript, self.show_help);
 
-        // ── Command input (glass-bordered) ───────────────────────────────
-        render_command_input(
-            frame,
-            editor_area,
-            &self.editor,
-            self.is_streaming,
-            &self.status.spinner,
-        );
+        // ── Command input or palette (docked in editor area) ──────────────
+        if self.show_command_palette {
+            omega_core::tui::command_palette::render(
+                editor_area,
+                frame.buffer_mut(),
+                &self.command_palette,
+            );
+        } else {
+            render_command_input(
+                frame,
+                editor_area,
+                &self.editor,
+                self.is_streaming,
+                &self.status.spinner,
+            );
+        }
 
         // ── Footer bar ──────────────────────────────────────────────────
         self.status.hint_text = Some("[CR] COMMIT | [^C] ABORT | ^K cmds | ? help".into());
@@ -941,13 +949,6 @@ impl App {
         // ── Overlays ────────────────────────────────────────────────────
         if self.show_help {
             omega_core::tui::help::render(area, frame.buffer_mut());
-        }
-        if self.show_command_palette {
-            omega_core::tui::command_palette::render(
-                area,
-                frame.buffer_mut(),
-                &self.command_palette,
-            );
         }
     } // end render_widgets
 } // end impl App
