@@ -455,3 +455,93 @@ fn render_command_input(
     }
     // Empty idle: just the two horizontal lines.
 }
+
+// ── Command panel (replaces the simple editor input) ──────────────────────
+
+/// Render the bottom command panel — a glass-chrome block that replaces the old
+/// simple editor input. In chat mode it shows the text buffer. In command mode
+/// it also shows the filtered slash-command list inside the block.
+fn render_command_panel(
+    frame: &mut Frame,
+    area: Rect,
+    editor: &EditorState,
+    palette: &command_palette::CommandPaletteState,
+    is_command_mode: bool,
+    is_streaming: bool,
+    status: &StatusState,
+) {
+    let spinner = &status.spinner;
+    if area.height < 3 || area.width < 20 {
+        return;
+    }
+
+    let title = if is_command_mode {
+        " commands "
+    } else if is_streaming && editor.buffer.is_empty() {
+        " cooking… "
+    } else {
+        " type a message… "
+    };
+
+    let title_color = if is_command_mode {
+        theme::PRIMARY
+    } else {
+        theme::DIM
+    };
+
+    let inner = render_glass_block(
+        frame,
+        area,
+        theme::SURFACE_LOW,
+        theme::OUTLINE,
+        title,
+        title_color,
+    );
+
+    if inner.height < 1 || inner.width < 4 {
+        return;
+    }
+
+    // ── Row 0: input line ────────────────────────────────────────────
+    let input_y = inner.y;
+    let input_text = if is_streaming && editor.buffer.is_empty() {
+        format!(" {} {}", spinner.current_glyph(), spinner.current_phrase())
+    } else if editor.buffer.is_empty() {
+        " ▸ _".to_string()
+    } else {
+        let display = editor.buffer.lines().last().unwrap_or("");
+        let cursor_suffix = if is_command_mode { " _" } else { "" };
+        let prefix = " ▸ ";
+        let available = inner.width.saturating_sub(2) as usize;
+        let full = format!("{}{}{}", prefix, display, cursor_suffix);
+        if full.chars().count() > available {
+            let skip = full.chars().count().saturating_sub(available);
+            full.chars().skip(skip).collect::<String>()
+        } else {
+            full
+        }
+    };
+
+    let input_style = if is_streaming && editor.buffer.is_empty() {
+        spinner.glyph_style()
+    } else {
+        Style::default().fg(theme::FG)
+    };
+
+    Paragraph::new(Line::from(Span::styled(input_text, input_style)))
+        .style(Style::default().bg(theme::SURFACE_LOW))
+        .render(
+            Rect::new(inner.x + 1, input_y, inner.width.saturating_sub(2), 1),
+            frame.buffer_mut(),
+        );
+
+    // ── Row 1+: command list (only in command mode) ───────────────────
+    if is_command_mode && palette.visible {
+        let list_y = input_y + 1;
+        let list_h = inner.height.saturating_sub(1).min(3);
+        if list_h > 0 {
+            let list_area = Rect::new(inner.x + 1, list_y, inner.width.saturating_sub(2), list_h);
+            command_palette::render_panel(list_area, frame.buffer_mut(), palette, list_h);
+        }
+    }
+}
