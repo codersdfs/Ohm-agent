@@ -10,18 +10,23 @@ use crate::error::McpError;
 use crate::transport::{McpTransport, ReceiveResult};
 use crate::types::*;
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 use tokio::sync::RwLock as TokioRwLock;
 
-/// Handler for a specific MCP method
-pub type MethodHandler = Arc<
+/// Synchronous handler for a specific MCP method
+pub type SyncHandler = Arc<
     dyn Fn(serde_json::Value) -> Result<serde_json::Value, McpError> + Send + Sync,
 >;
 
-/// Async handler for a specific MCP method
-pub type AsyncMethodHandler = Arc<
-    dyn Fn(serde_json::Value) -> Result<serde_json::Value, McpError> + Send + Sync,
->;
+/// Asynchronous handler for a specific MCP method (e.g., tool calls)
+pub type AsyncHandlerPinned =
+    Arc<
+        dyn Fn(serde_json::Value) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, McpError>> + Send>>
+            + Send
+            + Sync,
+    >;
 
 /// Session state for a connected MCP client
 #[derive(Debug, Clone)]
@@ -77,7 +82,10 @@ impl Default for McpServerConfig {
 pub struct McpServer {
     config: McpServerConfig,
     session: TokioRwLock<SessionState>,
-    handlers: RwLock<HashMap<String, AsyncMethodHandler>>,
+    sync_handlers: RwLock<HashMap<String, SyncHandler>>,
+    async_handlers: RwLock<HashMap<String, AsyncHandlerPinned>>,
+    tool_pipeline: Option<Arc<tool_harness::ExecutionPipeline>>,
+    tool_definitions: RwLock<Vec<McpToolDefinition>>,
 }
 
 impl McpServer {
@@ -86,7 +94,10 @@ impl McpServer {
         let server = Self {
             config: McpServerConfig::default(),
             session: TokioRwLock::new(SessionState::default()),
-            handlers: RwLock::new(HashMap::new()),
+            sync_handlers: RwLock::new(HashMap::new()),
+            async_handlers: RwLock::new(HashMap::new()),
+            tool_pipeline: None,
+            tool_definitions: RwLock::new(Vec::new()),
         };
         server.register_builtin_handlers();
         server
@@ -97,15 +108,37 @@ impl McpServer {
         let server = Self {
             config,
             session: TokioRwLock::new(SessionState::default()),
-            handlers: RwLock::new(HashMap::new()),
+            sync_handlers: RwLock::new(HashMap::new()),
+            async_handlers: RwLock::new(HashMap::new()),
+            tool_pipeline: None,
+            tool_definitions: RwLock::new(Vec::new()),
         };
         server.register_builtin_handlers();
         server
     }
 
-    /// Register a method handler
-    pub fn register_handler(&self, method: &str, handler: AsyncMethodHandler) {
-        let mut handlers = self.handlers.write().unwrap();
+    /// Set the tool registry to expose via MCP
+    pub fn with_tool_registry(mut self, registry: tool_harness::ToolRegistry) -> Self {
+        // Extract tool definitions upfront
+        let defs: Vec<McpToolDefinition> = registry.tool_definitions().into_iter().map(|td| {
+            McpToolDefinition {
+                name: td.function.name,
+                description: td.function.description,
+                input_schema: td.function.parameters,
+            }
+        }).collect();
+        *self.tool_definitions.write().unwrap() = defs;
+
+        let pipeline = tool_harness::ExecutionPipeline::new()
+            .with_registry(registry);
+        self.tool_pipeline = Some(Arc::new(pipeline));
+        self.register_tool_handlers();
+        self
+    }
+
+    /// Register a sync method handler
+    pub fn register_handler(&self, method: &str, handler: SyncHandler) {
+        let mut handlers = self.sync_handlers.write().unwrap();
         handlers.insert(method.to_string(), handler);
     }
 
@@ -117,15 +150,24 @@ impl McpServer {
         self.register_handler(method, Arc::new(handler));
     }
 
-    /// Register built-in handlers (initialize, ping)
+    /// Register an async method handler
+    pub fn register_async_handler<F, Fut>(&self, method: &str, handler: F)
+    where
+        F: Fn(serde_json::Value) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<serde_json::Value, McpError>> + Send + 'static,
+    {
+        let mut handlers = self.async_handlers.write().unwrap();
+        handlers.insert(method.to_string(), Arc::new(move |params| {
+            Box::pin(handler(params))
+        }));
+    }
+
+    /// Register built-in handlers (initialize, ping, resources)
     fn register_builtin_handlers(&self) {
         let config = self.config.clone();
-        let _session_ptr = Arc::new(RwLock::new(SessionState::default()));
-
-        // We need a way to share session state with handlers
-        // For now, use the server's session directly via a captured handle
 
         // initialize handler
+        let caps_for_init = config.capabilities.clone();
         self.register_sync_handler("initialize", move |params| {
             let init_params: InitializeParams =
                 serde_json::from_value(params.clone()).map_err(|e| {
@@ -142,7 +184,7 @@ impl McpServer {
 
             Ok(serde_json::to_value(InitializeResult {
                 protocol_version: MCP_PROTOCOL_VERSION.into(),
-                capabilities: config.capabilities.clone(),
+                capabilities: caps_for_init.clone(),
                 server_info: ServerInfo {
                     name: config.server_name.clone(),
                     version: config.server_version.clone(),
@@ -156,7 +198,39 @@ impl McpServer {
             Ok(serde_json::json!({}))
         });
 
-        // tools/list handler (stub — returns empty list)
+        // resources/list handler (stub — returns empty list)
+        let res_caps = config.capabilities.clone();
+        self.register_sync_handler("resources/list", move |_| {
+            let resources = res_caps.resources.as_ref()
+                .and_then(|r| r.get("list"))
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let defs: Vec<ResourceDefinition> = resources.iter().filter_map(|r| {
+                let uri = r.get("uri")?.as_str()?.to_string();
+                let name = r.get("name")?.as_str()?.to_string();
+                Some(ResourceDefinition {
+                    uri,
+                    name,
+                    description: r.get("description").and_then(|v| v.as_str()).map(String::from),
+                    mime_type: r.get("mimeType").and_then(|v| v.as_str()).map(String::from),
+                })
+            }).collect();
+            Ok(serde_json::to_value(ListResourcesResult { resources: defs })
+                .map_err(|e| McpError::internal_error(format!("Serialize error: {e}")))?)
+        });
+
+        // resources/read handler (stub)
+        self.register_sync_handler("resources/read", |_| {
+            Err(McpError::method_not_found("resources/read"))
+        });
+
+        // Register tool handlers as stubs initially (overridden if tool registry is set)
+        self.register_stub_tool_handlers();
+    }
+
+    /// Register stub tool handlers (return empty list / not found)
+    fn register_stub_tool_handlers(&self) {
         self.register_sync_handler("tools/list", |_| {
             Ok(serde_json::to_value(ListToolsResult {
                 tools: vec![],
@@ -164,27 +238,69 @@ impl McpServer {
             .map_err(|e| McpError::internal_error(format!("Serialize error: {e}")))?)
         });
 
-        // tools/call handler (stub — returns not found)
         self.register_sync_handler("tools/call", |params| {
             let call_params: CallToolParams =
                 serde_json::from_value(params).map_err(|e| {
                     McpError::invalid_params(format!("Invalid call params: {e}"))
                 })?;
-
             Err(McpError::tool_not_found(call_params.name))
         });
+    }
 
-        // resources/list handler (stub — returns empty list)
-        self.register_sync_handler("resources/list", |_| {
-            Ok(serde_json::to_value(ListResourcesResult {
-                resources: vec![],
+    /// Register real tool handlers backed by the tool-harness pipeline
+    fn register_tool_handlers(&self) {
+        let pipeline = match &self.tool_pipeline {
+            Some(p) => p.clone(),
+            None => return,
+        };
+
+        // tools/list — return stored tool definitions
+        let definitions = self.tool_definitions.read().unwrap().clone();
+        self.register_sync_handler("tools/list", move |_| {
+            Ok(serde_json::to_value(ListToolsResult {
+                tools: definitions.clone(),
             })
             .map_err(|e| McpError::internal_error(format!("Serialize error: {e}")))?)
         });
 
-        // resources/read handler (stub)
-        self.register_sync_handler("resources/read", |_| {
-            Err(McpError::method_not_found("resources/read"))
+        // tools/call — async handler via pipeline
+        let pipeline_for_call = pipeline.clone();
+        self.register_async_handler("tools/call", move |params| {
+            let pipeline = pipeline_for_call.clone();
+            async move {
+                let call_params: CallToolParams =
+                    serde_json::from_value(params).map_err(|e| {
+                        McpError::invalid_params(format!("Invalid call params: {e}"))
+                    })?;
+
+                let tool_name = call_params.name;
+                let tool_args = call_params.arguments.unwrap_or(serde_json::json!({}));
+
+                let input = tool_harness::ToolInput {
+                    tool: tool_name.clone(),
+                    args: tool_args,
+                };
+                let ctx = tool_harness::ToolUseContext::new("mcp-server");
+
+                match pipeline.execute(&tool_name, input, &ctx).await {
+                    Ok((tool_result, _budget)) => {
+                        if tool_result.success {
+                            Ok(serde_json::to_value(CallToolResult::success(tool_result.output))
+                                .map_err(|e| McpError::internal_error(format!("Serialize: {e}")))?)
+                        } else {
+                            let msg = tool_result.error.unwrap_or_else(|| "Unknown error".into());
+                            Err(McpError::tool_execution_error(&tool_name, msg))
+                        }
+                    }
+                    Err(e) => {
+                        if matches!(e.kind, tool_harness::ToolErrorKind::NotFound) {
+                            Err(McpError::tool_not_found(&tool_name))
+                        } else {
+                            Err(McpError::tool_execution_error(&tool_name, e.message))
+                        }
+                    }
+                }
+            }
         });
     }
 
@@ -235,19 +351,28 @@ impl McpServer {
             return String::new();
         }
 
-        // Look up the handler
+        // Look up the handler — try async handlers first, then sync
         let response = {
-            let handlers = self.handlers.read().unwrap();
-            match handlers.get(&method) {
-                Some(handler) => {
-                    match handler(params) {
-                        Ok(result) => JsonRpcResponse::success(request_id, result),
-                        Err(err) => err.to_json_rpc_response(request_id),
-                    }
+            let async_handlers = self.async_handlers.read().unwrap();
+            if let Some(handler) = async_handlers.get(&method) {
+                match handler(params).await {
+                    Ok(result) => JsonRpcResponse::success(request_id, result),
+                    Err(err) => err.to_json_rpc_response(request_id),
                 }
-                None => {
-                    let err = McpError::method_not_found(&method);
-                    err.to_json_rpc_response(request_id)
+            } else {
+                drop(async_handlers);
+                let sync_handlers = self.sync_handlers.read().unwrap();
+                match sync_handlers.get(&method) {
+                    Some(handler) => {
+                        match handler(params) {
+                            Ok(result) => JsonRpcResponse::success(request_id, result),
+                            Err(err) => err.to_json_rpc_response(request_id),
+                        }
+                    }
+                    None => {
+                        let err = McpError::method_not_found(&method);
+                        err.to_json_rpc_response(request_id)
+                    }
                 }
             }
         };
@@ -388,14 +513,62 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_tools_list_stub() {
-        let server = McpServer::new();
+    async fn test_tools_list_with_registry() {
+        use tool_harness::tools::default_tool_registry;
+        use tool_harness::{ExecutionPipeline, ToolRegistry};
+
+        let registry = default_tool_registry();
+        let server = McpServer::new().with_tool_registry(registry);
+
         let response = server
             .handle_request(r#"{"jsonrpc":"2.0","id":"1","method":"tools/list"}"#)
             .await;
         let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
-        assert!(parsed["result"]["tools"].is_array());
-        assert!(parsed["result"]["tools"].as_array().unwrap().is_empty());
+        let tools = parsed["result"]["tools"].as_array().unwrap();
+        assert!(!tools.is_empty(), "Should return at least one tool");
+        assert!(
+            tools.iter().any(|t| t["name"] == "read"),
+            "Should include the 'read' tool"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_tools_call_with_registry() {
+        use tool_harness::tools::default_tool_registry;
+
+        let registry = default_tool_registry();
+        let server = McpServer::new().with_tool_registry(registry);
+
+        // Try calling the 'ping' tool (no side effects)
+        let response = server
+            .handle_request(
+                r#"{"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"glob","arguments":{"pattern":"*.toml"}}}"#,
+            )
+            .await;
+        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+        // Should succeed or fail gracefully (depends on CWD)
+        assert!(
+            parsed["error"].is_null() || parsed["error"]["code"] == -32002,
+            "Should succeed or report execution error, got: {:?}",
+            parsed
+        );
+    }
+
+    #[tokio::test]
+    async fn test_tools_call_unknown_tool() {
+        use tool_harness::tools::default_tool_registry;
+
+        let registry = default_tool_registry();
+        let server = McpServer::new().with_tool_registry(registry);
+
+        let response = server
+            .handle_request(
+                r#"{"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"nonexistent_tool","arguments":{}}}"#,
+            )
+            .await;
+        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(parsed["error"]["code"], MCP_TOOL_NOT_FOUND,
+            "Unknown tool should return tool_not_found");
     }
 
     #[tokio::test]
