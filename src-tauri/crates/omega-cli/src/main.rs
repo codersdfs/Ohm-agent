@@ -889,8 +889,14 @@ impl App {
         let top_bar_h = 1u16;
         let metrics_h = 3u16; // 3 lines: token gauge + model/context row + tool chips
         let footer_h = 1u16;
-        // Input is a fixed 3-row strip: top line, content, bottom line.
-        let editor_h = 3u16;
+        // Input is a fixed 3-row strip when closed; expanded when palette is open.
+        let editor_h = if self.show_command_palette {
+            // 1 (top border) + 1 (search) + rows + 1 (bottom padding)
+            let rows = self.command_palette.filtered.len().min(6).max(1) as u16;
+            rows.saturating_add(3).min(12)
+        } else {
+            3u16
+        };
 
         let vert = Layout::default()
             .direction(Direction::Vertical)
@@ -898,7 +904,7 @@ impl App {
                 Constraint::Length(top_bar_h), // system bar
                 Constraint::Length(metrics_h), // metrics panel
                 Constraint::Min(4),            // process (transcript)
-                Constraint::Length(editor_h),  // command input
+                Constraint::Length(editor_h),  // command input / palette
                 Constraint::Length(footer_h),  // footer
             ])
             .split(area);
@@ -918,14 +924,24 @@ impl App {
         // ── Main process panel (glass-bordered) ──────────────────────────
         render_process_panel(frame, process_area, &mut self.transcript, self.show_help);
 
-        // ── Command input (glass-bordered) ───────────────────────────────
-        render_command_input(
-            frame,
-            editor_area,
-            &self.editor,
-            self.is_streaming,
-            &self.status.spinner,
-        );
+        // ── Command input or palette (docked in editor area) ──────────────
+        if self.show_command_palette {
+            // Clear the area first to prevent bleed-through from the editor.
+            fill_area(frame, editor_area, theme::BG);
+            omega_core::tui::command_palette::render(
+                editor_area,
+                frame.buffer_mut(),
+                &self.command_palette,
+            );
+        } else {
+            render_command_input(
+                frame,
+                editor_area,
+                &self.editor,
+                self.is_streaming,
+                &self.status.spinner,
+            );
+        }
 
         // ── Footer bar ──────────────────────────────────────────────────
         self.status.hint_text = Some("[CR] COMMIT | [^C] ABORT | ^K cmds | ? help".into());
@@ -941,13 +957,6 @@ impl App {
         // ── Overlays ────────────────────────────────────────────────────
         if self.show_help {
             omega_core::tui::help::render(area, frame.buffer_mut());
-        }
-        if self.show_command_palette {
-            omega_core::tui::command_palette::render(
-                area,
-                frame.buffer_mut(),
-                &self.command_palette,
-            );
         }
     } // end render_widgets
 } // end impl App
@@ -1461,36 +1470,62 @@ fn load_provider_config(
 #[command(
     name = "omega",
     version,
-    about = "Omega Agent TUI — AI coding assistant"
+    about = "Omega Agent TUI — AI coding assistant",
+    subcommand_negates_reqs = true
 )]
 struct Cli {
-    #[arg(
-        short = 'p',
-        long,
-        help = "Provider (openai, anthropic, google, local, ollama, groq, etc.)"
-    )]
-    provider: Option<String>,
+    #[command(subcommand)]
+    action: Option<CliAction>,
+}
 
-    #[arg(
-        short = 'm',
-        long,
-        help = "Model name (e.g. gpt-4o-mini, llama3.1:8b, claude-sonnet-4)"
-    )]
-    model: Option<String>,
+/// Omega Agent actions
+#[derive(clap::Subcommand, Debug, Clone)]
+enum CliAction {
+    /// Start the chat TUI (default)
+    Chat {
+        #[arg(
+            short = 'p',
+            long,
+            help = "Provider (openai, anthropic, google, local, ollama, groq, etc.)"
+        )]
+        provider: Option<String>,
 
-    #[arg(short = 'b', long, help = "Base URL for the provider API")]
-    base_url: Option<String>,
+        #[arg(
+            short = 'm',
+            long,
+            help = "Model name (e.g. gpt-4o-mini, llama3.1:8b, claude-sonnet-4)"
+        )]
+        model: Option<String>,
 
-    /// Resume a specific conversation session by id
-    #[arg(long = "session", value_name = "ID", help = "Resume session <id>")]
-    session: Option<String>,
+        #[arg(short = 'b', long, help = "Base URL for the provider API")]
+        base_url: Option<String>,
 
-    /// Force a brand-new conversation session (ignore last-session marker)
-    #[arg(
-        long = "new-session",
-        help = "Start a new session instead of resuming the last one"
-    )]
-    new_session: bool,
+        /// Resume a specific conversation session by id
+        #[arg(long = "session", value_name = "ID", help = "Resume session <id>")]
+        session: Option<String>,
+
+        /// Force a brand-new conversation session (ignore last-session marker)
+        #[arg(
+            long = "new-session",
+            help = "Start a new session instead of resuming the last one"
+        )]
+        new_session: bool,
+    },
+
+    /// Start the MCP server to expose agent tools via Model Context Protocol
+    ServeMcp {
+        #[arg(long, default_value = "3100", help = "Port to listen on")]
+        port: u16,
+
+        #[arg(long, default_value = "127.0.0.1", help = "Host address to bind")]
+        host: String,
+
+        #[arg(long, help = "Authentication token for MCP requests")]
+        auth_token: Option<String>,
+
+        #[arg(long, help = "Directory to load custom MCP skills from")]
+        skills_dir: Option<String>,
+    },
 }
 
 // entry point
@@ -1502,12 +1537,77 @@ fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(&default_filter))
         .init();
     let cli = Cli::parse();
-    let config = load_provider_config(cli.provider, cli.model, cli.base_url);
+
+    match cli.action.unwrap_or(CliAction::Chat {
+        provider: None,
+        model: None,
+        base_url: None,
+        session: None,
+        new_session: false,
+    }) {
+        CliAction::Chat {
+            provider,
+            model,
+            base_url,
+            session,
+            new_session,
+        } => run_chat(provider, model, base_url, session, new_session),
+        CliAction::ServeMcp {
+            port,
+            host,
+            auth_token: _,
+            skills_dir: _,
+        } => run_mcp_server(port, host),
+    }
+}
+
+fn run_mcp_server(port: u16, host: String) -> Result<()> {
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        log::info!("Starting Omega MCP server on {host}:{port}");
+        println!("Ω Omega MCP Server");
+        println!("  Listening on http://{host}:{port}");
+        println!("  Protocol: MCP 2024-11-05");
+        println!("  Tools: {}", list_tool_count());
+        println!();
+        println!("Press Ctrl+C to stop");
+
+        // Build the MCP server with tool harness
+        let registry = tool_harness::tools::default_tool_registry();
+        let _server = mcp_server::McpServer::new()
+            .with_tool_registry(registry);
+
+        // Create and serve the HTTP transport
+        let mut transport = mcp_server::transport::http::HttpTransport::bind(&host, port);
+        let handle = transport.serve().await
+            .map_err(|e| anyhow::anyhow!("Failed to start MCP server: {e}"))?;
+
+        // Ctrl+C handler
+        tokio::signal::ctrl_c().await.ok();
+        log::info!("Shutting down MCP server");
+        handle.await.ok();
+        Ok(())
+    })
+}
+
+fn list_tool_count() -> usize {
+    let registry = tool_harness::tools::default_tool_registry();
+    registry.list().len()
+}
+
+fn run_chat(
+    provider: Option<String>,
+    model: Option<String>,
+    base_url: Option<String>,
+    session: Option<String>,
+    new_session: bool,
+) -> Result<()> {
+    let config = load_provider_config(provider, model, base_url);
 
     let model = config.model.clone();
     let kind = config.kind.to_string();
 
-    let (session_store, session_load) = SessionStore::resolve(cli.session, cli.new_session)
+    let (session_store, session_load) = SessionStore::resolve(session, new_session)
         .map_err(|e| anyhow::anyhow!("session: {e}"))?;
     let session_id = session_store.id.clone();
 

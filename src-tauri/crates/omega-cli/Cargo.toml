@@ -23,3 +23,4 @@ ratata = { path = "../ratata" }
 omega-core = { path = "../omega-core" }
 providers = { path = "../providers" }
 tool-harness = { path = "../tool-harness" }
+mcp-server = { path = "../mcp-server" }

@@ -515,7 +515,6 @@ mod tests {
     #[tokio::test]
     async fn test_tools_list_with_registry() {
         use tool_harness::tools::default_tool_registry;
-        use tool_harness::{ExecutionPipeline, ToolRegistry};
 
         let registry = default_tool_registry();
         let server = McpServer::new().with_tool_registry(registry);
