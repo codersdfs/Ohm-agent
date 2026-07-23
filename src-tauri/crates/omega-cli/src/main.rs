@@ -23,6 +23,7 @@ use omega_core::tui::spinner::{OmegaSpinner, SpinnerState};
 use omega_core::tui::status::StatusState;
 use omega_core::tui::theme;
 use omega_core::tui::transcript::{self, Transcript, TranscriptEntry};
+use omega_core::commands::web;
 use omega_core::{commands, default_db_path, AppState, ChatEmitter};
 
 // ── Event types for streaming ────────────────────────────────────────────────
@@ -532,7 +533,7 @@ impl App {
         match cmd.to_lowercase().trim() {
             "/help" | "/?" | "/h" => {
                 self.transcript.entries.push(TranscriptEntry::Notice {
-                    text: "Commands: /help, /clear, /tools, /model <name>, /exit, /cost".into(),
+                    text: "Commands: /help, /clear, /tools, /model, /provider, /cost, /exit, /fetch, /status, /search".into(),
                     is_error: false,
                 });
             }
@@ -613,6 +614,141 @@ impl App {
             }
             "/exit" | "/quit" => {
                 self.should_quit = true;
+            }
+            "/fetch" | "/web" | "/url" => {
+                // Parse URL from the command (everything after /fetch )
+                let url = cmd.trim_start_matches("/fetch")
+                    .trim_start_matches("/web")
+                    .trim_start_matches("/url")
+                    .trim();
+                if url.is_empty() {
+                    self.transcript.entries.push(TranscriptEntry::Notice {
+                        text: "Usage: /fetch <url> — e.g. /fetch https://example.com".into(),
+                        is_error: true,
+                    });
+                    return;
+                }
+
+                self.transcript.entries.push(TranscriptEntry::Notice {
+                    text: format!("Fetching {url} …"),
+                    is_error: false,
+                });
+
+                // Use `omega_core::commands::web::fetch_url` to fetch the URL content.
+                // `handle_slash_command` is sync (called from the TUI event loop),
+                // so use tokio's block_in_place + Handle::current().block_on() to
+                // run the async HTTP call synchronously — the UI freezes briefly
+                // but this is acceptable for explicit user-invoked commands.
+                let result = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current()
+                        .block_on(web::fetch_url(url))
+                });
+                match result {
+                    Ok(body) => {
+                        let display = if body.len() > 2000 {
+                            let d: String = body.chars().take(2000).collect();
+                            format!("{d}\n\n[... truncated]")
+                        } else {
+                            body
+                        };
+                        self.transcript.entries.push(TranscriptEntry::Notice {
+                            text: format!("Content from {url}:\n{display}"),
+                            is_error: false,
+                        });
+                    }
+                    Err(e) => {
+                        self.transcript.entries.push(TranscriptEntry::Notice {
+                            text: format!("Error fetching {url}: {e}"),
+                            is_error: true,
+                        });
+                    }
+                }
+            }
+            "/status" | "/ping" | "/health" | "/net" => {
+                self.transcript.entries.push(TranscriptEntry::Notice {
+                    text: "Checking connectivity …".into(),
+                    is_error: false,
+                });
+                let result = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current()
+                        .block_on(web::check_status())
+                });
+                match result {
+                    Ok(status) => {
+                        let internet = status["internet_reachable"].as_bool().unwrap_or(false);
+                        let endpoints = status["provider_endpoints"].as_object()
+                            .map(|m| {
+                                m.iter()
+                                    .map(|(k, v)| {
+                                        let ok = v.as_bool().unwrap_or(false);
+                                        format!("  {k}: {}", if ok { "✓ reachable" } else { "✗ unreachable" })
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            })
+                            .unwrap_or_default();
+                        self.transcript.entries.push(TranscriptEntry::Notice {
+                            text: format!(
+                                "Status:\n  Internet: {}\n{}",
+                                if internet { "✓ connected" } else { "✗ disconnected" },
+                                endpoints
+                            ),
+                            is_error: false,
+                        });
+                    }
+                    Err(e) => {
+                        self.transcript.entries.push(TranscriptEntry::Notice {
+                            text: format!("Status check failed: {e}"),
+                            is_error: true,
+                        });
+                    }
+                }
+            }
+            "/search" | "/google" | "/websearch" => {
+                let query = cmd.trim_start_matches("/search")
+                    .trim_start_matches("/google")
+                    .trim_start_matches("/websearch")
+                    .trim();
+                if query.is_empty() {
+                    self.transcript.entries.push(TranscriptEntry::Notice {
+                        text: "Usage: /search <query> — e.g. /search rust async programming".into(),
+                        is_error: true,
+                    });
+                    return;
+                }
+                self.transcript.entries.push(TranscriptEntry::Notice {
+                    text: format!("Searching for \"{query}\" …"),
+                    is_error: false,
+                });
+                let result = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current()
+                        .block_on(web::search_web(query))
+                });
+                match result {
+                    Ok(results) => {
+                        if results.is_empty() {
+                            self.transcript.entries.push(TranscriptEntry::Notice {
+                                text: format!("No results found for \"{query}\""),
+                                is_error: true,
+                            });
+                        } else {
+                            let mut lines = format!("Search results for \"{query}\":\n").to_string();
+                            for (i, r) in results.iter().enumerate() {
+                                lines.push_str(&format!("\n{}. {} — {}\n   {}", i + 1, r.title, r.url, r.snippet));
+                            }
+                            self.transcript.entries.push(TranscriptEntry::Notice {
+                                text: lines,
+                                is_error: false,
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        self.transcript.entries.push(TranscriptEntry::Notice {
+                            text: format!("Search failed: {e}"),
+                            is_error: true,
+                        });
+                    }
+                }
             }
             other => {
                 self.transcript.entries.push(TranscriptEntry::Notice {
@@ -1555,16 +1691,25 @@ fn main() -> Result<()> {
         CliAction::ServeMcp {
             port,
             host,
-            auth_token: _,
+            auth_token,
             skills_dir: _,
-        } => run_mcp_server(port, host),
+        } => run_mcp_server(port, host, auth_token),
     }
 }
 
-fn run_mcp_server(port: u16, host: String) -> Result<()> {
+fn run_mcp_server(port: u16, host: String, auth_token: Option<String>) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
         log::info!("Starting Omega MCP server on {host}:{port}");
+
+        let mut transport = mcp_server::transport::http::HttpTransport::bind(&host, port);
+
+        // Apply auth token if configured
+        if let Some(ref token) = auth_token {
+            transport = transport.with_auth_token(token.clone());
+            println!("  Auth: Bearer token enabled");
+        }
+
         println!("Ω Omega MCP Server");
         println!("  Listening on http://{host}:{port}");
         println!("  Protocol: MCP 2024-11-05");
@@ -1577,8 +1722,7 @@ fn run_mcp_server(port: u16, host: String) -> Result<()> {
         let _server = mcp_server::McpServer::new()
             .with_tool_registry(registry);
 
-        // Create and serve the HTTP transport
-        let mut transport = mcp_server::transport::http::HttpTransport::bind(&host, port);
+        // Start serving
         let handle = transport.serve().await
             .map_err(|e| anyhow::anyhow!("Failed to start MCP server: {e}"))?;
 
@@ -1586,6 +1730,10 @@ fn run_mcp_server(port: u16, host: String) -> Result<()> {
         tokio::signal::ctrl_c().await.ok();
         log::info!("Shutting down MCP server");
         handle.await.ok();
+
+        // Print server stats on shutdown
+        println!();
+        println!("Ω MCP Server stopped");
         Ok(())
     })
 }
