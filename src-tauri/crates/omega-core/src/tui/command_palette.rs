@@ -388,6 +388,56 @@ fn truncate_to_width(s: &str, width: usize) -> String {
     out
 }
 
+/// Render the filtered command list inside a compact inline area (used by
+/// the bottom command panel). The area should be inside an already-drawn
+/// glass block (this function only draws the list rows).
+///
+/// `max_rows` limits how many command entries are shown (capped by area height).
+/// Each row: `  /id    label` or `▸ /id    label` for the selected entry.
+pub fn render_panel(area: Rect, buf: &mut Buffer, state: &CommandPaletteState, max_rows: u16) {
+    if !state.visible || state.filtered.is_empty() || max_rows == 0 || area.height < 1 || area.width < 10 {
+        return;
+    }
+
+    let rows = (area.height).min(max_rows) as usize;
+    let sel = state.selected;
+    let count = state.filtered.len();
+    let start = sel.saturating_sub(rows.saturating_sub(1));
+    let end = (start + rows).min(count);
+
+    for i in start..end {
+        let row_idx = i - start;
+        let cmd_idx = state.filtered[i];
+        let entry = &COMMANDS[cmd_idx];
+        let is_sel = i == sel;
+        let style = if is_sel {
+            Style::default()
+                .fg(theme::PRIMARY_CONTAINER)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::FG)
+        };
+        let marker = if is_sel { "▸" } else { " " };
+        let text = format!("{} {}  {}", marker, entry.id, entry.label);
+        let display = truncate_to_width(&text, area.width as usize);
+
+        // Clear background with SURFACE_LOW before drawing
+        for x in area.x..area.x + area.width {
+            let cell = buf.get_mut(x, area.y + row_idx as u16);
+            cell.set_symbol(" ");
+            cell.set_bg(theme::SURFACE_LOW);
+        }
+
+        // Draw the row text — using Paragraph::render takes care of the cell writes
+        Paragraph::new(Line::from(Span::styled(display, style)))
+            .style(Style::default().bg(theme::SURFACE_LOW))
+            .render(
+                Rect::new(area.x, area.y + row_idx as u16, area.width, 1),
+                buf,
+            );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -524,5 +574,87 @@ mod tests {
         let action = handle_key(&mut s, press(KeyCode::BackTab));
         assert_eq!(action, PaletteAction::None);
         assert_eq!(s.selected, 0);
+    }
+
+    // ── render_panel tests ───────────────────────────────────────────────
+
+    /// Helper: create a buffer for testing render output.
+    fn test_buffer(w: u16, h: u16) -> Buffer {
+        Buffer::empty(Rect::new(0, 0, w, h))
+    }
+
+    #[test]
+    fn render_panel_empty_when_not_visible() {
+        let state = CommandPaletteState::new(); // visible = false
+        let mut buf = test_buffer(20, 5);
+        let before: Vec<String> = (0..5)
+            .map(|y| {
+                (0..20)
+                    .map(|x| buf.get(x, y).symbol().to_string())
+                    .collect::<Vec<_>>()
+                    .join("")
+            })
+            .collect();
+        render_panel(Rect::new(0, 0, 20, 3), &mut buf, &state, 2);
+        // Buffer should be unchanged — all cells still empty
+        for y in 0..5 {
+            for x in 0..20 {
+                assert_eq!(
+                    buf.get(x, y).symbol(),
+                    before[y as usize].chars().nth(x as usize).unwrap().to_string().as_str()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn render_panel_empty_when_filter_empty() {
+        let mut state = CommandPaletteState::new();
+        state.open("zzz"); // no match
+        assert!(state.filtered.is_empty());
+        let mut buf = test_buffer(20, 3);
+        let before: Vec<String> = (0..3)
+            .map(|y| {
+                (0..20)
+                    .map(|x| buf.get(x, y).symbol().to_string())
+                    .collect::<Vec<_>>()
+                    .join("")
+            })
+            .collect();
+        render_panel(Rect::new(0, 0, 20, 3), &mut buf, &state, 2);
+        // Buffer unchanged
+        for y in 0..3 {
+            for x in 0..20 {
+                assert_eq!(
+                    buf.get(x, y).symbol(),
+                    before[y as usize].chars().nth(x as usize).unwrap().to_string().as_str()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn render_panel_shows_marker_on_selected() {
+        let mut state = CommandPaletteState::new();
+        state.open("");
+        // First entry (0 = /help) should be selected by default
+        assert!(state.filtered.len() > 0);
+        state.selected = 0;
+        let mut buf = test_buffer(40, 3);
+        render_panel(Rect::new(0, 0, 40, 2), &mut buf, &state, 2);
+        // Check that the selected marker ▸ appears somewhere in row 0
+        let row0: String = (0..40)
+            .map(|x| buf.get(x, 0).symbol().to_string())
+            .collect();
+        assert!(
+            row0.contains("▸"),
+            "Row 0 should contain the ▸ marker for selected entry, got: {:?}",
+            row0
+        );
+        assert!(
+            row0.contains("/help"),
+            "Row 0 should contain /help, got: {:?}",
+            row0
+        );
     }
 }
