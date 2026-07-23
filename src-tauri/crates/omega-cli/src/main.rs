@@ -256,8 +256,11 @@ impl App {
                 if self.is_streaming {
                     self.cancel_streaming();
                 } else if self.show_command_palette {
+                    // Ctrl+C closes command mode, clears buffer
                     self.command_palette.close();
                     self.show_command_palette = false;
+                    self.editor.buffer.clear();
+                    self.editor.cursor = 0;
                 } else {
                     self.should_quit = true;
                 }
@@ -302,23 +305,38 @@ impl App {
             return;
         }
 
-        // Command palette takes over key handling
+        // Command palette inline mode — syncs with editor buffer
         if self.show_command_palette {
             let action = omega_core::tui::command_palette::handle_key(
                 &mut self.command_palette,
                 key,
             );
+            // Sync palette query back to editor buffer for display
+            self.editor.buffer = self.command_palette.query.clone();
+            self.editor.cursor = self.editor.buffer.len();
+
             match action {
                 omega_core::tui::command_palette::PaletteAction::Select(id) => {
-                    self.command_palette.close();
                     self.show_command_palette = false;
+                    self.command_palette.close();
                     self.handle_slash_command(id);
                 }
-                omega_core::tui::command_palette::PaletteAction::Close => {
-                    self.command_palette.close();
+                omega_core::tui::command_palette::PaletteAction::SendText => {
                     self.show_command_palette = false;
+                    // Copy query to editor buffer, then submit as message
+                    self.editor.buffer = self.command_palette.query.clone();
+                    self.command_palette.close();
+                    self.submit_message();
                 }
-                omega_core::tui::command_palette::PaletteAction::None => {}
+                omega_core::tui::command_palette::PaletteAction::Close => {
+                    self.show_command_palette = false;
+                    self.command_palette.close();
+                    self.editor.buffer.clear();
+                    self.editor.cursor = 0;
+                }
+                omega_core::tui::command_palette::PaletteAction::None => {
+                    // Palette processed the key; buffer already synced above
+                }
             }
             return;
         }
@@ -875,6 +893,7 @@ impl ratata::screen::Screen for App {
             command_palette: &mut self.command_palette,
             provider_panel_state: &mut self.provider_panel_state,
             is_streaming: self.is_streaming,
+            is_command_mode: self.show_command_palette,
             session_messages: self.session_messages,
             anim_tick: self.anim_tick,
         };
