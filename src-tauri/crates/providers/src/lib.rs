@@ -2,6 +2,9 @@ pub mod anthropic;
 pub mod google;
 pub mod local;
 pub mod openai;
+pub mod router;
+
+pub use router::*;
 
 use serde::{Deserialize, Serialize};
 

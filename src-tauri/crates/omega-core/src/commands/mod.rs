@@ -1,10 +1,12 @@
 pub mod build_cmd;
 pub mod chat;
+pub mod entropy_cmd;
 pub mod gate;
 pub mod mcp;
 pub mod memory;
 pub mod plan_cmd;
 pub mod review_cmd;
+pub mod router_cmd;
 pub mod tables;
 pub mod tools;
 pub mod web;
