@@ -26,6 +26,7 @@ ratatui = "0.26"
 crossterm = "0.27"
 
 providers = { path = "../providers" }
+entropy = { path = "../entropy" }
 harness = { path = "../harness" }
 memory = { path = "../memory" }
 mcp = { path = "../mcp" }

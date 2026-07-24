@@ -18,4 +18,5 @@ pub struct DomainScore {
     pub name: String,
     pub drift: f64,
     pub priority: u8,
+    pub violations: usize,
 }

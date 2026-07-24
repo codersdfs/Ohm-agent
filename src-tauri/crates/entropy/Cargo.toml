@@ -8,3 +8,5 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
 chrono = "0.4"
+harness = { path = "../harness" }
+tokio = { version = "1", features = ["rt", "macros"] }
