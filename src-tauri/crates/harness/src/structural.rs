@@ -59,8 +59,8 @@ impl StructuralCheck {
             }
         }
 
-        // Function length (heuristic: fn keyword + brace balancing)
-        Self::check_function_length(content, &mut violations);
+        // Function length (tree-sitter based)
+        Self::check_function_length(content, path, _lang, &mut violations);
 
         // Naming conventions
         Self::check_naming(path, content, &mut violations);
@@ -73,64 +73,36 @@ impl StructuralCheck {
         violations
     }
 
-    fn check_function_length(content: &str, violations: &mut Vec<Violation>) {
-        // Heuristic: look for `fn ` lines, measure brace depth
-        let lines: Vec<&str> = content.lines().collect();
-        let mut in_fn = false;
-        let mut fn_start_line = 0;
-        let mut fn_name = String::new();
-        let mut brace_depth = 0u32;
-
-        for (i, line) in lines.iter().enumerate() {
-            let trimmed = line.trim();
-
-            if !in_fn {
-                if let Some(name) = Self::extract_fn_name(trimmed) {
-                    in_fn = true;
-                    fn_start_line = i;
-                    fn_name = name;
-                    brace_depth =
-                        trimmed.matches('{').count() as u32 - trimmed.matches('}').count() as u32;
-                    // Single-line functions
-                    if brace_depth == 0 {
-                        in_fn = false;
-                    }
-                }
-            } else {
-                let opens = trimmed.matches('{').count() as u32;
-                let closes = trimmed.matches('}').count() as u32;
-                if opens > closes {
-                    brace_depth += opens - closes;
-                } else if closes > opens {
-                    brace_depth = brace_depth.saturating_sub(closes - opens);
-                }
-
-                if brace_depth == 0 {
-                    let fn_length = i - fn_start_line + 1;
-                    if fn_length > MAX_FUNCTION_LINES {
-                        violations.push(Violation {
-                            category: ViolationCategory::Structural,
-                            message: format!(
-                                "Function `{}` too long: {} lines (max {})",
-                                fn_name, fn_length, MAX_FUNCTION_LINES
-                            ),
-                            tool_hint: Some(format!(
-                                "Refactor into smaller functions. Max {} lines per function.",
-                                MAX_FUNCTION_LINES
-                            )),
-                            line: Some((fn_start_line + 1) as u32),
-                        });
-                    }
-                    in_fn = false;
-                }
+    fn check_function_length(content: &str, path: &str, lang: &Language, violations: &mut Vec<Violation>) {
+        let metrics = crate::tree_sitter_metrics::analyze_file(content, lang);
+        for m in metrics {
+            if m.line_count > MAX_FUNCTION_LINES as u32 {
+                violations.push(Violation {
+                    category: ViolationCategory::Structural,
+                    message: format!(
+                        "Function `{}` too long: {} lines (max {})",
+                        m.name, m.line_count, MAX_FUNCTION_LINES
+                    ),
+                    tool_hint: Some(format!(
+                        "Refactor into smaller functions. Max {} lines per function.",
+                        MAX_FUNCTION_LINES
+                    )),
+                    line: Some(m.start_line),
+                });
+            }
+            // Also check cyclomatic complexity
+            if m.cyclomatic_complexity > 10 {
+                violations.push(Violation {
+                    category: ViolationCategory::Structural,
+                    message: format!(
+                        "Function `{}` too complex: cyclomatic complexity {} (max 10)",
+                        m.name, m.cyclomatic_complexity
+                    ),
+                    tool_hint: Some("Extract helper functions to reduce branching".into()),
+                    line: Some(m.start_line),
+                });
             }
         }
-    }
-
-    fn extract_fn_name(line: &str) -> Option<String> {
-        let re = regex::Regex::new(r"\bfn\s+([a-zA-Z_]\w*)").ok()?;
-        re.captures(line)
-            .and_then(|c| c.get(1).map(|m| m.as_str().to_string()))
     }
 
     fn check_naming(path: &str, content: &str, violations: &mut Vec<Violation>) {

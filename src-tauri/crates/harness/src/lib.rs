@@ -9,6 +9,7 @@ pub mod rules;
 pub mod scoring;
 pub mod structural;
 pub mod taste;
+pub mod tree_sitter_metrics;
 
 use serde::{Deserialize, Serialize};
 
