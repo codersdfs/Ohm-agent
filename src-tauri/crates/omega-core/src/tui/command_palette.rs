@@ -412,6 +412,52 @@ fn truncate_to_width(s: &str, width: usize) -> String {
     out
 }
 
+/// Render command palette rows into a bounded area (used by layout.rs).
+/// Only renders the list rows, not the search line or borders.
+pub fn render_panel(area: Rect, buf: &mut Buffer, state: &CommandPaletteState, max_rows: u16) {
+    if !state.visible || state.filtered.is_empty() || max_rows == 0 || area.height < 1 || area.width < 10 {
+        return;
+    }
+
+    let rows = (area.height).min(max_rows) as usize;
+    let sel = state.selected;
+    let count = state.filtered.len();
+    let start = sel.saturating_sub(rows.saturating_sub(1));
+    let end = (start + rows).min(count);
+
+    for i in start..end {
+        let row_idx = i - start;
+        let cmd_idx = state.filtered[i];
+        let entry = &COMMANDS[cmd_idx];
+        let is_sel = i == sel;
+        let style = if is_sel {
+            Style::default()
+                .fg(theme::PRIMARY_CONTAINER)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::FG)
+        };
+        let marker = if is_sel { "▸" } else { " " };
+        let text = format!("{} {}  {}", marker, entry.id, entry.label);
+        let display = truncate_to_width(&text, area.width as usize);
+
+        // Clear background with SURFACE_LOW before drawing
+        for x in area.x..area.x + area.width {
+            let cell = buf.get_mut(x, area.y + row_idx as u16);
+            cell.set_symbol(" ");
+            cell.set_bg(theme::SURFACE_LOW);
+        }
+
+        // Draw the row text
+        Paragraph::new(Line::from(Span::styled(display, style)))
+            .style(Style::default().bg(theme::SURFACE_LOW))
+            .render(
+                Rect::new(area.x, area.y + row_idx as u16, area.width, 1),
+                buf,
+            );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
