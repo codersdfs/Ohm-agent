@@ -9,6 +9,26 @@ use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use super::theme;
 
+/// Handler variant for each slash command. This is the single source of truth
+/// for command dispatch — the palette and the handler in `main.rs` both use it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandHandler {
+    Help,
+    Clear,
+    Tools,
+    Model,
+    Provider,
+    Cost,
+    Exit,
+    Fetch,
+    Status,
+    Search,
+    Gate,
+    Rules,
+    Score,
+    Memory,
+}
+
 /// One palette row / slash command.
 #[derive(Debug, Clone, Copy)]
 pub struct CommandEntry {
@@ -18,9 +38,13 @@ pub struct CommandEntry {
     pub description: &'static str,
     /// Extra search terms not shown in the UI.
     pub keywords: &'static [&'static str],
+    /// Handler variant for dispatch.
+    pub handler: CommandHandler,
 }
 
-/// Canonical v1 catalog. Ids must match `App::handle_slash_command`.
+/// Canonical v1 catalog. The `handler` field is the single source of truth
+/// for command dispatch — both the palette and `App::handle_slash_command`
+/// use it.
 pub static COMMANDS: &[CommandEntry] = &[
     CommandEntry {
         id: "/help",
@@ -28,6 +52,7 @@ pub static COMMANDS: &[CommandEntry] = &[
         aliases: &["/?", "/h"],
         description: "Show available commands",
         keywords: &["commands", "usage", "docs"],
+        handler: CommandHandler::Help,
     },
     CommandEntry {
         id: "/clear",
@@ -35,6 +60,7 @@ pub static COMMANDS: &[CommandEntry] = &[
         aliases: &["/cls"],
         description: "Clear transcript and session",
         keywords: &["reset", "new", "session"],
+        handler: CommandHandler::Clear,
     },
     CommandEntry {
         id: "/tools",
@@ -42,6 +68,7 @@ pub static COMMANDS: &[CommandEntry] = &[
         aliases: &[],
         description: "List available agent tools",
         keywords: &["agent", "capabilities"],
+        handler: CommandHandler::Tools,
     },
     CommandEntry {
         id: "/model",
@@ -49,6 +76,7 @@ pub static COMMANDS: &[CommandEntry] = &[
         aliases: &[],
         description: "Open model picker for current provider",
         keywords: &["llm", "gpt", "claude", "switch"],
+        handler: CommandHandler::Model,
     },
     CommandEntry {
         id: "/provider",
@@ -56,6 +84,7 @@ pub static COMMANDS: &[CommandEntry] = &[
         aliases: &["/providers", "/p"],
         description: "Open provider configuration wizard",
         keywords: &["api", "openai", "anthropic", "google", "endpoint"],
+        handler: CommandHandler::Provider,
     },
     CommandEntry {
         id: "/cost",
@@ -63,6 +92,7 @@ pub static COMMANDS: &[CommandEntry] = &[
         aliases: &[],
         description: "Show session token usage",
         keywords: &["tokens", "usage", "billing"],
+        handler: CommandHandler::Cost,
     },
     CommandEntry {
         id: "/exit",
@@ -70,6 +100,7 @@ pub static COMMANDS: &[CommandEntry] = &[
         aliases: &["/quit"],
         description: "Quit Omega",
         keywords: &["quit", "close", "leave"],
+        handler: CommandHandler::Exit,
     },
     CommandEntry {
         id: "/fetch",
@@ -77,6 +108,7 @@ pub static COMMANDS: &[CommandEntry] = &[
         aliases: &["/web", "/url"],
         description: "Fetch and display content from a URL",
         keywords: &["http", "web", "internet", "download", "curl", "get"],
+        handler: CommandHandler::Fetch,
     },
     CommandEntry {
         id: "/status",
@@ -84,6 +116,7 @@ pub static COMMANDS: &[CommandEntry] = &[
         aliases: &["/ping", "/health", "/net"],
         description: "Check network connectivity and provider status",
         keywords: &["network", "connectivity", "reachable", "health", "ping"],
+        handler: CommandHandler::Status,
     },
     CommandEntry {
         id: "/search",
@@ -91,6 +124,7 @@ pub static COMMANDS: &[CommandEntry] = &[
         aliases: &["/google", "/websearch"],
         description: "Search the web",
         keywords: &["google", "duckduckgo", "web", "browse", "find"],
+        handler: CommandHandler::Search,
     },
     CommandEntry {
         id: "/gate",
@@ -98,6 +132,7 @@ pub static COMMANDS: &[CommandEntry] = &[
         aliases: &[],
         description: "Run Mechanized Gate on a file",
         keywords: &["gate", "lint", "rules", "check", "score", "violations"],
+        handler: CommandHandler::Gate,
     },
     CommandEntry {
         id: "/rules",
@@ -105,6 +140,7 @@ pub static COMMANDS: &[CommandEntry] = &[
         aliases: &["/pattern"],
         description: "List promoted negative patterns",
         keywords: &["rules", "pattern", "negative", "promoted", "frequency"],
+        handler: CommandHandler::Rules,
     },
     CommandEntry {
         id: "/score",
@@ -112,6 +148,7 @@ pub static COMMANDS: &[CommandEntry] = &[
         aliases: &[],
         description: "Quick quality score for a file",
         keywords: &["score", "quality", "grade", "pass", "fail"],
+        handler: CommandHandler::Score,
     },
     CommandEntry {
         id: "/memory",
@@ -119,8 +156,20 @@ pub static COMMANDS: &[CommandEntry] = &[
         aliases: &["/mem"],
         description: "Search Hermes memory",
         keywords: &["memory", "hermes", "search", "remember", "session", "project", "user"],
+        handler: CommandHandler::Memory,
     },
 ];
+
+/// Look up a command by its id or alias and return the matching entry.
+/// This is the single source of truth for command dispatch — both the
+/// palette and `App::handle_slash_command` use it.
+pub fn lookup_command(cmd: &str) -> Option<&'static CommandEntry> {
+    let normalized = cmd.to_lowercase();
+    COMMANDS.iter().find(|entry| {
+        entry.id == normalized
+            || entry.aliases.iter().any(|alias| alias == &normalized)
+    })
+}
 
 /// Build lowercase haystack for keyword search.
 fn haystack(entry: &CommandEntry) -> String {
@@ -169,6 +218,8 @@ pub struct CommandPaletteState {
     pub query: String,
     pub selected: usize,
     pub filtered: Vec<usize>,
+    /// Shared filter logic (kept in sync with `filtered` and `selected`).
+    filter_list: super::filter::FilteredList<CommandEntry>,
 }
 
 impl CommandPaletteState {
@@ -178,6 +229,7 @@ impl CommandPaletteState {
             query: String::new(),
             selected: 0,
             filtered: Vec::new(),
+            filter_list: super::filter::FilteredList::new(),
         };
         s.recompute_filter();
         s
@@ -199,23 +251,18 @@ impl CommandPaletteState {
     }
 
     pub fn recompute_filter(&mut self) {
-        self.filtered = filter_commands(&self.query);
-        if self.filtered.is_empty() {
-            self.selected = 0;
-        } else {
-            self.selected = self.selected.min(self.filtered.len() - 1);
-        }
+        // Delegate to the shared FilteredList, then sync our public fields.
+        self.filter_list.recompute(COMMANDS, &self.query, rank_command);
+        self.filtered = self.filter_list.filtered.clone();
+        self.selected = self.filter_list.selected;
     }
 
     fn move_sel(&mut self, delta: isize) {
-        let n = self.filtered.len();
-        if n == 0 {
-            self.selected = 0;
-            return;
-        }
-        let cur = self.selected as isize;
-        let next = (cur + delta).rem_euclid(n as isize) as usize;
-        self.selected = next;
+        // Sync filter_list state from our public fields, then delegate.
+        self.filter_list.selected = self.selected;
+        self.filter_list.scroll = 0; // CommandPalette doesn't use scroll
+        self.filter_list.move_selection_circular(delta, 10);
+        self.selected = self.filter_list.selected;
     }
 
     pub fn selected_id(&self) -> Option<&'static str> {
@@ -224,6 +271,16 @@ impl CommandPaletteState {
             .and_then(|&i| COMMANDS.get(i))
             .map(|e| e.id)
     }
+}
+
+/// Rank a command entry against a query. Returns `Some(score)` if it matches.
+/// Uses substring matching across id, label, aliases, description, and keywords.
+fn rank_command(entry: &CommandEntry, query: &str) -> Option<i32> {
+    if !command_matches(entry, query) {
+        return None;
+    }
+    // All matches get the same score — order is preserved by stable sort.
+    Some(1)
 }
 
 impl Default for CommandPaletteState {

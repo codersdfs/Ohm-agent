@@ -9,19 +9,15 @@ use anyhow::Result;
 use clap::Parser;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind};
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Widget};
 
 use ratata::prelude::*;
 
 use omega_core::session::SessionStore;
-use omega_core::tui::component::{Action, Component, UiStreamEvent};
+use omega_core::tui::component::{Action, UiStreamEvent};
 use omega_core::tui::editor::{EditorMode, EditorState};
-use omega_core::tui::spinner::{OmegaSpinner, SpinnerState};
+use omega_core::tui::layout::{render_full_layout, LayoutChrome};
+use omega_core::tui::spinner::SpinnerState;
 use omega_core::tui::status::StatusState;
-use omega_core::tui::theme;
 use omega_core::tui::transcript::{self, Transcript, TranscriptEntry};
 use omega_core::commands::web;
 use omega_core::{commands, default_db_path, AppState, ChatEmitter};
@@ -529,15 +525,28 @@ impl App {
     }
 
     /// Handle a slash command.
+    /// Uses the unified `CommandHandler` dispatch from `command_palette::lookup_command`.
     fn handle_slash_command(&mut self, cmd: &str) {
-        match cmd.to_lowercase().trim() {
-            "/help" | "/?" | "/h" => {
+        let entry = omega_core::tui::command_palette::lookup_command(cmd);
+        let handler = match entry {
+            Some(e) => e.handler,
+            None => {
+                self.transcript.entries.push(TranscriptEntry::Notice {
+                    text: format!("Unknown command: {}. Type /help for commands.", cmd),
+                    is_error: true,
+                });
+                return;
+            }
+        };
+
+        match handler {
+            omega_core::tui::command_palette::CommandHandler::Help => {
                 self.transcript.entries.push(TranscriptEntry::Notice {
                     text: "Commands: /help, /clear, /tools, /model, /provider, /cost, /exit, /fetch, /status, /search, /gate, /rules, /score, /memory".into(),
                     is_error: false,
                 });
             }
-            "/clear" | "/cls" => {
+            omega_core::tui::command_palette::CommandHandler::Clear => {
                 self.transcript.entries.clear();
                 self.transcript.messages.clear();
                 self.editor.buffer.clear();
@@ -557,7 +566,7 @@ impl App {
                     }
                 }
             }
-            "/tools" => match commands::tools::list_tools() {
+            omega_core::tui::command_palette::CommandHandler::Tools => match commands::tools::list_tools() {
                 Ok(tools) => {
                     let list = tools.join(", ");
                     self.transcript.entries.push(TranscriptEntry::Notice {
@@ -572,7 +581,7 @@ impl App {
                     });
                 }
             },
-            "/model" => {
+            omega_core::tui::command_palette::CommandHandler::Model => {
                 if self.is_streaming {
                     self.transcript.entries.push(TranscriptEntry::Notice {
                         text: "Can't open provider panel while streaming.".into(),
@@ -588,7 +597,7 @@ impl App {
                     self.show_provider_panel = true;
                 }
             }
-            "/provider" | "/providers" | "/p" => {
+            omega_core::tui::command_palette::CommandHandler::Provider => {
                 if self.is_streaming {
                     self.transcript.entries.push(TranscriptEntry::Notice {
                         text: "Can't open provider panel while streaming.".into(),
@@ -603,7 +612,7 @@ impl App {
                     self.show_provider_panel = true;
                 }
             }
-            "/cost" => {
+            omega_core::tui::command_palette::CommandHandler::Cost => {
                 self.transcript.entries.push(TranscriptEntry::Notice {
                     text: format!(
                         "Session tokens — {} in / {} out ({} messages)",
@@ -612,10 +621,10 @@ impl App {
                     is_error: false,
                 });
             }
-            "/exit" | "/quit" => {
+            omega_core::tui::command_palette::CommandHandler::Exit => {
                 self.should_quit = true;
             }
-            "/fetch" | "/web" | "/url" => {
+            omega_core::tui::command_palette::CommandHandler::Fetch => {
                 // Parse URL from the command (everything after /fetch )
                 let url = cmd.trim_start_matches("/fetch")
                     .trim_start_matches("/web")
@@ -664,7 +673,7 @@ impl App {
                     }
                 }
             }
-            "/status" | "/ping" | "/health" | "/net" => {
+            omega_core::tui::command_palette::CommandHandler::Status => {
                 self.transcript.entries.push(TranscriptEntry::Notice {
                     text: "Checking connectivity …".into(),
                     is_error: false,
@@ -704,7 +713,7 @@ impl App {
                     }
                 }
             }
-            "/search" | "/google" | "/websearch" => {
+            omega_core::tui::command_palette::CommandHandler::Search => {
                 let query = cmd.trim_start_matches("/search")
                     .trim_start_matches("/google")
                     .trim_start_matches("/websearch")
@@ -750,7 +759,7 @@ impl App {
                     }
                 }
             }
-            "/gate" => {
+            omega_core::tui::command_palette::CommandHandler::Gate => {
                 let (path, content) = match self.read_file_or_buffer(cmd, "/gate") {
                     Ok(v) => v,
                     Err(e) => {
@@ -800,7 +809,7 @@ impl App {
                     }
                 }
             }
-            "/rules" | "/pattern" => {
+            omega_core::tui::command_palette::CommandHandler::Rules => {
                 self.transcript.entries.push(TranscriptEntry::Notice {
                     text: "Loading rules…".into(),
                     is_error: false,
@@ -833,7 +842,7 @@ impl App {
                     }
                 }
             }
-            "/score" => {
+            omega_core::tui::command_palette::CommandHandler::Score => {
                 let (path, content) = match self.read_file_or_buffer(cmd, "/score") {
                     Ok(v) => v,
                     Err(e) => {
@@ -869,7 +878,7 @@ impl App {
                     }
                 }
             }
-            "/memory" | "/mem" => {
+            omega_core::tui::command_palette::CommandHandler::Memory => {
                 let query = cmd.trim_start_matches("/memory").trim_start_matches("/mem").trim();
                 if query.is_empty() {
                     // Show memory stats
@@ -933,12 +942,6 @@ impl App {
                         }
                     }
                 }
-            }
-            other => {
-                self.transcript.entries.push(TranscriptEntry::Notice {
-                    text: format!("Unknown command: {}. Type /help for commands.", other),
-                    is_error: true,
-                });
             }
         }
     }
@@ -1162,9 +1165,7 @@ impl App {
             self.provider_panel_state.models_loading = true;
             self.provider_panel_state.models.clear();
             self.provider_panel_state.models_error = None;
-            self.provider_panel_state.filtered.clear();
-            self.provider_panel_state.selected_model = 0;
-            self.provider_panel_state.model_scroll = 0;
+            self.provider_panel_state.reset_filter_state();
 
             let all = providers::ProviderKind::all();
             let sel = self.provider_panel_state.selected_provider;
@@ -1199,101 +1200,29 @@ impl App {
         }
     }
 
-    /// Render the full UI using the dark neutral layout:
-    /// top system bar, metrics panel, main process panel, command input, footer.
+    /// Render the full UI using the centralized layout engine.
     fn render_widgets(&mut self, frame: &mut ratatui::Frame) {
         let area = frame.size();
+        let is_command_mode = self.show_command_palette;
 
-        // Modal overlays own the full screen — skip chat chrome so transcript /
-        // metrics / tool boxes cannot bleed through a transparent panel.
-        if self.show_provider_panel && !self.show_help {
-            fill_area(frame, area, theme::SURFACE);
-            omega_core::tui::provider_panel::render(
-                area,
-                frame.buffer_mut(),
-                &self.provider_panel_state,
-                &self.config,
-            );
-            return;
-        }
-
-        // ── Full-screen background ──────────────────────────────────────
-        // Reset every cell so the canvas inherits the terminal background.
-        fill_area(frame, area, theme::BG);
-
-        // ── Layout: vertical stack ──────────────────────────────────────
-        let top_bar_h = 1u16;
-        let metrics_h = 3u16; // 3 lines: token gauge + model/context row + tool chips
-        let footer_h = 1u16;
-        // Input is a fixed 3-row strip when closed; expanded when palette is open.
-        let editor_h = if self.show_command_palette {
-            // 1 (top border) + 1 (search) + rows + 1 (bottom padding)
-            let rows = self.command_palette.filtered.len().min(8).max(1) as u16;
-            rows.saturating_add(3).min(12)
-        } else {
-            3u16
+        let mut chrome = LayoutChrome {
+            model_name: self.config.model.as_str(),
+            config: &self.config,
+            transcript: &mut self.transcript,
+            status: &mut self.status,
+            editor: &self.editor,
+            show_help: self.show_help,
+            show_command_palette: self.show_command_palette,
+            show_provider_panel: self.show_provider_panel,
+            command_palette: &mut self.command_palette,
+            provider_panel_state: &mut self.provider_panel_state,
+            is_streaming: self.is_streaming,
+            is_command_mode,
+            session_messages: self.session_messages,
+            anim_tick: self.anim_tick,
         };
 
-        let vert = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(top_bar_h), // system bar
-                Constraint::Length(metrics_h), // metrics panel
-                Constraint::Min(4),            // process (transcript)
-                Constraint::Length(editor_h),  // command input / palette
-                Constraint::Length(footer_h),  // footer
-            ])
-            .split(area);
-
-        let top_area = vert[0];
-        let metrics_area = vert[1];
-        let process_area = vert[2];
-        let editor_area = vert[3];
-        let footer_area = vert[4];
-
-        // ── Top system bar ──────────────────────────────────────────────
-        render_top_bar(frame, top_area, self.config.model.as_str());
-
-        // ── Metrics panel (glass-bordered) ───────────────────────────────
-        render_metrics_panel(frame, metrics_area, &self.config, self.is_streaming);
-
-        // ── Main process panel (glass-bordered) ──────────────────────────
-        render_process_panel(frame, process_area, &mut self.transcript, self.show_help);
-
-        // ── Command input or palette (docked in editor area) ──────────────
-        if self.show_command_palette {
-            // Clear the area first to prevent bleed-through from the editor.
-            fill_area(frame, editor_area, theme::BG);
-            omega_core::tui::command_palette::render(
-                editor_area,
-                frame.buffer_mut(),
-                &self.command_palette,
-            );
-        } else {
-            render_command_input(
-                frame,
-                editor_area,
-                &self.editor,
-                self.is_streaming,
-                &self.status.spinner,
-            );
-        }
-
-        // ── Footer bar ──────────────────────────────────────────────────
-        self.status.hint_text = Some("[CR] COMMIT | [^C] ABORT | ^K cmds | ? help".into());
-        let (tokens_in, tokens_out) = omega_core::commands::chat::session_token_counts();
-        self.status.tokens_in = tokens_in;
-        self.status.tokens_out = tokens_out;
-        self.status.messages_count = self.session_messages;
-        // Keep streaming estimates off the token display — only real provider
-        // usage counts should appear as input/output.
-        self.status.streaming_estimate = 0;
-        frame.render_widget(&self.status, footer_area);
-
-        // ── Overlays ────────────────────────────────────────────────────
-        if self.show_help {
-            omega_core::tui::help::render(area, frame.buffer_mut());
-        }
+        render_full_layout(frame, area, &mut chrome);
     } // end render_widgets
 } // end impl App
 
@@ -1334,345 +1263,6 @@ impl ratata::screen::Screen for App {
             _ => None,
         }
     }
-}
-
-// ── Layout helpers ──────────────────────────────────────────────────────────
-
-/// Fill an entire rect with a solid background color.
-fn fill_area(frame: &mut ratatui::Frame, area: Rect, color: Color) {
-    let style = Style::default().bg(color);
-    for y in area.y..area.y + area.height {
-        for x in area.x..area.x + area.width {
-            let cell = frame.buffer_mut().get_mut(x, y);
-            cell.set_bg(color);
-            cell.set_style(style);
-        }
-    }
-}
-
-/// Draw a horizontal rule line.
-
-/// Draw a vertical line (for glass sidebar edge).
-
-/// Render a glass-style bordered block helper: fills inner bg, draws box-drawing border.
-fn render_glass_block(
-    frame: &mut ratatui::Frame,
-    area: Rect,
-    inner_bg: Color,
-    border_color: Color,
-    title: &str,
-    title_color: Color,
-) -> Rect {
-    let inner_pad = 1u16;
-    let inner_area = if area.width > 2 && area.height > 2 {
-        Rect::new(
-            area.x + inner_pad,
-            area.y + inner_pad,
-            area.width.saturating_sub(inner_pad * 2),
-            area.height.saturating_sub(inner_pad * 2),
-        )
-    } else {
-        area
-    };
-
-    // Fill inner
-    fill_area(frame, inner_area, inner_bg);
-
-    // Draw border using box-drawing characters ┌─…─┐ │  │ └─…─┘
-    let _border_style = Style::default().fg(border_color);
-    let bw = area.width;
-    let bh = area.height;
-
-    // Top border ┌─ title ────────┐
-    let title_chars: Vec<char> = title.chars().collect();
-    let dash_count = bw
-        .saturating_sub(title_chars.len() as u16)
-        .saturating_sub(4);
-    {
-        let y = area.y;
-        // ┌
-        frame
-            .buffer_mut()
-            .get_mut(area.x, y)
-            .set_symbol("┌")
-            .set_fg(border_color);
-        // title
-        for (i, ch) in title_chars.iter().enumerate() {
-            let cx = area.x + 2 + i as u16;
-            if cx < area.x + bw {
-                frame
-                    .buffer_mut()
-                    .get_mut(cx, y)
-                    .set_char(*ch)
-                    .set_fg(title_color);
-            }
-        }
-        // ─ fill
-        for i in 0..dash_count {
-            let cx = area.x + 2 + title_chars.len() as u16 + i;
-            if cx < area.x + bw - 1 {
-                frame
-                    .buffer_mut()
-                    .get_mut(cx, y)
-                    .set_symbol("─")
-                    .set_fg(border_color);
-            }
-        }
-        // ┐
-        frame
-            .buffer_mut()
-            .get_mut(area.x + bw - 1, y)
-            .set_symbol("┐")
-            .set_fg(border_color);
-    }
-
-    // Sides │ … │
-    for dy in 1..bh.saturating_sub(1) {
-        let y = area.y + dy;
-        frame
-            .buffer_mut()
-            .get_mut(area.x, y)
-            .set_symbol("│")
-            .set_fg(border_color);
-        frame
-            .buffer_mut()
-            .get_mut(area.x + bw - 1, y)
-            .set_symbol("│")
-            .set_fg(border_color);
-    }
-
-    // Bottom border └──────────────┘
-    {
-        let y = area.y + bh - 1;
-        frame
-            .buffer_mut()
-            .get_mut(area.x, y)
-            .set_symbol("└")
-            .set_fg(border_color);
-        for i in 1..bw.saturating_sub(1) {
-            let cx = area.x + i;
-            frame
-                .buffer_mut()
-                .get_mut(cx, y)
-                .set_symbol("─")
-                .set_fg(border_color);
-        }
-        frame
-            .buffer_mut()
-            .get_mut(area.x + bw - 1, y)
-            .set_symbol("┘")
-            .set_fg(border_color);
-    }
-
-    inner_area
-}
-
-// ── Top system bar ──────────────────────────────────────────────────────────
-
-fn render_top_bar(frame: &mut ratatui::Frame, area: Rect, model: &str) {
-    if area.height < 1 || area.width < 30 {
-        return;
-    }
-
-    let left_spans = vec![
-        Span::styled(
-            " OMEGA_AGENT ",
-            Style::default()
-                .fg(theme::PRIMARY)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled("v", theme::style_dim()),
-        Span::styled(env!("CARGO_PKG_VERSION"), theme::style_dim()),
-        Span::styled(" · ", theme::style_dim()),
-        Span::styled("SYS_STATUS: ", theme::style_dim()),
-        Span::styled("ONLINE", Style::default().fg(theme::PRIMARY)),
-        Span::styled(" · ", theme::style_dim()),
-        Span::styled("UPTIME: ", theme::style_dim()),
-        Span::styled(model, Style::default().fg(theme::SECONDARY)),
-    ];
-
-    let right_hint = format!(" [F1] HELP [F2] LOGS [F3] NET [F10] EXIT ");
-    let right_w = right_hint.len() as u16;
-    let left_w: u16 = left_spans.iter().map(|s| s.width() as u16).sum();
-    let fill = area.width.saturating_sub(left_w).saturating_sub(right_w);
-
-    let mut out = vec![];
-    out.extend(left_spans);
-    if fill > 0 {
-        out.push(Span::raw(" ".repeat(fill as usize)));
-    }
-    out.push(Span::styled(right_hint, theme::style_dim()));
-
-    let para = Paragraph::new(Line::from(out));
-    para.render(Rect::new(area.x, area.y, area.width, 1), frame.buffer_mut());
-
-    // separator rule under top bar
-    let _rule_y = area.y + area.height;
-    // actually draw it at the bottom of this area
-    if area.height > 1 {
-        for x in area.x..area.x + area.width {
-            let cell = frame.buffer_mut().get_mut(x, area.y + area.height - 1);
-            cell.set_symbol("─");
-            cell.set_fg(theme::OUTLINE);
-        }
-    }
-}
-
-// ── Metrics panel ────────────────────────────────────────────────────────────
-// Glass-bordered box: real token usage, model, active tool chips.
-
-fn render_metrics_panel(
-    frame: &mut ratatui::Frame,
-    area: Rect,
-    config: &providers::ProviderConfig,
-    _is_streaming: bool,
-) {
-    if area.height < 3 || area.width < 40 {
-        return;
-    }
-
-    let inner = render_glass_block(
-        frame,
-        area,
-        theme::SURFACE_LOW,
-        theme::OUTLINE,
-        " SYSTEM METRICS & ACTIVE TOOLS ",
-        theme::PRIMARY,
-    );
-
-    // Row 0: real session input/output usage (no fake context-window gauge)
-    let gauge_y = inner.y;
-    let (tokens_in, tokens_out) = omega_core::commands::chat::session_token_counts();
-    let usage = omega_core::tui::status::StatusState::format_token_usage(tokens_in, tokens_out);
-    let gauge_spans = vec![
-        Span::styled("TOKENS ", theme::style_dim()),
-        Span::styled(usage, Style::default().fg(theme::PRIMARY)),
-    ];
-    Paragraph::new(Line::from(gauge_spans)).render(
-        Rect::new(inner.x + 1, gauge_y, inner.width.saturating_sub(2), 1),
-        frame.buffer_mut(),
-    );
-
-    // Row 1: model only
-    let row1_y = gauge_y + 1;
-    let model_str = config.model.clone();
-    let model_spans = vec![
-        Span::styled("MODEL ", theme::style_dim()),
-        Span::styled(model_str, Style::default().fg(theme::SECONDARY)),
-    ];
-    Paragraph::new(Line::from(model_spans)).render(
-        Rect::new(inner.x + 1, row1_y, inner.width.saturating_sub(2), 1),
-        frame.buffer_mut(),
-    );
-
-    // Row 2: active tool chips
-    if inner.height > 2 {
-        let chips_y = row1_y + 1;
-        let chips = vec![
-            ("[ BROWSER ]", theme::TOOL_BROWSER),
-            ("[ SHELL ]", theme::TOOL_SHELL),
-            ("[ FILE_SYS ]", theme::TOOL_FILE_SYS),
-            ("[ SEARCH ]", theme::TOOL_SEARCH),
-        ];
-        let mut chip_spans: Vec<Span> = Vec::new();
-        for (i, (label, col)) in chips.iter().enumerate() {
-            if i > 0 {
-                chip_spans.push(Span::raw(" "));
-            }
-            chip_spans.push(Span::styled(*label, Style::default().fg(*col)));
-        }
-        Paragraph::new(Line::from(chip_spans))
-            .alignment(Alignment::Right)
-            .render(
-                Rect::new(inner.x + 1, chips_y, inner.width.saturating_sub(2), 1),
-                frame.buffer_mut(),
-            );
-    }
-}
-
-// ── Main process panel ───────────────────────────────────────────────────────
-
-fn render_process_panel(
-    frame: &mut ratatui::Frame,
-    area: Rect,
-    transcript: &mut Transcript,
-    _show_help: bool,
-) {
-    if area.height < 3 || area.width < 20 {
-        return;
-    }
-
-    // No frame around the transcript — just the content on the terminal canvas.
-    fill_area(frame, area, theme::BG);
-    transcript.render(frame, area);
-}
-
-// ── Command input ────────────────────────────────────────────────────────────
-
-fn render_command_input(
-    frame: &mut ratatui::Frame,
-    area: Rect,
-    editor: &EditorState,
-    is_streaming: bool,
-    spinner: &OmegaSpinner,
-) {
-    if area.height < 3 || area.width < 4 {
-        return;
-    }
-
-    // Inherit the terminal background — no dark recessed fill.
-    fill_area(frame, area, theme::BG);
-
-    let line_style = Style::default().fg(theme::OUTLINE);
-    let top_y = area.y;
-    let content_y = area.y + 1;
-    let bottom_y = area.y + 2;
-
-    // Top and bottom rules only — no side borders, no labels.
-    for x in area.x..area.x + area.width {
-        frame
-            .buffer_mut()
-            .get_mut(x, top_y)
-            .set_symbol("─")
-            .set_style(line_style);
-        frame
-            .buffer_mut()
-            .get_mut(x, bottom_y)
-            .set_symbol("─")
-            .set_style(line_style);
-    }
-
-    let content_x = area.x + 1;
-    let content_w = area.width.saturating_sub(2);
-    if content_w == 0 {
-        return;
-    }
-
-    if is_streaming && editor.buffer.is_empty() {
-        let activity = format!("{} {}", spinner.current_glyph(), spinner.current_phrase());
-        Paragraph::new(Line::from(Span::styled(activity, spinner.glyph_style()))).render(
-            Rect::new(content_x, content_y, content_w, 1),
-            frame.buffer_mut(),
-        );
-    } else if !editor.buffer.is_empty() {
-        // Single-line display: keep the tail of multi-line text visible.
-        let display = editor.buffer.lines().last().unwrap_or("");
-        let shown = if display.chars().count() > content_w as usize {
-            let skip = display.chars().count().saturating_sub(content_w as usize);
-            display.chars().skip(skip).collect::<String>()
-        } else {
-            display.to_string()
-        };
-        Paragraph::new(Line::from(Span::styled(
-            shown,
-            Style::default().fg(theme::FG),
-        )))
-        .render(
-            Rect::new(content_x, content_y, content_w, 1),
-            frame.buffer_mut(),
-        );
-    }
-    // Empty idle: just the two horizontal lines.
 }
 
 // ── Config helpers ──────────────────────────────────────────────────────────

@@ -15,7 +15,6 @@ use super::help;
 use super::provider_panel;
 use super::status::StatusState;
 use super::theme;
-use super::component::Component;
 use super::transcript::Transcript;
 
 use crate::commands;

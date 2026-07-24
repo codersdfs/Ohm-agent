@@ -209,11 +209,11 @@ pub fn render_suggestions(area: Rect, buf: &mut Buffer, suggestions: &[String], 
     popup.render(popup_area, buf);
 }
 
-use crate::tui::component::{Action, Component};
+use crate::tui::component::Action;
 use crossterm::event::{KeyCode, KeyEventKind};
 
-impl Component for EditorState {
-    fn handle_key(&mut self, key: crossterm::event::KeyEvent) -> Action {
+impl EditorState {
+    pub fn handle_key(&mut self, key: crossterm::event::KeyEvent) -> Action {
         if key.kind != KeyEventKind::Press {
             return Action::Noop;
         }
@@ -280,9 +280,5 @@ impl Component for EditorState {
             }
             _ => Action::Noop,
         }
-    }
-
-    fn render(&mut self, f: &mut ratatui::Frame, area: ratatui::layout::Rect) {
-        f.render_widget(&*self, area);
     }
 }

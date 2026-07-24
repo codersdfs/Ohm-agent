@@ -1,7 +1,7 @@
-use crate::{AppState, MutexExt};
+use crate::AppState;
 use entropy::{DriftScanner, GarbageCollector};
 
-pub async fn run_entropy_scan(state: &AppState, project_root: &str) -> Result<String, String> {
+pub async fn run_entropy_scan(_state: &AppState, project_root: &str) -> Result<String, String> {
     let scanner = DriftScanner::new();
     let report = scanner.scan(project_root).await?;
 
@@ -21,7 +21,7 @@ pub async fn run_entropy_scan(state: &AppState, project_root: &str) -> Result<St
     Ok(output)
 }
 
-pub async fn run_entropy_gc(state: &AppState, project_root: &str, fix: bool) -> Result<String, String> {
+pub async fn run_entropy_gc(_state: &AppState, project_root: &str, fix: bool) -> Result<String, String> {
     let gc = GarbageCollector::new();
     gc.collect(project_root, fix)
 }

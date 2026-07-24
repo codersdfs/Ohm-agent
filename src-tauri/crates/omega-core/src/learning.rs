@@ -1,4 +1,4 @@
-use crate::{AppState, MutexExt};
+use crate::AppState;
 use harness::negative_knowledge::{compute_signature, normalize_message, NegativeKnowledgeStore};
 
 /// Learning module — manages negative knowledge injection into system prompt.

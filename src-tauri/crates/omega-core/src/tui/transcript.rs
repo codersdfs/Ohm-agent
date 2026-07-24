@@ -1175,7 +1175,7 @@ pub fn scroll_bottom(scroll: &mut ScrollState) {
 
 // ─── Transcript Component ────────────────────────────────────────────────────
 
-use crate::tui::component::{Action, Component};
+use crate::tui::component::Action;
 
 /// Aggregated transcript state: entries, scroll, conversation history, streaming channel.
 pub struct Transcript {
@@ -1403,8 +1403,8 @@ impl Transcript {
     }
 }
 
-impl Component for Transcript {
-    fn handle_key(&mut self, key: crossterm::event::KeyEvent) -> Action {
+impl Transcript {
+    pub fn handle_key(&mut self, key: crossterm::event::KeyEvent) -> Action {
         use crossterm::event::{KeyCode, KeyEventKind};
         if key.kind != KeyEventKind::Press {
             return Action::Noop;
@@ -1418,7 +1418,7 @@ impl Component for Transcript {
         }
     }
 
-    fn render(&mut self, f: &mut ratatui::Frame, area: Rect) {
+    pub fn render(&mut self, f: &mut ratatui::Frame, area: Rect) {
         render(
             area,
             f.buffer_mut(),

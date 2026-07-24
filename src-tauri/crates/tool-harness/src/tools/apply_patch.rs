@@ -159,6 +159,7 @@ Prefer this over full-file write for targeted changes.".into()),
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct FileChange {
     action: String,
     path: String,
@@ -285,6 +286,7 @@ fn apply_patch(
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct Hunk {
     old_start: usize,
     old_count: usize,

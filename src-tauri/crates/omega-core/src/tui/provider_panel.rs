@@ -61,6 +61,8 @@ pub struct ProviderPanelState {
     pub filtered: Vec<usize>,
     pub models_rx: Option<tokio::sync::oneshot::Receiver<Result<Vec<String>, String>>>,
     pub config: providers::ProviderConfig,
+    /// Shared filter logic (kept in sync with `filtered`, `selected_model`, `model_scroll`).
+    filter_list: super::filter::FilteredList<String>,
 }
 
 impl ProviderPanelState {
@@ -106,6 +108,7 @@ impl ProviderPanelState {
             filtered: Vec::new(),
             models_rx: None,
             config: config.clone(),
+            filter_list: super::filter::FilteredList::new(),
         };
         set_step(&mut state, step);
         state.recompute_filter();
@@ -132,55 +135,28 @@ impl ProviderPanelState {
         }
     }
 
+    /// Reset the filter state (called when models are cleared/fetched).
+    pub fn reset_filter_state(&mut self) {
+        self.filtered.clear();
+        self.selected_model = 0;
+        self.model_scroll = 0;
+        self.filter_list = super::filter::FilteredList::new();
+    }
+
     pub fn recompute_filter(&mut self) {
-        let query = self.search_buffer.to_lowercase();
-        let current = self.model_buffer.to_lowercase();
-
-        let mut ranked: Vec<(usize, i32)> = self
-            .models
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, name)| {
-                let lower = name.to_lowercase();
-                if !query.is_empty() && !lower.contains(&query) {
-                    return None;
-                }
-                let mut score = 0i32;
-                if lower == current {
-                    score += 1000;
-                }
-                if !query.is_empty() {
-                    if lower == query {
-                        score += 500;
-                    } else if lower.starts_with(&query) {
-                        score += 200;
-                    } else {
-                        score += 50;
-                    }
-                }
-                // Prefer shorter names when scores equal-ish.
-                score -= (lower.len() as i32) / 50;
-                Some((idx, score))
-            })
-            .collect();
-
-        ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-        self.filtered = ranked.into_iter().map(|(i, _)| i).collect();
-
-        if self.filtered.is_empty() {
-            self.selected_model = 0;
-            self.model_scroll = 0;
-        } else {
-            // Prefer current model if still in filtered set.
-            if let Some(pos) = self.filtered.iter().position(|&i| {
-                self.models.get(i).map(|m| m.as_str()) == Some(self.model_buffer.as_str())
-            }) {
-                self.selected_model = pos;
-            } else {
-                self.selected_model = self.selected_model.min(self.filtered.len() - 1);
-            }
-            ensure_model_visible(self);
-        }
+        // Delegate to the shared FilteredList, then sync our public fields.
+        let current = self.model_buffer.clone();
+        self.filter_list.set_preferred(
+            self.models
+                .iter()
+                .position(|m| m == &current),
+        );
+        self.filter_list.recompute(&self.models, &self.search_buffer, |name, query| {
+            rank_model(name, query, &current)
+        });
+        self.filtered = self.filter_list.filtered.clone();
+        self.selected_model = self.filter_list.selected;
+        self.model_scroll = self.filter_list.scroll;
     }
 
     fn provider_name(&self) -> String {
@@ -215,6 +191,7 @@ fn select_provider(state: &mut ProviderPanelState, index: usize) {
     state.selected_model = 0;
     state.model_scroll = 0;
     state.filtered.clear();
+    state.filter_list = super::filter::FilteredList::new();
     state.search_buffer.clear();
     state.search_cursor = 0;
 
@@ -225,17 +202,46 @@ fn select_provider(state: &mut ProviderPanelState, index: usize) {
 }
 
 fn ensure_model_visible(state: &mut ProviderPanelState) {
-    if state.filtered.is_empty() {
-        state.selected_model = 0;
-        state.model_scroll = 0;
-        return;
+    // Delegate to the shared FilteredList, then sync our public fields.
+    state.filter_list.selected = state.selected_model;
+    state.filter_list.scroll = state.model_scroll;
+    state.filter_list.ensure_visible(VISIBLE_MODELS);
+    state.selected_model = state.filter_list.selected;
+    state.model_scroll = state.filter_list.scroll;
+}
+
+/// Rank a model name against a query. Returns `Some(score)` if it matches.
+/// Uses ranked scoring: exact match (+500), prefix (+200), contains (+50),
+/// with a length penalty. The current model gets a large bonus (+1000).
+fn rank_model(name: &String, query: &str, current: &str) -> Option<i32> {
+    let lower = name.to_lowercase();
+    let q = query.to_lowercase();
+
+    if !q.is_empty() && !lower.contains(&q) {
+        return None;
     }
-    state.selected_model = state.selected_model.min(state.filtered.len() - 1);
-    if state.selected_model < state.model_scroll {
-        state.model_scroll = state.selected_model;
-    } else if state.selected_model >= state.model_scroll + VISIBLE_MODELS {
-        state.model_scroll = state.selected_model + 1 - VISIBLE_MODELS;
+
+    let mut score = 0i32;
+
+    // Prefer the current model.
+    if lower == current.to_lowercase() {
+        score += 1000;
     }
+
+    if !q.is_empty() {
+        if lower == q {
+            score += 500;
+        } else if lower.starts_with(&q) {
+            score += 200;
+        } else {
+            score += 50;
+        }
+    }
+
+    // Prefer shorter names when scores are equal.
+    score -= (lower.len() as i32) / 50;
+
+    Some(score)
 }
 
 fn set_step(state: &mut ProviderPanelState, step: WizardStep) {
@@ -1054,12 +1060,12 @@ fn render_step_advanced(
         .render(gen_inner, buf);
 }
 
-// ── Component impl ──────────────────────────────────────────────────────────
+// ── ProviderPanelState methods ────────────────────────────────────────────────
 
-use crate::tui::component::{Action, Component};
+use crate::tui::component::Action;
 
-impl Component for ProviderPanelState {
-    fn handle_key(&mut self, key: crossterm::event::KeyEvent) -> Action {
+impl ProviderPanelState {
+    pub fn handle_key(&mut self, key: crossterm::event::KeyEvent) -> Action {
         match handle_key(self, key) {
             PanelAction::Apply => Action::ProviderApply,
             PanelAction::Close => Action::ProviderClose,
@@ -1067,7 +1073,7 @@ impl Component for ProviderPanelState {
         }
     }
 
-    fn render(&mut self, f: &mut ratatui::Frame, area: ratatui::layout::Rect) {
+    pub fn render(&mut self, f: &mut ratatui::Frame, area: ratatui::layout::Rect) {
         render(area, f.buffer_mut(), self, &self.config);
     }
 }

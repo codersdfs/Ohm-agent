@@ -120,6 +120,7 @@ pub fn run_ruff(project_root: &str) -> Vec<ExternalViolation> {
 // ── Parsers ────────────────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct ClippyMessage {
     reason: String,
     #[serde(default)]
@@ -129,6 +130,7 @@ struct ClippyMessage {
 }
 
 #[derive(Deserialize, Default)]
+#[allow(dead_code)]
 struct ClippyInner {
     message: String,
     #[serde(default)]
@@ -138,6 +140,7 @@ struct ClippyInner {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct ClippySpan {
     file_name: String,
     line_start: u32,
@@ -146,11 +149,13 @@ struct ClippySpan {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct ClippyText {
     text: String,
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct ClippyCode {
     code: String,
     #[serde(default)]
@@ -184,6 +189,7 @@ struct EslintFile {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct EslintMessage {
     rule_id: Option<String>,
     severity: u32,
@@ -209,6 +215,7 @@ pub fn parse_eslint_output(json: &str) -> Vec<ExternalViolation> {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct TscError {
     file: Option<String>,
     start: Option<u32>,
@@ -236,6 +243,7 @@ pub fn parse_tsc_output(json: &str) -> Vec<ExternalViolation> {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct RuffViolation {
     location: RuffLocation,
     message: String,
@@ -244,6 +252,7 @@ struct RuffViolation {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct RuffLocation {
     row: u32,
     column: u32,

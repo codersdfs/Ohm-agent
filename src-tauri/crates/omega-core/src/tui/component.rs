@@ -1,7 +1,3 @@
-use crossterm::event::KeyEvent;
-use ratatui::layout::Rect;
-use ratatui::Frame;
-
 /// Events sent from the streaming task to the UI event loop.
 #[derive(Debug, Clone)]
 pub enum UiStreamEvent {
@@ -27,7 +23,7 @@ pub enum UiStreamEvent {
 }
 
 /// Actions that cross component boundaries.
-/// Returned by `Component::handle_key` and `Component::update`.
+/// Returned by `handle_key` methods and used for cross-component communication.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     /// Nothing to do.
@@ -60,23 +56,4 @@ pub enum Action {
     StreamDone { tokens_in: u32, tokens_out: u32 },
     /// Streaming finished with an error.
     StreamError,
-}
-
-/// A self-contained piece of UI that owns its state, handles events,
-/// and renders itself into a given area of the frame.
-pub trait Component {
-    /// React to a key event. Default returns `Action::Noop`.
-    fn handle_key(&mut self, key: KeyEvent) -> Action {
-        let _ = key;
-        Action::Noop
-    }
-
-    /// React to an action from a sibling or parent. Default returns `Action::Noop`.
-    fn update(&mut self, action: &Action) -> Action {
-        let _ = action;
-        Action::Noop
-    }
-
-    /// Draw the component into the given rect.
-    fn render(&mut self, f: &mut Frame, area: Rect);
 }

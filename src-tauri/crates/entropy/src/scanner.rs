@@ -62,7 +62,7 @@ fn detect_language(project_root: &str) -> Language {
     Language::detect(&paths)
 }
 
-fn scan_domain(dir: &Path, engine: &mut GateEngine, lang: &Language) -> (f64, u32) {
+fn scan_domain(dir: &Path, engine: &mut GateEngine, _lang: &Language) -> (f64, u32) {
     let mut total_violations = 0u32;
     let mut total_files = 0u32;
 
