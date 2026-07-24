@@ -40,7 +40,7 @@ impl Default for RoutePolicy {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderHealth {
     pub name: String,
     pub reachable: bool,

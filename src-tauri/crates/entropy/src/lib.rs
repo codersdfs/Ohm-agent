@@ -4,6 +4,9 @@
 pub mod gc;
 pub mod scanner;
 
+pub use gc::GarbageCollector;
+pub use scanner::DriftScanner;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
