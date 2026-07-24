@@ -54,6 +54,25 @@ impl GateEngine {
             &self.language,
         ));
 
+        // 6. External linter checks (clippy, eslint, tsc, ruff)
+        let config = crate::gate_config::load_gate_config(&self.project_root);
+        if config.clippy_enabled && self.language == Language::Rust {
+            let violations = crate::external::run_clippy(&self.project_root);
+            all_violations.extend(violations.into_iter().map(|v| v.to_violation()));
+        }
+        if config.eslint_enabled && matches!(self.language, Language::TypeScript | Language::TypeScriptReact | Language::JavaScript) {
+            let violations = crate::external::run_eslint(&self.project_root);
+            all_violations.extend(violations.into_iter().map(|v| v.to_violation()));
+        }
+        if config.tsc_enabled && matches!(self.language, Language::TypeScript | Language::TypeScriptReact) {
+            let violations = crate::external::run_tsc(&self.project_root);
+            all_violations.extend(violations.into_iter().map(|v| v.to_violation()));
+        }
+        if config.ruff_enabled && self.language == Language::Python {
+            let violations = crate::external::run_ruff(&self.project_root);
+            all_violations.extend(violations.into_iter().map(|v| v.to_violation()));
+        }
+
         // Deduplicate by message + category
         all_violations.sort_by(|a, b| a.message.cmp(&b.message));
         all_violations.dedup_by(|a, b| a.message == b.message && a.category == b.category);

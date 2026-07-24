@@ -1,4 +1,6 @@
 pub mod engine;
+pub mod external;
+pub mod gate_config;
 pub mod golden;
 pub mod patterns;
 pub mod persistence;
@@ -10,7 +12,7 @@ pub mod taste;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Language {
     Rust,
     TypeScript,
@@ -125,6 +127,7 @@ pub enum ViolationCategory {
     Taste,
     Golden,
     Repeated,
+    External,
 }
 
 impl GateResult {
