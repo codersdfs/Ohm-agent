@@ -6,6 +6,7 @@
 //! 3. Route method calls to registered handlers
 //! 4. Manage session state
 
+use crate::bridge;
 use crate::error::McpError;
 use crate::transport::{McpTransport, ReceiveResult};
 use crate::types::*;
@@ -86,6 +87,7 @@ pub struct McpServer {
     async_handlers: RwLock<HashMap<String, AsyncHandlerPinned>>,
     tool_pipeline: Option<Arc<tool_harness::ExecutionPipeline>>,
     tool_definitions: RwLock<Vec<McpToolDefinition>>,
+    tool_router: Arc<bridge::ToolRouter>,
 }
 
 impl McpServer {
@@ -98,6 +100,7 @@ impl McpServer {
             async_handlers: RwLock::new(HashMap::new()),
             tool_pipeline: None,
             tool_definitions: RwLock::new(Vec::new()),
+            tool_router: Arc::new(bridge::ToolRouter::new()),
         };
         server.register_builtin_handlers();
         server
@@ -112,6 +115,7 @@ impl McpServer {
             async_handlers: RwLock::new(HashMap::new()),
             tool_pipeline: None,
             tool_definitions: RwLock::new(Vec::new()),
+            tool_router: Arc::new(bridge::ToolRouter::new()),
         };
         server.register_builtin_handlers();
         server
@@ -127,6 +131,10 @@ impl McpServer {
                 input_schema: td.function.parameters,
             }
         }).collect();
+
+        // Register with the router (sync — called from builder context)
+        self.tool_router.register_native_tools_blocking(defs.clone());
+
         *self.tool_definitions.write().unwrap() = defs;
 
         let pipeline = tool_harness::ExecutionPipeline::new()
@@ -254,18 +262,28 @@ impl McpServer {
             None => return,
         };
 
-        // tools/list — return stored tool definitions
-        let definitions = self.tool_definitions.read().unwrap().clone();
-        self.register_sync_handler("tools/list", move |_| {
-            Ok(serde_json::to_value(ListToolsResult {
-                tools: definitions.clone(),
-            })
-            .map_err(|e| McpError::internal_error(format!("Serialize error: {e}")))?)
+        // tools/list — return merged tool definitions from router
+        let router_for_list = self.tool_router.clone();
+        self.register_async_handler("tools/list", move |_params| {
+            let router = router_for_list.clone();
+            async move {
+                let tools = router.list_tools().await;
+                // Fall back to stored definitions if router is empty
+                if tools.is_empty() {
+                    // Try fresh discovery from remote servers
+                    let _ = router.discover_remote_tools().await;
+                    let _tools = router.list_tools().await;
+                }
+                Ok(serde_json::to_value(ListToolsResult { tools })
+                    .map_err(|e| McpError::internal_error(format!("Serialize error: {e}")))?)
+            }
         });
 
-        // tools/call — async handler via pipeline
+        // tools/call — try router first, then native pipeline
+        let router_for_call = self.tool_router.clone();
         let pipeline_for_call = pipeline.clone();
         self.register_async_handler("tools/call", move |params| {
+            let router = router_for_call.clone();
             let pipeline = pipeline_for_call.clone();
             async move {
                 let call_params: CallToolParams =
@@ -276,6 +294,21 @@ impl McpServer {
                 let tool_name = call_params.name;
                 let tool_args = call_params.arguments.unwrap_or(serde_json::json!({}));
 
+                // First, try the router (covers remote tools)
+                match router.call_tool(&tool_name, tool_args.clone()).await {
+                    Ok(result) => {
+                        return serde_json::to_value(result)
+                            .map_err(|e| McpError::internal_error(format!("Serialize: {e}")));
+                    }
+                    Err(e) if e.contains("not found") || e.contains("Native tool") => {
+                        // Tool not found in router — try native pipeline
+                    }
+                    Err(e) => {
+                        return Err(McpError::tool_execution_error(&tool_name, e));
+                    }
+                }
+
+                // Fall back to native tool-harness pipeline
                 let input = tool_harness::ToolInput {
                     tool: tool_name.clone(),
                     args: tool_args,
@@ -351,16 +384,22 @@ impl McpServer {
             return String::new();
         }
 
-        // Look up the handler — try async handlers first, then sync
+        // Look up the handler — try async handlers first, then sync.
+        // IMPORTANT: `std::sync::RwLockReadGuard` is NOT `Send` — we must
+        // clone the `Arc` and drop the guard BEFORE any `.await` point so
+        // the future remains `Send` (required by axum).
         let response = {
-            let async_handlers = self.async_handlers.read().unwrap();
-            if let Some(handler) = async_handlers.get(&method) {
+            let async_handler = {
+                let async_handlers = self.async_handlers.read().unwrap();
+                async_handlers.get(&method).cloned()
+            }; // guard dropped here
+
+            if let Some(handler) = async_handler {
                 match handler(params).await {
                     Ok(result) => JsonRpcResponse::success(request_id, result),
                     Err(err) => err.to_json_rpc_response(request_id),
                 }
             } else {
-                drop(async_handlers);
                 let sync_handlers = self.sync_handlers.read().unwrap();
                 match sync_handlers.get(&method) {
                     Some(handler) => {

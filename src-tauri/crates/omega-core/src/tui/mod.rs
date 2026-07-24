@@ -3,6 +3,7 @@ pub mod component;
 pub mod editor;
 pub mod header;
 pub mod help;
+pub mod layout;
 pub mod markdown;
 pub mod omega_mark;
 pub mod provider_panel;

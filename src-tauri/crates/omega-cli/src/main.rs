@@ -23,6 +23,7 @@ use omega_core::tui::spinner::{OmegaSpinner, SpinnerState};
 use omega_core::tui::status::StatusState;
 use omega_core::tui::theme;
 use omega_core::tui::transcript::{self, Transcript, TranscriptEntry};
+use omega_core::commands::web;
 use omega_core::{commands, default_db_path, AppState, ChatEmitter};
 
 // ── Event types for streaming ────────────────────────────────────────────────
@@ -532,7 +533,7 @@ impl App {
         match cmd.to_lowercase().trim() {
             "/help" | "/?" | "/h" => {
                 self.transcript.entries.push(TranscriptEntry::Notice {
-                    text: "Commands: /help, /clear, /tools, /model <name>, /exit, /cost".into(),
+                    text: "Commands: /help, /clear, /tools, /model, /provider, /cost, /exit, /fetch, /status, /search, /gate, /rules, /score, /memory".into(),
                     is_error: false,
                 });
             }
@@ -614,6 +615,325 @@ impl App {
             "/exit" | "/quit" => {
                 self.should_quit = true;
             }
+            "/fetch" | "/web" | "/url" => {
+                // Parse URL from the command (everything after /fetch )
+                let url = cmd.trim_start_matches("/fetch")
+                    .trim_start_matches("/web")
+                    .trim_start_matches("/url")
+                    .trim();
+                if url.is_empty() {
+                    self.transcript.entries.push(TranscriptEntry::Notice {
+                        text: "Usage: /fetch <url> — e.g. /fetch https://example.com".into(),
+                        is_error: true,
+                    });
+                    return;
+                }
+
+                self.transcript.entries.push(TranscriptEntry::Notice {
+                    text: format!("Fetching {url} …"),
+                    is_error: false,
+                });
+
+                // Use `omega_core::commands::web::fetch_url` to fetch the URL content.
+                // `handle_slash_command` is sync (called from the TUI event loop),
+                // so use tokio's block_in_place + Handle::current().block_on() to
+                // run the async HTTP call synchronously — the UI freezes briefly
+                // but this is acceptable for explicit user-invoked commands.
+                let result = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current()
+                        .block_on(web::fetch_url(url))
+                });
+                match result {
+                    Ok(body) => {
+                        let display = if body.len() > 2000 {
+                            let d: String = body.chars().take(2000).collect();
+                            format!("{d}\n\n[... truncated]")
+                        } else {
+                            body
+                        };
+                        self.transcript.entries.push(TranscriptEntry::Notice {
+                            text: format!("Content from {url}:\n{display}"),
+                            is_error: false,
+                        });
+                    }
+                    Err(e) => {
+                        self.transcript.entries.push(TranscriptEntry::Notice {
+                            text: format!("Error fetching {url}: {e}"),
+                            is_error: true,
+                        });
+                    }
+                }
+            }
+            "/status" | "/ping" | "/health" | "/net" => {
+                self.transcript.entries.push(TranscriptEntry::Notice {
+                    text: "Checking connectivity …".into(),
+                    is_error: false,
+                });
+                let result = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current()
+                        .block_on(web::check_status())
+                });
+                match result {
+                    Ok(status) => {
+                        let internet = status["internet_reachable"].as_bool().unwrap_or(false);
+                        let endpoints = status["provider_endpoints"].as_object()
+                            .map(|m| {
+                                m.iter()
+                                    .map(|(k, v)| {
+                                        let ok = v.as_bool().unwrap_or(false);
+                                        format!("  {k}: {}", if ok { "✓ reachable" } else { "✗ unreachable" })
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            })
+                            .unwrap_or_default();
+                        self.transcript.entries.push(TranscriptEntry::Notice {
+                            text: format!(
+                                "Status:\n  Internet: {}\n{}",
+                                if internet { "✓ connected" } else { "✗ disconnected" },
+                                endpoints
+                            ),
+                            is_error: false,
+                        });
+                    }
+                    Err(e) => {
+                        self.transcript.entries.push(TranscriptEntry::Notice {
+                            text: format!("Status check failed: {e}"),
+                            is_error: true,
+                        });
+                    }
+                }
+            }
+            "/search" | "/google" | "/websearch" => {
+                let query = cmd.trim_start_matches("/search")
+                    .trim_start_matches("/google")
+                    .trim_start_matches("/websearch")
+                    .trim();
+                if query.is_empty() {
+                    self.transcript.entries.push(TranscriptEntry::Notice {
+                        text: "Usage: /search <query> — e.g. /search rust async programming".into(),
+                        is_error: true,
+                    });
+                    return;
+                }
+                self.transcript.entries.push(TranscriptEntry::Notice {
+                    text: format!("Searching for \"{query}\" …"),
+                    is_error: false,
+                });
+                let result = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current()
+                        .block_on(web::search_web(query))
+                });
+                match result {
+                    Ok(results) => {
+                        if results.is_empty() {
+                            self.transcript.entries.push(TranscriptEntry::Notice {
+                                text: format!("No results found for \"{query}\""),
+                                is_error: true,
+                            });
+                        } else {
+                            let mut lines = format!("Search results for \"{query}\":\n").to_string();
+                            for (i, r) in results.iter().enumerate() {
+                                lines.push_str(&format!("\n{}. {} — {}\n   {}", i + 1, r.title, r.url, r.snippet));
+                            }
+                            self.transcript.entries.push(TranscriptEntry::Notice {
+                                text: lines,
+                                is_error: false,
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        self.transcript.entries.push(TranscriptEntry::Notice {
+                            text: format!("Search failed: {e}"),
+                            is_error: true,
+                        });
+                    }
+                }
+            }
+            "/gate" => {
+                let (path, content) = match self.read_file_or_buffer(cmd, "/gate") {
+                    Ok(v) => v,
+                    Err(e) => {
+                        self.transcript.entries.push(TranscriptEntry::Notice {
+                            text: e,
+                            is_error: true,
+                        });
+                        return;
+                    }
+                };
+                self.transcript.entries.push(TranscriptEntry::Notice {
+                    text: format!("Running gate on {path}…"),
+                    is_error: false,
+                });
+                let request = commands::gate::GateCheckRequest {
+                    content,
+                    context: path.to_string(),
+                    language: None,
+                };
+                let result = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current()
+                        .block_on(commands::gate::check_gate(&self.state, request))
+                });
+                match result {
+                    Ok(g) => {
+                        let status = if g.passed { "PASSED" } else { "FAILED" };
+                        let mut lines = format!("Gate {path}: {}/100 — {status}\n", g.score);
+                        if g.violations.is_empty() {
+                            lines.push_str("No violations");
+                        } else {
+                            lines.push_str(&format!("{} violation(s):\n", g.violations.len()));
+                            for v in &g.violations {
+                                let line = v.line.map(|l| format!(" L{l}")).unwrap_or_default();
+                                lines.push_str(&format!("  [{}]{}: {}\n", v.category, line, v.message));
+                            }
+                        }
+                        self.transcript.entries.push(TranscriptEntry::Notice {
+                            text: lines,
+                            is_error: false,
+                        });
+                    }
+                    Err(e) => {
+                        self.transcript.entries.push(TranscriptEntry::Notice {
+                            text: format!("Gate failed: {e}"),
+                            is_error: true,
+                        });
+                    }
+                }
+            }
+            "/rules" | "/pattern" => {
+                self.transcript.entries.push(TranscriptEntry::Notice {
+                    text: "Loading rules…".into(),
+                    is_error: false,
+                });
+                let result = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current()
+                        .block_on(commands::gate::get_rules(&self.state))
+                });
+                match result {
+                    Ok(rules) => {
+                        if rules.is_empty() {
+                            self.transcript.entries.push(TranscriptEntry::Notice {
+                                text: "No promoted rules yet".into(),
+                                is_error: false,
+                            });
+                        } else {
+                            let header = format!("Promoted rules ({} total):\n", rules.len());
+                            let lines = rules.iter().map(|r| format!("  {r}")).collect::<Vec<_>>().join("\n");
+                            self.transcript.entries.push(TranscriptEntry::Notice {
+                                text: format!("{header}{lines}"),
+                                is_error: false,
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        self.transcript.entries.push(TranscriptEntry::Notice {
+                            text: format!("Failed to load rules: {e}"),
+                            is_error: true,
+                        });
+                    }
+                }
+            }
+            "/score" => {
+                let (path, content) = match self.read_file_or_buffer(cmd, "/score") {
+                    Ok(v) => v,
+                    Err(e) => {
+                        self.transcript.entries.push(TranscriptEntry::Notice {
+                            text: e,
+                            is_error: true,
+                        });
+                        return;
+                    }
+                };
+                let request = commands::gate::GateCheckRequest {
+                    content,
+                    context: path.to_string(),
+                    language: None,
+                };
+                let result = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current()
+                        .block_on(commands::gate::check_gate(&self.state, request))
+                });
+                match result {
+                    Ok(g) => {
+                        let status = if g.passed { "PASSED" } else { "FAILED" };
+                        self.transcript.entries.push(TranscriptEntry::Notice {
+                            text: format!("Score: {}/100 — {} ({} violations)", g.score, status, g.violations.len()),
+                            is_error: !g.passed,
+                        });
+                    }
+                    Err(e) => {
+                        self.transcript.entries.push(TranscriptEntry::Notice {
+                            text: format!("Score failed: {e}"),
+                            is_error: true,
+                        });
+                    }
+                }
+            }
+            "/memory" | "/mem" => {
+                let query = cmd.trim_start_matches("/memory").trim_start_matches("/mem").trim();
+                if query.is_empty() {
+                    // Show memory stats
+                    let count_session = tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current()
+                            .block_on(commands::memory::memory_count(&self.state, Some("session".into())))
+                    });
+                    let count_project = tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current()
+                            .block_on(commands::memory::memory_count(&self.state, Some("project".into())))
+                    });
+                    let count_user = tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current()
+                            .block_on(commands::memory::memory_count(&self.state, Some("user".into())))
+                    });
+                    let s = count_session.unwrap_or(0);
+                    let p = count_project.unwrap_or(0);
+                    let u = count_user.unwrap_or(0);
+                    self.transcript.entries.push(TranscriptEntry::Notice {
+                        text: format!("Memory stats:\n  session: {s} entries\n  project: {p} entries\n  user:    {u} entries"),
+                        is_error: false,
+                    });
+                } else {
+                    self.transcript.entries.push(TranscriptEntry::Notice {
+                        text: format!("Searching memory for \"{query}\"…"),
+                        is_error: false,
+                    });
+                    let request = commands::memory::MemorySearchRequest {
+                        query: query.to_string(),
+                        layer: None,
+                        limit: Some(10),
+                    };
+                    let result = tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current()
+                            .block_on(commands::memory::memory_search(&self.state, request))
+                    });
+                    match result {
+                        Ok(response) => {
+                            if response.entries.is_empty() {
+                                self.transcript.entries.push(TranscriptEntry::Notice {
+                                    text: format!("No results found for \"{query}\""),
+                                    is_error: false,
+                                });
+                            } else {
+                                let mut lines = format!("Memory results ({}):\n", response.entries.len());
+                                for (i, entry) in response.entries.iter().enumerate() {
+                                    let rel = response.relevance.get(i).map(|r| format!(" [{:.2}]", r)).unwrap_or_default();
+                                    lines.push_str(&format!("  [{}] {} — {}{}\n", entry.layer.as_str(), entry.key, entry.value.chars().take(80).collect::<String>(), rel));
+                                }
+                                self.transcript.entries.push(TranscriptEntry::Notice {
+                                    text: lines,
+                                    is_error: false,
+                                });
+                            }
+                        }
+                        Err(e) => {
+                            self.transcript.entries.push(TranscriptEntry::Notice {
+                                text: format!("Memory search failed: {e}"),
+                                is_error: true,
+                            });
+                        }
+                    }
+                }
+            }
             other => {
                 self.transcript.entries.push(TranscriptEntry::Notice {
                     text: format!("Unknown command: {}. Type /help for commands.", other),
@@ -621,6 +941,22 @@ impl App {
                 });
             }
         }
+    }
+
+    /// Read a file by path, or fall back to the editor buffer if path is empty.
+    /// Returns Ok((path_display, content)) or Err with an error message.
+    fn read_file_or_buffer(&self, cmd: &str, prefix: &str) -> Result<(String, String), String> {
+        let path = cmd.trim_start_matches(prefix).trim();
+        let content = if path.is_empty() {
+            self.editor.buffer.clone()
+        } else {
+            std::fs::read_to_string(path)
+                .map_err(|e| format!("Failed to read {path}: {e}"))?
+        };
+        if content.is_empty() {
+            return Err("File is empty".into());
+        }
+        Ok((path.to_string(), content))
     }
 
     /// Start streaming a response from the LLM.
@@ -892,7 +1228,7 @@ impl App {
         // Input is a fixed 3-row strip when closed; expanded when palette is open.
         let editor_h = if self.show_command_palette {
             // 1 (top border) + 1 (search) + rows + 1 (bottom padding)
-            let rows = self.command_palette.filtered.len().min(6).max(1) as u16;
+            let rows = self.command_palette.filtered.len().min(8).max(1) as u16;
             rows.saturating_add(3).min(12)
         } else {
             3u16
@@ -1555,16 +1891,25 @@ fn main() -> Result<()> {
         CliAction::ServeMcp {
             port,
             host,
-            auth_token: _,
+            auth_token,
             skills_dir: _,
-        } => run_mcp_server(port, host),
+        } => run_mcp_server(port, host, auth_token),
     }
 }
 
-fn run_mcp_server(port: u16, host: String) -> Result<()> {
+fn run_mcp_server(port: u16, host: String, auth_token: Option<String>) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
         log::info!("Starting Omega MCP server on {host}:{port}");
+
+        let mut transport = mcp_server::transport::http::HttpTransport::bind(&host, port);
+
+        // Apply auth token if configured
+        if let Some(ref token) = auth_token {
+            transport = transport.with_auth_token(token.clone());
+            println!("  Auth: Bearer token enabled");
+        }
+
         println!("Ω Omega MCP Server");
         println!("  Listening on http://{host}:{port}");
         println!("  Protocol: MCP 2024-11-05");
@@ -1574,18 +1919,23 @@ fn run_mcp_server(port: u16, host: String) -> Result<()> {
 
         // Build the MCP server with tool harness
         let registry = tool_harness::tools::default_tool_registry();
-        let _server = mcp_server::McpServer::new()
-            .with_tool_registry(registry);
+        let server = Arc::new(
+            mcp_server::McpServer::new()
+                .with_tool_registry(registry),
+        );
 
-        // Create and serve the HTTP transport
-        let mut transport = mcp_server::transport::http::HttpTransport::bind(&host, port);
-        let handle = transport.serve().await
+        // Start serving — server is passed to transport to wire into Axum state
+        let handle = transport.serve(server).await
             .map_err(|e| anyhow::anyhow!("Failed to start MCP server: {e}"))?;
 
         // Ctrl+C handler
         tokio::signal::ctrl_c().await.ok();
         log::info!("Shutting down MCP server");
         handle.await.ok();
+
+        // Print server stats on shutdown
+        println!();
+        println!("Ω MCP Server stopped");
         Ok(())
     })
 }

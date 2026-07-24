@@ -7,6 +7,7 @@ description = "Omega Agent core library — shared between Tauri GUI and CLI"
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+reqwest = { version = "0.12", features = ["json"] }
 log = "0.4"
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1", features = ["v4"] }
