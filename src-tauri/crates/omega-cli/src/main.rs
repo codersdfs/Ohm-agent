@@ -18,7 +18,7 @@ use omega_core::tui::editor::{EditorMode, EditorState};
 use omega_core::tui::layout::{render_full_layout, LayoutChrome};
 use omega_core::tui::spinner::SpinnerState;
 use omega_core::tui::status::StatusState;
-use omega_core::tui::transcript::{self, Transcript, TranscriptEntry};
+use omega_core::tui::transcript::Transcript;
 use omega_core::commands::web;
 use omega_core::{commands, default_db_path, AppState, ChatEmitter};
 
@@ -184,62 +184,41 @@ impl App {
         };
 
         // Welcome notice
-        app.transcript.entries.push(TranscriptEntry::Notice {
-            text: format!(
+        app.transcript.add_notice(format!(
                 "Ω v{} — {} ({}). Type a message to start.",
                 env!("CARGO_PKG_VERSION"),
                 app.config.model,
                 app.config.kind
-            ),
-            is_error: false,
-        });
+            ), false);
 
         // Session resume / new notice
         if resumed {
-            app.transcript.entries.push(TranscriptEntry::Notice {
-                text: format!(
+            app.transcript.add_notice(format!(
                     "Resumed session {} ({} messages)",
                     &session_id[..session_id.len().min(8)],
                     msg_count
-                ),
-                is_error: false,
-            });
+                ), false);
             app.transcript.load_from_session(load.messages);
         } else {
-            app.transcript.entries.push(TranscriptEntry::Notice {
-                text: format!("New session {}", &session_id[..session_id.len().min(8)]),
-                is_error: false,
-            });
+            app.transcript.add_notice(format!("New session {}", &session_id[..session_id.len().min(8)]), false);
         }
         for w in warnings {
-            app.transcript.entries.push(TranscriptEntry::Notice {
-                text: format!("Session load: {w}"),
-                is_error: true,
-            });
+            app.transcript.add_notice(format!("Session load: {w}"), true);
         }
 
         // Show setup hint when API key is needed for cloud providers
         let is_local = matches!(app.config.kind, providers::ProviderKind::Local);
         if app.config.api_key.is_none() && !is_local {
-            app.transcript.entries.push(TranscriptEntry::Notice {
-                text: "No API key found. Set OMEGA_API_KEY or run: omega -p local".into(),
-                is_error: true,
-            });
+            app.transcript.add_notice("No API key found. Set OMEGA_API_KEY or run: omega -p local".into(), true);
         }
 
         // Load MCP skills
         let (mcp_loaded, mcp_errors) = commands::mcp::load_skills();
         if mcp_loaded > 0 {
-            app.transcript.entries.push(TranscriptEntry::Notice {
-                text: format!("MCP: {} skills loaded", mcp_loaded),
-                is_error: false,
-            });
+            app.transcript.add_notice(format!("MCP: {} skills loaded", mcp_loaded), false);
         }
         for err in &mcp_errors {
-            app.transcript.entries.push(TranscriptEntry::Notice {
-                text: format!("MCP: {}", err),
-                is_error: true,
-            });
+            app.transcript.add_notice(format!("MCP: {}", err), true);
         }
 
         app
@@ -286,13 +265,10 @@ impl App {
                     self.config = new_config.clone();
                     save_config(&self.config);
                     save_api_key(self.config.api_key.as_deref());
-                    self.transcript.entries.push(TranscriptEntry::Notice {
-                        text: format!(
+                    self.transcript.add_notice(format!(
                             "Provider set to {} ({})",
                             self.config.model, self.config.kind
-                        ),
-                        is_error: false,
-                    });
+                        ), false);
                     self.show_provider_panel = false;
                 }
                 omega_core::tui::provider_panel::PanelAction::Close => {
@@ -372,25 +348,17 @@ impl App {
         match key.code {
             KeyCode::Up => {
                 self.recall_history_up();
-                transcript::scroll_up(&mut self.transcript.scroll, 3);
+                self.transcript.scroll_up(3);
             }
             KeyCode::Down => {
                 self.recall_history_down();
-                transcript::scroll_down(
-                    &mut self.transcript.scroll,
-                    self.transcript.entries.len(),
-                    3,
-                );
+                self.transcript.scroll_down(3);
             }
             KeyCode::PageUp => {
-                transcript::scroll_up(&mut self.transcript.scroll, 10);
+                self.transcript.scroll_up(10);
             }
             KeyCode::PageDown => {
-                transcript::scroll_down(
-                    &mut self.transcript.scroll,
-                    self.transcript.entries.len(),
-                    10,
-                );
+                self.transcript.scroll_down(10);
             }
             _ => {}
         }
@@ -401,7 +369,7 @@ impl App {
         self.cancel_flag.store(true, Ordering::SeqCst);
 
         // Drop the receiver so the streaming task's tx.send() fails
-        self.transcript.stream_event_rx = None;
+        self.transcript.drop_stream_rx();
 
         self.is_streaming = false;
         self.editor.state = EditorMode::Idle;
@@ -410,25 +378,13 @@ impl App {
         self.status.set_spinner_state(SpinnerState::Idle);
 
         // Mark the pending assistant entry as stopped
-        for entry in self.transcript.entries.iter_mut().rev() {
-            if let TranscriptEntry::Assistant {
-                ref mut is_streaming,
-                ..
-            } = entry
-            {
-                *is_streaming = false;
-                break;
-            }
-        }
+        self.transcript.mark_streaming_stopped();
 
         // Show cancel notice
-        self.transcript.entries.push(TranscriptEntry::Notice {
-            text: "Stream cancelled".into(),
-            is_error: false,
-        });
+        self.transcript.add_notice("Stream cancelled".into(), false);
 
-        self.transcript.scroll.auto_scroll = true;
-        self.transcript.streaming_fragment.clear();
+        self.transcript.set_scroll_auto(true);
+        self.transcript.clear_streaming_fragment();
     }
 
     /// Navigate input history: move to older entry.
@@ -474,14 +430,10 @@ impl App {
     fn handle_mouse(&mut self, kind: MouseEventKind) {
         match kind {
             MouseEventKind::ScrollDown => {
-                transcript::scroll_down(
-                    &mut self.transcript.scroll,
-                    self.transcript.entries.len(),
-                    3,
-                );
+                self.transcript.scroll_down(3);
             }
             MouseEventKind::ScrollUp => {
-                transcript::scroll_up(&mut self.transcript.scroll, 3);
+                self.transcript.scroll_up(3);
             }
             _ => {}
         }
@@ -507,9 +459,7 @@ impl App {
         }
 
         // Add user message to transcript
-        self.transcript.entries.push(TranscriptEntry::User {
-            content: content.clone(),
-        });
+        self.transcript.add_user_message(content.clone());
 
         // Start streaming
         self.start_streaming(content);
@@ -531,62 +481,40 @@ impl App {
         let handler = match entry {
             Some(e) => e.handler,
             None => {
-                self.transcript.entries.push(TranscriptEntry::Notice {
-                    text: format!("Unknown command: {}. Type /help for commands.", cmd),
-                    is_error: true,
-                });
+                self.transcript.add_notice(format!("Unknown command: {}. Type /help for commands.", cmd), true);
                 return;
             }
         };
 
         match handler {
             omega_core::tui::command_palette::CommandHandler::Help => {
-                self.transcript.entries.push(TranscriptEntry::Notice {
-                    text: "Commands: /help, /clear, /tools, /model, /provider, /cost, /exit, /fetch, /status, /search, /gate, /rules, /score, /memory".into(),
-                    is_error: false,
-                });
+                self.transcript.add_notice("Commands: /help, /clear, /tools, /model, /provider, /cost, /exit, /fetch, /status, /search, /gate, /rules, /score, /memory".into(), false);
             }
             omega_core::tui::command_palette::CommandHandler::Clear => {
-                self.transcript.entries.clear();
-                self.transcript.messages.clear();
+                self.transcript.clear_transcript();
                 self.editor.buffer.clear();
                 match self.state.clear_session() {
                     Ok(()) => {
-                        self.transcript.entries.push(TranscriptEntry::Notice {
-                            text: "Session cleared.".into(),
-                            is_error: false,
-                        });
+                        self.transcript.add_notice("Session cleared.".into(), false);
                     }
                     Err(e) => {
                         log::error!("session clear failed: {e}");
-                        self.transcript.entries.push(TranscriptEntry::Notice {
-                            text: format!("Failed to clear session file: {e}"),
-                            is_error: true,
-                        });
+                        self.transcript.add_notice(format!("Failed to clear session file: {e}"), true);
                     }
                 }
             }
             omega_core::tui::command_palette::CommandHandler::Tools => match commands::tools::list_tools() {
                 Ok(tools) => {
                     let list = tools.join(", ");
-                    self.transcript.entries.push(TranscriptEntry::Notice {
-                        text: format!("Available tools: {}", list),
-                        is_error: false,
-                    });
+                    self.transcript.add_notice(format!("Available tools: {}", list), false);
                 }
                 Err(e) => {
-                    self.transcript.entries.push(TranscriptEntry::Notice {
-                        text: format!("Error listing tools: {}", e),
-                        is_error: true,
-                    });
+                    self.transcript.add_notice(format!("Error listing tools: {}", e), true);
                 }
             },
             omega_core::tui::command_palette::CommandHandler::Model => {
                 if self.is_streaming {
-                    self.transcript.entries.push(TranscriptEntry::Notice {
-                        text: "Can't open provider panel while streaming.".into(),
-                        is_error: true,
-                    });
+                    self.transcript.add_notice("Can't open provider panel while streaming.".into(), true);
                 } else {
                     // Model-first: jump straight to model picker for current provider.
                     self.provider_panel_state =
@@ -599,10 +527,7 @@ impl App {
             }
             omega_core::tui::command_palette::CommandHandler::Provider => {
                 if self.is_streaming {
-                    self.transcript.entries.push(TranscriptEntry::Notice {
-                        text: "Can't open provider panel while streaming.".into(),
-                        is_error: true,
-                    });
+                    self.transcript.add_notice("Can't open provider panel while streaming.".into(), true);
                 } else {
                     // Provider list is step 1 — show that when user asks for providers.
                     self.provider_panel_state =
@@ -613,13 +538,10 @@ impl App {
                 }
             }
             omega_core::tui::command_palette::CommandHandler::Cost => {
-                self.transcript.entries.push(TranscriptEntry::Notice {
-                    text: format!(
+                self.transcript.add_notice(format!(
                         "Session tokens — {} in / {} out ({} messages)",
                         self.session_tokens_in, self.session_tokens_out, self.session_messages
-                    ),
-                    is_error: false,
-                });
+                    ), false);
             }
             omega_core::tui::command_palette::CommandHandler::Exit => {
                 self.should_quit = true;
@@ -631,17 +553,11 @@ impl App {
                     .trim_start_matches("/url")
                     .trim();
                 if url.is_empty() {
-                    self.transcript.entries.push(TranscriptEntry::Notice {
-                        text: "Usage: /fetch <url> — e.g. /fetch https://example.com".into(),
-                        is_error: true,
-                    });
+                    self.transcript.add_notice("Usage: /fetch <url> — e.g. /fetch https://example.com".into(), true);
                     return;
                 }
 
-                self.transcript.entries.push(TranscriptEntry::Notice {
-                    text: format!("Fetching {url} …"),
-                    is_error: false,
-                });
+                self.transcript.add_notice(format!("Fetching {url} …"), false);
 
                 // Use `omega_core::commands::web::fetch_url` to fetch the URL content.
                 // `handle_slash_command` is sync (called from the TUI event loop),
@@ -660,24 +576,15 @@ impl App {
                         } else {
                             body
                         };
-                        self.transcript.entries.push(TranscriptEntry::Notice {
-                            text: format!("Content from {url}:\n{display}"),
-                            is_error: false,
-                        });
+                        self.transcript.add_notice(format!("Content from {url}:\n{display}"), false);
                     }
                     Err(e) => {
-                        self.transcript.entries.push(TranscriptEntry::Notice {
-                            text: format!("Error fetching {url}: {e}"),
-                            is_error: true,
-                        });
+                        self.transcript.add_notice(format!("Error fetching {url}: {e}"), true);
                     }
                 }
             }
             omega_core::tui::command_palette::CommandHandler::Status => {
-                self.transcript.entries.push(TranscriptEntry::Notice {
-                    text: "Checking connectivity …".into(),
-                    is_error: false,
-                });
+                self.transcript.add_notice("Checking connectivity …".into(), false);
                 let result = tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current()
                         .block_on(web::check_status())
@@ -696,20 +603,14 @@ impl App {
                                     .join("\n")
                             })
                             .unwrap_or_default();
-                        self.transcript.entries.push(TranscriptEntry::Notice {
-                            text: format!(
+                        self.transcript.add_notice(format!(
                                 "Status:\n  Internet: {}\n{}",
                                 if internet { "✓ connected" } else { "✗ disconnected" },
                                 endpoints
-                            ),
-                            is_error: false,
-                        });
+                            ), false);
                     }
                     Err(e) => {
-                        self.transcript.entries.push(TranscriptEntry::Notice {
-                            text: format!("Status check failed: {e}"),
-                            is_error: true,
-                        });
+                        self.transcript.add_notice(format!("Status check failed: {e}"), true);
                     }
                 }
             }
@@ -719,16 +620,10 @@ impl App {
                     .trim_start_matches("/websearch")
                     .trim();
                 if query.is_empty() {
-                    self.transcript.entries.push(TranscriptEntry::Notice {
-                        text: "Usage: /search <query> — e.g. /search rust async programming".into(),
-                        is_error: true,
-                    });
+                    self.transcript.add_notice("Usage: /search <query> — e.g. /search rust async programming".into(), true);
                     return;
                 }
-                self.transcript.entries.push(TranscriptEntry::Notice {
-                    text: format!("Searching for \"{query}\" …"),
-                    is_error: false,
-                });
+                self.transcript.add_notice(format!("Searching for \"{query}\" …"), false);
                 let result = tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current()
                         .block_on(web::search_web(query))
@@ -736,26 +631,17 @@ impl App {
                 match result {
                     Ok(results) => {
                         if results.is_empty() {
-                            self.transcript.entries.push(TranscriptEntry::Notice {
-                                text: format!("No results found for \"{query}\""),
-                                is_error: true,
-                            });
+                            self.transcript.add_notice(format!("No results found for \"{query}\""), true);
                         } else {
                             let mut lines = format!("Search results for \"{query}\":\n").to_string();
                             for (i, r) in results.iter().enumerate() {
                                 lines.push_str(&format!("\n{}. {} — {}\n   {}", i + 1, r.title, r.url, r.snippet));
                             }
-                            self.transcript.entries.push(TranscriptEntry::Notice {
-                                text: lines,
-                                is_error: false,
-                            });
+                            self.transcript.add_notice(lines, false);
                         }
                     }
                     Err(e) => {
-                        self.transcript.entries.push(TranscriptEntry::Notice {
-                            text: format!("Search failed: {e}"),
-                            is_error: true,
-                        });
+                        self.transcript.add_notice(format!("Search failed: {e}"), true);
                     }
                 }
             }
@@ -763,17 +649,11 @@ impl App {
                 let (path, content) = match self.read_file_or_buffer(cmd, "/gate") {
                     Ok(v) => v,
                     Err(e) => {
-                        self.transcript.entries.push(TranscriptEntry::Notice {
-                            text: e,
-                            is_error: true,
-                        });
+                        self.transcript.add_notice(e, true);
                         return;
                     }
                 };
-                self.transcript.entries.push(TranscriptEntry::Notice {
-                    text: format!("Running gate on {path}…"),
-                    is_error: false,
-                });
+                self.transcript.add_notice(format!("Running gate on {path}…"), false);
                 let request = commands::gate::GateCheckRequest {
                     content,
                     context: path.to_string(),
@@ -796,24 +676,15 @@ impl App {
                                 lines.push_str(&format!("  [{}]{}: {}\n", v.category, line, v.message));
                             }
                         }
-                        self.transcript.entries.push(TranscriptEntry::Notice {
-                            text: lines,
-                            is_error: false,
-                        });
+                        self.transcript.add_notice(lines, false);
                     }
                     Err(e) => {
-                        self.transcript.entries.push(TranscriptEntry::Notice {
-                            text: format!("Gate failed: {e}"),
-                            is_error: true,
-                        });
+                        self.transcript.add_notice(format!("Gate failed: {e}"), true);
                     }
                 }
             }
             omega_core::tui::command_palette::CommandHandler::Rules => {
-                self.transcript.entries.push(TranscriptEntry::Notice {
-                    text: "Loading rules…".into(),
-                    is_error: false,
-                });
+                self.transcript.add_notice("Loading rules…".into(), false);
                 let result = tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current()
                         .block_on(commands::gate::get_rules(&self.state))
@@ -821,24 +692,15 @@ impl App {
                 match result {
                     Ok(rules) => {
                         if rules.is_empty() {
-                            self.transcript.entries.push(TranscriptEntry::Notice {
-                                text: "No promoted rules yet".into(),
-                                is_error: false,
-                            });
+                            self.transcript.add_notice("No promoted rules yet".into(), false);
                         } else {
                             let header = format!("Promoted rules ({} total):\n", rules.len());
                             let lines = rules.iter().map(|r| format!("  {r}")).collect::<Vec<_>>().join("\n");
-                            self.transcript.entries.push(TranscriptEntry::Notice {
-                                text: format!("{header}{lines}"),
-                                is_error: false,
-                            });
+                            self.transcript.add_notice(format!("{header}{lines}"), false);
                         }
                     }
                     Err(e) => {
-                        self.transcript.entries.push(TranscriptEntry::Notice {
-                            text: format!("Failed to load rules: {e}"),
-                            is_error: true,
-                        });
+                        self.transcript.add_notice(format!("Failed to load rules: {e}"), true);
                     }
                 }
             }
@@ -846,10 +708,7 @@ impl App {
                 let (path, content) = match self.read_file_or_buffer(cmd, "/score") {
                     Ok(v) => v,
                     Err(e) => {
-                        self.transcript.entries.push(TranscriptEntry::Notice {
-                            text: e,
-                            is_error: true,
-                        });
+                        self.transcript.add_notice(e, true);
                         return;
                     }
                 };
@@ -865,16 +724,11 @@ impl App {
                 match result {
                     Ok(g) => {
                         let status = if g.passed { "PASSED" } else { "FAILED" };
-                        self.transcript.entries.push(TranscriptEntry::Notice {
-                            text: format!("Score: {}/100 — {} ({} violations)", g.score, status, g.violations.len()),
-                            is_error: !g.passed,
-                        });
+                        self.transcript.add_notice(format!("Score: {}/100 — {} ({} violations)", g.score, status, g.violations.len()),
+                            !g.passed);
                     }
                     Err(e) => {
-                        self.transcript.entries.push(TranscriptEntry::Notice {
-                            text: format!("Score failed: {e}"),
-                            is_error: true,
-                        });
+                        self.transcript.add_notice(format!("Score failed: {e}"), true);
                     }
                 }
             }
@@ -897,15 +751,9 @@ impl App {
                     let s = count_session.unwrap_or(0);
                     let p = count_project.unwrap_or(0);
                     let u = count_user.unwrap_or(0);
-                    self.transcript.entries.push(TranscriptEntry::Notice {
-                        text: format!("Memory stats:\n  session: {s} entries\n  project: {p} entries\n  user:    {u} entries"),
-                        is_error: false,
-                    });
+                    self.transcript.add_notice(format!("Memory stats:\n  session: {s} entries\n  project: {p} entries\n  user:    {u} entries"), false);
                 } else {
-                    self.transcript.entries.push(TranscriptEntry::Notice {
-                        text: format!("Searching memory for \"{query}\"…"),
-                        is_error: false,
-                    });
+                    self.transcript.add_notice(format!("Searching memory for \"{query}\"…"), false);
                     let request = commands::memory::MemorySearchRequest {
                         query: query.to_string(),
                         layer: None,
@@ -918,27 +766,18 @@ impl App {
                     match result {
                         Ok(response) => {
                             if response.entries.is_empty() {
-                                self.transcript.entries.push(TranscriptEntry::Notice {
-                                    text: format!("No results found for \"{query}\""),
-                                    is_error: false,
-                                });
+                                self.transcript.add_notice(format!("No results found for \"{query}\""), false);
                             } else {
                                 let mut lines = format!("Memory results ({}):\n", response.entries.len());
                                 for (i, entry) in response.entries.iter().enumerate() {
                                     let rel = response.relevance.get(i).map(|r| format!(" [{:.2}]", r)).unwrap_or_default();
                                     lines.push_str(&format!("  [{}] {} — {}{}\n", entry.layer.as_str(), entry.key, entry.value.chars().take(80).collect::<String>(), rel));
                                 }
-                                self.transcript.entries.push(TranscriptEntry::Notice {
-                                    text: lines,
-                                    is_error: false,
-                                });
+                                self.transcript.add_notice(lines, false);
                             }
                         }
                         Err(e) => {
-                            self.transcript.entries.push(TranscriptEntry::Notice {
-                                text: format!("Memory search failed: {e}"),
-                                is_error: true,
-                            });
+                            self.transcript.add_notice(format!("Memory search failed: {e}"), true);
                         }
                     }
                 }
@@ -971,15 +810,10 @@ impl App {
 
         // Create channel
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        self.transcript.stream_event_rx = Some(rx);
+        self.transcript.set_stream_rx(rx);
 
         // Add a placeholder assistant entry
-        self.transcript.entries.push(TranscriptEntry::Assistant {
-            content: String::new(),
-            rendered: None,
-            is_streaming: true,
-            thinking: String::new(),
-        });
+        self.transcript.add_assistant_entry();
 
         // Get references for the async task
         let state = self.state.clone();
@@ -988,7 +822,7 @@ impl App {
         let permission_mode = "off".to_string();
 
         // Shared message list for the task to modify
-        let messages = Arc::new(tokio::sync::Mutex::new(self.transcript.messages.clone()));
+        let messages = Arc::new(tokio::sync::Mutex::new(self.transcript.messages_clone()));
         let cancel_flag = self.cancel_flag.clone();
 
         let event_tx = tx.clone();
@@ -1061,7 +895,7 @@ impl App {
 
     /// Process streaming events from the channel.
     fn process_stream_events(&mut self) {
-        let rx = self.transcript.stream_event_rx.take();
+        let rx = self.transcript.take_stream_rx();
         let Some(mut rx) = rx else {
             return;
         };
@@ -1117,12 +951,12 @@ impl App {
             self.editor.buffer.clear();
             self.editor.cursor = 0;
             self.status.set_spinner_state(SpinnerState::Idle);
-            self.transcript.stream_event_rx = None;
-            self.transcript.streaming_fragment.clear();
-            self.transcript.scroll.auto_scroll = true; // jump to bottom
+            self.transcript.drop_stream_rx();
+            self.transcript.clear_streaming_fragment();
+            self.transcript.set_scroll_auto(true); // jump to bottom
         } else {
             // Put the rx back if we're still streaming
-            self.transcript.stream_event_rx = Some(rx);
+            self.transcript.set_stream_rx(rx);
         }
     }
 

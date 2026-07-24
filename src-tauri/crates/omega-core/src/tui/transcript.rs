@@ -1226,6 +1226,102 @@ impl Transcript {
         self.scroll.auto_scroll = true;
     }
 
+    /// Add a notice entry to the transcript.
+    pub fn add_notice(&mut self, text: String, is_error: bool) {
+        self.entries.push(TranscriptEntry::Notice {
+            text,
+            is_error,
+        });
+    }
+
+    /// Add a user message entry to the transcript.
+    pub fn add_user_message(&mut self, content: String) {
+        self.entries.push(TranscriptEntry::User {
+            content,
+        });
+    }
+
+    /// Add an assistant entry to the transcript (for streaming).
+    pub fn add_assistant_entry(&mut self) {
+        self.entries.push(TranscriptEntry::Assistant {
+            content: String::new(),
+            rendered: None,
+            is_streaming: true,
+            thinking: String::new(),
+        });
+    }
+
+    /// Clear all entries and messages (for /clear command).
+    pub fn clear_transcript(&mut self) {
+        self.entries.clear();
+        self.messages.clear();
+    }
+
+    /// Set the auto-scroll flag on the scroll state.
+    pub fn set_scroll_auto(&mut self, auto: bool) {
+        self.scroll.auto_scroll = auto;
+    }
+
+    /// Clear the streaming fragment buffer.
+    pub fn clear_streaming_fragment(&mut self) {
+        self.streaming_fragment.clear();
+    }
+
+    /// Set the stream event receiver.
+    pub fn set_stream_rx(
+        &mut self,
+        rx: tokio::sync::mpsc::UnboundedReceiver<super::component::UiStreamEvent>,
+    ) {
+        self.stream_event_rx = Some(rx);
+    }
+
+    /// Take the stream event receiver (returns None if already taken).
+    pub fn take_stream_rx(
+        &mut self,
+    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<super::component::UiStreamEvent>> {
+        self.stream_event_rx.take()
+    }
+
+    /// Drop the stream event receiver (sets to None).
+    pub fn drop_stream_rx(&mut self) {
+        self.stream_event_rx = None;
+    }
+
+    /// Mark the last streaming assistant entry as stopped.
+    pub fn mark_streaming_stopped(&mut self) {
+        for entry in self.entries.iter_mut().rev() {
+            if let TranscriptEntry::Assistant {
+                ref mut is_streaming,
+                ..
+            } = entry
+            {
+                *is_streaming = false;
+                break;
+            }
+        }
+    }
+
+    /// Returns the number of entries in the transcript.
+    pub fn entries_len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Scroll up by `delta` lines.
+    pub fn scroll_up(&mut self, delta: usize) {
+        scroll_up(&mut self.scroll, delta);
+    }
+
+    /// Scroll down by `delta` lines.
+    pub fn scroll_down(&mut self, delta: usize) {
+        let total = self.entries.len();
+        scroll_down(&mut self.scroll, total, delta);
+    }
+
+    /// Returns a clone of the messages for the streaming task.
+    pub fn messages_clone(&self) -> Vec<providers::ChatMessage> {
+        self.messages.clone()
+    }
+
     /// Process one streaming event from the channel. Returns an action for the caller.
     pub fn process_stream_event(&mut self, event: &super::component::UiStreamEvent) -> Action {
         match event {
@@ -1250,12 +1346,7 @@ impl Transcript {
                     if let Some(i) = drop_idx {
                         self.entries.remove(i);
                     }
-                    self.entries.push(TranscriptEntry::Assistant {
-                        content: String::new(),
-                        rendered: None,
-                        is_streaming: true,
-                        thinking: String::new(),
-                    });
+                    self.add_assistant_entry();
                 }
                 for entry in self.entries.iter_mut().rev() {
                     if let TranscriptEntry::Assistant {
@@ -1386,10 +1477,7 @@ impl Transcript {
                 }
             }
             super::component::UiStreamEvent::Error(e) => {
-                self.entries.push(TranscriptEntry::Notice {
-                    text: e.clone(),
-                    is_error: true,
-                });
+                self.add_notice(e.clone(), true);
                 if let Some(last) = self.entries.last() {
                     if let TranscriptEntry::Assistant { content, .. } = last {
                         if content.is_empty() {
