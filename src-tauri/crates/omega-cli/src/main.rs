@@ -1228,7 +1228,7 @@ impl App {
         // Input is a fixed 3-row strip when closed; expanded when palette is open.
         let editor_h = if self.show_command_palette {
             // 1 (top border) + 1 (search) + rows + 1 (bottom padding)
-            let rows = self.command_palette.filtered.len().min(6).max(1) as u16;
+            let rows = self.command_palette.filtered.len().min(8).max(1) as u16;
             rows.saturating_add(3).min(12)
         } else {
             3u16
