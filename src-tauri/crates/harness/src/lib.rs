@@ -2,6 +2,7 @@ pub mod engine;
 pub mod external;
 pub mod gate_config;
 pub mod golden;
+pub mod negative_knowledge;
 pub mod patterns;
 pub mod persistence;
 pub mod repeated;

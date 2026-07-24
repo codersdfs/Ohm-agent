@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod context;
 pub mod error;
+pub mod learning;
 pub mod pipeline;
 pub mod session;
 pub mod tui;
