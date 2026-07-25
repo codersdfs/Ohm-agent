@@ -498,16 +498,7 @@ pub fn render_panel(area: Rect, buf: &mut Buffer, state: &CommandPaletteState, m
         let text = format!("{} {}  {}", marker, entry.id, entry.label);
         let display = truncate_to_width(&text, area.width as usize);
 
-        // Clear background with SURFACE_LOW before drawing
-        for x in area.x..area.x + area.width {
-            let cell = buf.get_mut(x, area.y + row_idx as u16);
-            cell.set_symbol(" ");
-            cell.set_bg(theme::SURFACE_LOW);
-        }
-
-        // Draw the row text
         Paragraph::new(Line::from(Span::styled(display, style)))
-            .style(Style::default().bg(theme::SURFACE_LOW))
             .render(
                 Rect::new(area.x, area.y + row_idx as u16, area.width, 1),
                 buf,

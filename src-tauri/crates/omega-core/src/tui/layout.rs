@@ -72,7 +72,7 @@ pub fn render_full_layout(frame: &mut Frame, area: Rect, chrome: &mut LayoutChro
     let top_bar_h = 1u16;
     let metrics_h = 3u16;
     let footer_h = 1u16;
-    let editor_h: u16 = if chrome.is_command_mode { 5 } else { 3 };
+    let editor_h: u16 = if chrome.is_command_mode { 7 } else { 3 };
 
     let vert = Layout::default()
         .direction(Direction::Vertical)
@@ -102,7 +102,6 @@ pub fn render_full_layout(frame: &mut Frame, area: Rect, chrome: &mut LayoutChro
         chrome.command_palette,
         chrome.is_command_mode,
         chrome.is_streaming,
-        chrome.status,
     );
 
     // ── Footer bar ───────────────────────────────────────────────────────
@@ -398,80 +397,82 @@ fn render_command_panel(
     palette: &command_palette::CommandPaletteState,
     is_command_mode: bool,
     is_streaming: bool,
-    status: &StatusState,
 ) {
-    let spinner = &status.spinner;
-    if area.height < 3 || area.width < 20 {
+    if area.height < 3 || area.width < 10 {
         return;
     }
 
-    let title = if is_command_mode {
-        " commands "
-    } else if is_streaming && editor.buffer.is_empty() {
-        " cooking… "
-    } else {
-        " type a message… "
-    };
+    let showing_palette = is_command_mode && palette.visible;
 
-    let title_color = if is_command_mode {
-        theme::PRIMARY
-    } else {
-        theme::DIM
-    };
+    if !showing_palette {
+        // Two rules with input between them
+        let out_style = Style::default().fg(theme::OUTLINE);
+        let rule = "─".repeat(area.width as usize);
 
-    let inner = render_glass_block(
-        frame,
-        area,
-        theme::SURFACE_LOW,
-        theme::OUTLINE,
-        title,
-        title_color,
-    );
+        Paragraph::new(Line::from(Span::styled(&rule, out_style)))
+            .render(Rect::new(area.x, area.y, area.width, 1), frame.buffer_mut());
 
-    if inner.height < 1 || inner.width < 4 {
-        return;
-    }
-
-    // ── Row 0: input line ────────────────────────────────────────────
-    let input_y = inner.y;
-    let input_text = if is_streaming && editor.buffer.is_empty() {
-        format!(" {} {}", spinner.current_glyph(), spinner.current_phrase())
-    } else if editor.buffer.is_empty() {
-        " ▸ _".to_string()
-    } else {
-        let display = editor.buffer.lines().last().unwrap_or("");
-        let cursor_suffix = if is_command_mode { " _" } else { "" };
-        let prefix = " ▸ ";
-        let available = inner.width.saturating_sub(2) as usize;
-        let full = format!("{}{}{}", prefix, display, cursor_suffix);
-        if full.chars().count() > available {
-            let skip = full.chars().count().saturating_sub(available);
-            full.chars().skip(skip).collect::<String>()
+        let input_text = if is_streaming && editor.buffer.is_empty() {
+            String::new()
+        } else if editor.buffer.is_empty() {
+            " ▸ _".to_string()
         } else {
-            full
+            let display = editor.buffer.lines().last().unwrap_or("");
+            let available = (area.width.saturating_sub(4)) as usize;
+            let full = format!(" ▸ {}", display);
+            if full.chars().count() > available {
+                let skip = full.chars().count().saturating_sub(available);
+                full.chars().skip(skip).collect::<String>()
+            } else {
+                full
+            }
+        };
+        Paragraph::new(Line::from(Span::styled(input_text, Style::default().fg(theme::FG))))
+            .render(Rect::new(area.x + 2, area.y + 1, area.width.saturating_sub(4), 1), frame.buffer_mut());
+
+        Paragraph::new(Line::from(Span::styled(&rule, out_style)))
+            .render(Rect::new(area.x, area.y + 2, area.width, 1), frame.buffer_mut());
+    }
+
+    // ── Command palette (top rule with centered label, no side borders) ──
+    if showing_palette {
+        let top_y = area.y;
+        let line_style = Style::default().fg(theme::OUTLINE);
+        let title = " commands ";
+        let title_w = title.chars().count() as u16;
+        let left_dash = area.width.saturating_sub(title_w) / 2;
+
+        for x in area.x..area.x + area.width {
+            frame.buffer_mut().get_mut(x, top_y)
+                .set_symbol("─")
+                .set_style(line_style);
         }
-    };
+        for (i, ch) in title.chars().enumerate() {
+            let cx = area.x + left_dash + i as u16;
+            if cx < area.x + area.width {
+                frame.buffer_mut().get_mut(cx, top_y)
+                    .set_char(ch)
+                    .set_fg(theme::PRIMARY);
+            }
+        }
 
-    let input_style = if is_streaming && editor.buffer.is_empty() {
-        spinner.glyph_style()
-    } else {
-        Style::default().fg(theme::FG)
-    };
+        // Search line
+        Paragraph::new(Line::from(Span::styled(
+            format!("> {}_", palette.query),
+            Style::default().fg(theme::PRIMARY_CONTAINER),
+        )))
+        .render(Rect::new(area.x + 2, top_y + 1, area.width.saturating_sub(4), 1), frame.buffer_mut());
 
-    Paragraph::new(Line::from(Span::styled(input_text, input_style)))
-        .style(Style::default().bg(theme::SURFACE_LOW))
-        .render(
-            Rect::new(inner.x + 1, input_y, inner.width.saturating_sub(2), 1),
-            frame.buffer_mut(),
-        );
-
-    // ── Row 1+: command list (only in command mode) ───────────────────
-    if is_command_mode && palette.visible {
-        let list_y = input_y + 1;
-        let list_h = inner.height.saturating_sub(1).min(3);
+        // List rows
+        let list_y = top_y + 2;
+        let list_h = area.height.saturating_sub(2).min(5);
         if list_h > 0 {
-            let list_area = Rect::new(inner.x + 1, list_y, inner.width.saturating_sub(2), list_h);
-            command_palette::render_panel(list_area, frame.buffer_mut(), palette, list_h);
+            command_palette::render_panel(
+                Rect::new(area.x + 2, list_y, area.width.saturating_sub(4), list_h),
+                frame.buffer_mut(),
+                palette,
+                list_h,
+            );
         }
     }
 }
