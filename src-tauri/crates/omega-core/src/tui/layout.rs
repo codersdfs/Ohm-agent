@@ -412,23 +412,15 @@ fn render_command_panel(
         Paragraph::new(Line::from(Span::styled(&rule, out_style)))
             .render(Rect::new(area.x, area.y, area.width, 1), frame.buffer_mut());
 
-        let input_text = if is_streaming && editor.buffer.is_empty() {
-            String::new()
-        } else if editor.buffer.is_empty() {
-            " ▸ _".to_string()
+        let input_text = if is_streaming || editor.buffer.lines().last().map(|l| l.is_empty()).unwrap_or(true) {
+            "█".to_string()
         } else {
             let display = editor.buffer.lines().last().unwrap_or("");
-            let available = (area.width.saturating_sub(4)) as usize;
-            let full = format!(" ▸ {}", display);
-            if full.chars().count() > available {
-                let skip = full.chars().count().saturating_sub(available);
-                full.chars().skip(skip).collect::<String>()
-            } else {
-                full
-            }
+            let available = (area.width.saturating_sub(2)) as usize;
+            format!("{}{}", display.chars().take(available).collect::<String>(), '█')
         };
         Paragraph::new(Line::from(Span::styled(input_text, Style::default().fg(theme::FG))))
-            .render(Rect::new(area.x + 2, area.y + 1, area.width.saturating_sub(4), 1), frame.buffer_mut());
+            .render(Rect::new(area.x, area.y + 1, area.width.saturating_sub(2), 1), frame.buffer_mut());
 
         Paragraph::new(Line::from(Span::styled(&rule, out_style)))
             .render(Rect::new(area.x, area.y + 2, area.width, 1), frame.buffer_mut());
