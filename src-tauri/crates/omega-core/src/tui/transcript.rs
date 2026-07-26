@@ -2,7 +2,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Paragraph, Widget, Wrap};
+use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use super::markdown;
 use super::theme;
@@ -190,6 +190,16 @@ impl TranscriptEntry {
             }
             _ => self.render_to_text(width, activity_tick),
         }
+    }
+
+    /// Check if this entry is a user message containing attachments.
+    /// Returns true for User entries that contain URLs, file paths, or skill references.
+    pub fn has_attachments(&self) -> bool {
+        let content = match self {
+            TranscriptEntry::User { content } => content,
+            _ => return false,
+        };
+        has_attachment_content(content)
     }
 }
 
@@ -1094,7 +1104,74 @@ impl Default for ScrollState {
     }
 }
 
-/// Render the transcript area.
+/// Check if user message content contains attachment patterns:
+/// URLs (http:// or https://), absolute file paths, or registered skill references.
+fn has_attachment_content(content: &str) -> bool {
+    // URL detection: strict protocol prefix
+    if content.contains("http://") || content.contains("https://") {
+        return true;
+    }
+
+    // File path detection: absolute paths or common file extensions
+    for word in content.split_whitespace() {
+        let trimmed = word.trim_end_matches(|c: char| matches!(c, ',' | '.' | ';' | ')' | ']' | '"'));
+        // Unix absolute path: starts with / followed by more chars
+        if trimmed.starts_with('/') && trimmed.len() > 1 {
+            return true;
+        }
+        // Windows absolute path: C:\ or \ (UNC)
+        if trimmed.len() >= 3 && trimmed.chars().nth(1) == Some(':') && trimmed.chars().nth(2) == Some('\\') {
+            return true;
+        }
+        if trimmed.starts_with(r"\\") {
+            return true;
+        }
+        // Common file extensions (without path prefix)
+        if let Some(ext) = trimmed.rsplit('.').next() {
+            let ext_lower = ext.to_lowercase();
+            if matches!(ext_lower.as_str(),
+                "rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "go" |
+                "toml" | "json" | "yaml" | "yml" | "md" | "txt" | "csv" |
+                "sh" | "bash" | "zsh" | "fish" | "env" | "cfg" | "ini" |
+                "html" | "css" | "scss" | "sass" | "less" | "xml" | "sql" |
+                "lock" | "log" | "pdf" | "png" | "jpg" | "jpeg" | "gif" | "svg" |
+                "mp4" | "mp3" | "wav" | "mov" | "avi" | "webm" | "mkv" |
+                "zip" | "tar" | "gz" | "bz2" | "7z" | "rar"
+            ) {
+                // Only count as file if there's a dot before the extension
+                if trimmed.contains('.') {
+                    return true;
+                }
+            }
+        }
+    }
+
+    // Skill reference detection: @skillname or bare word matching registered skills
+    let skills = crate::commands::mcp::loaded_skills();
+    for skill in &skills {
+        let name = &skill.name;
+        // @mention syntax
+        if content.contains(&format!("@{}", name)) {
+            return true;
+        }
+        // Bare word match (word boundary check)
+        if content.split_whitespace().any(|w| w == name) {
+            return true;
+        }
+    }
+
+    false
+}
+
+
+/// A render segment: either a user message card (with background color) or
+/// a group of flat lines (assistant, tool calls, notices — no card styling).
+struct RenderSegment {
+    lines: Vec<Line<'static>>,
+    bg: Option<Color>,
+    fg: Option<Color>,
+}
+
 pub fn render(
     area: Rect,
     buf: &mut Buffer,
@@ -1106,14 +1183,43 @@ pub fn render(
         return;
     }
 
-    // Build the full rendered text from all entries
-    let mut all_lines: Vec<Line<'static>> = Vec::new();
+    // Build render segments from all entries.
+    let mut segments: Vec<RenderSegment> = Vec::new();
     for entry in entries.iter_mut() {
         let rendered = entry.get_rendered(area.width, activity_tick);
-        all_lines.extend(rendered.lines);
+        match entry {
+            TranscriptEntry::User { .. } => {
+                let (bg, fg) = if entry.has_attachments() {
+                    (Some(theme::USER_ATTACH_BG), Some(theme::USER_ATTACH_FG))
+                } else {
+                    (Some(theme::USER_CARD_BG), None)
+                };
+                segments.push(RenderSegment {
+                    lines: rendered.lines,
+                    bg,
+                    fg,
+                });
+            }
+            _ => {
+                segments.push(RenderSegment {
+                    lines: rendered.lines,
+                    bg: None,
+                    fg: None,
+                });
+            }
+        }
     }
 
-    let total_lines = all_lines.len();
+    // Compute total line count (including separator rows between adjacent user cards)
+    let total_lines: usize = segments.iter().map(|s| s.lines.len()).sum();
+    // Add separator rows: one blank line between each pair of adjacent user-card segments
+    let mut separator_count = 0usize;
+    for i in 1..segments.len() {
+        if segments[i].bg.is_some() && segments[i - 1].bg.is_some() {
+            separator_count += 1;
+        }
+    }
+    let total_lines = total_lines + separator_count;
     let view_height = area.height as usize;
 
     // Auto-scroll to bottom
@@ -1128,21 +1234,101 @@ pub fn render(
         scroll.offset = 0;
     }
 
-    // Visible slice
-    let visible: Vec<Line<'static>> = if total_lines > scroll.offset {
-        all_lines[scroll.offset..].to_vec()
-    } else {
-        all_lines.clone()
-    };
+    // Fill entire area with base background
+    fill_area_buf(buf, area, theme::BG);
 
-    let text = Text::from(visible);
+    // Render visible segments at correct y positions
+    let mut y = 0usize;
+    let mut remaining = scroll.offset;
 
-    let para = Paragraph::new(text)
-        .block(Block::default().style(Style::default().bg(theme::BG)))
-        .style(Style::default().bg(theme::BG))
-        .wrap(Wrap { trim: false });
-    para.render(area, buf);
+    for (i, seg) in segments.iter().enumerate() {
+        let seg_height = seg.lines.len();
+
+        // Skip segments entirely before the visible window
+        if remaining >= seg_height {
+            remaining -= seg_height;
+            // Skip separator if it exists
+            if i + 1 < segments.len()
+                && segments[i + 1].bg.is_some()
+                && seg.bg.is_some()
+            {
+                if remaining > 0 {
+                    remaining -= 1;
+                }
+            }
+            continue;
+        }
+
+        // This segment is (partially) visible
+        let start_line = remaining;
+        let visible_lines = seg_height - start_line;
+        let available = view_height.saturating_sub(y);
+
+        if visible_lines > 0 && available > 0 {
+            let render_count = visible_lines.min(available);
+            let render_area = Rect::new(
+                area.x,
+                area.y + y as u16,
+                area.width,
+                render_count as u16,
+            );
+
+            if let Some(bg) = seg.bg {
+                // User card: render as individual Paragraph with background
+                let mut para_style = Style::default().bg(bg);
+                if let Some(fg) = seg.fg {
+                    para_style = para_style.fg(fg);
+                }
+                let visible_seg_lines: Vec<Line<'static>> =
+                    seg.lines[start_line..start_line + render_count].to_vec();
+                let text = Text::from(visible_seg_lines);
+                let para = Paragraph::new(text)
+                    .style(para_style)
+                    .wrap(Wrap { trim: false });
+                para.render(render_area, buf);
+            } else {
+                // Flat segment: render without background
+                let visible_seg_lines: Vec<Line<'static>> =
+                    seg.lines[start_line..start_line + render_count].to_vec();
+                let text = Text::from(visible_seg_lines);
+                let para = Paragraph::new(text)
+                    .style(Style::default().bg(theme::BG))
+                    .wrap(Wrap { trim: false });
+                para.render(render_area, buf);
+            }
+
+            y += render_count;
+        }
+
+        // Add separator row between adjacent user cards
+        if i + 1 < segments.len()
+            && segments[i + 1].bg.is_some()
+            && seg.bg.is_some()
+            && y < view_height
+        {
+            // Fill one row with background
+            for x in area.x..area.x + area.width {
+                buf.get_mut(x, area.y + y as u16).set_bg(theme::BG);
+            }
+            y += 1;
+        }
+
+        if y >= view_height {
+            break;
+        }
+        remaining = 0;
+    }
 }
+
+/// Fill a rect in the buffer with a solid background color.
+fn fill_area_buf(buf: &mut Buffer, area: Rect, color: Color) {
+    for y in area.y..area.y + area.height {
+        for x in area.x..area.x + area.width {
+            buf.get_mut(x, y).set_bg(color);
+        }
+    }
+}
+
 
 /// Scroll up by `delta` lines.
 pub fn scroll_up(scroll: &mut ScrollState, delta: usize) {
@@ -1534,6 +1720,48 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn test_has_attachments_url() {
+        let entry = TranscriptEntry::User { content: "check https://example.com".into() };
+        assert!(entry.has_attachments());
+    }
+
+    #[test]
+    fn test_has_attachments_http() {
+        let entry = TranscriptEntry::User { content: "see http://localhost:8080".into() };
+        assert!(entry.has_attachments());
+    }
+
+    #[test]
+    fn test_no_attachments_plain_text() {
+        let entry = TranscriptEntry::User { content: "hello world".into() };
+        assert!(!entry.has_attachments());
+    }
+
+    #[test]
+    fn test_has_attachments_file_path() {
+        let entry = TranscriptEntry::User { content: "read /etc/config.toml".into() };
+        assert!(entry.has_attachments());
+    }
+
+    #[test]
+    fn test_has_attachments_file_extension() {
+        let entry = TranscriptEntry::User { content: "look at Cargo.toml".into() };
+        assert!(entry.has_attachments());
+    }
+
+    #[test]
+    fn test_no_attachments_bare_domain() {
+        let entry = TranscriptEntry::User { content: "visit example.com".into() };
+        assert!(!entry.has_attachments());
+    }
+
+    #[test]
+    fn test_has_attachments_non_user_entry() {
+        let entry = TranscriptEntry::Notice { text: "hello".into(), is_error: false };
+        assert!(!entry.has_attachments());
     }
 
     #[test]

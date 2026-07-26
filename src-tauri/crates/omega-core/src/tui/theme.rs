@@ -24,6 +24,14 @@ pub const ERROR: Color = Color::Rgb(230, 142, 142);
 pub const SUCCESS: Color = Color::Rgb(145, 194, 158);
 pub const WARN: Color = Color::Rgb(210, 177, 116);
 
+// ── User message card colors ────────────────────────────────────────────────
+// Grey background for plain-text user messages.
+pub const USER_CARD_BG: Color = Color::Rgb(45, 45, 48);
+// Purple background for user messages containing attachments (URL, file, skill).
+pub const USER_ATTACH_BG: Color = Color::Rgb(75, 35, 110);
+// Lavender text for user messages with attachments.
+pub const USER_ATTACH_FG: Color = Color::Rgb(230, 220, 245);
+
 // ── Layout / component colors ────────────────────────────────────────────────
 
 pub const SIDEBAR_BG: Color = Color::Rgb(28, 28, 31);
