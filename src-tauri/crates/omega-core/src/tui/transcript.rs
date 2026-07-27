@@ -1292,17 +1292,26 @@ pub fn render(
                 // - Attachment cards: normal spacing
                 let pad_h = 1u16;
                 let pad_v_top = 1u16;
-                let pad_v_bottom = match seg.bg {
+                let pad_v_bottom_requested = match seg.bg {
                     Some(theme::USER_MIDDLE_CARD_BG) => 2, // extra bottom space for middle prompts
                     _ => 0, // preserve original behavior (top-only padding) for other cards
                 };
+
+                // Calculate effective bottom padding to ensure at least one line of text fits
+                let available_after_top = render_area.height.saturating_sub(pad_v_top);
+                let max_bottom_for_text = available_after_top.saturating_sub(1); // reserve 1 line for text
+                let pad_v_bottom = pad_v_bottom_requested.min(max_bottom_for_text);
+
+                // Text area height after accounting for top and bottom padding
+                let text_area_height = render_area.height.saturating_sub(pad_v_top).saturating_sub(pad_v_bottom);
+                let text_area_height = text_area_height.max(1); // ensure minimum one line
 
                 let pad = pad_h;
                 let text_area = Rect::new(
                     render_area.x.saturating_add(pad),
                     render_area.y.saturating_add(pad_v_top),
                     render_area.width.saturating_sub(pad_h * 2),
-                    render_area.height.saturating_sub(pad_v_top + pad_v_bottom),
+                    text_area_height,
                 );
                 // Set foreground color based on segment type
                 let fg_color = seg.fg.unwrap_or(theme::FG);
