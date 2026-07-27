@@ -4,7 +4,7 @@
 //! formats them into a system-prompt snippet with a dynamic token budget.
 
 use crate::context::estimate_tokens;
-use memory::{MemoryEntry, MemoryLayer, MemoryStore};
+use memory::{MemoryEntry, MemoryStore};
 
 /// Maximum characters per memory entry in the formatted output.
 const MAX_ENTRY_CHARS: usize = 500;
@@ -36,7 +36,7 @@ pub fn project_key() -> String {
 /// Format memory entries into a system-prompt snippet.
 ///
 /// Returns a string like:
-/// ```
+/// ```text
 /// # Relevant project memory (from previous sessions):
 /// - key_name: value text
 /// ```

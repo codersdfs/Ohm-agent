@@ -1283,14 +1283,26 @@ pub fn render(
             if let Some(bg) = seg.bg {
                 // User card: fill the full render area with the card background
                 // so the card stays at its current position, then render text
-                // with 1-char horizontal padding and 1-char top padding inside it.
+                // with padding around the edges.
                 fill_area_buf(buf, render_area, bg);
-                let pad = 1u16;
+
+                // Horizontal padding is always 1 char. Vertical spacing varies by card type:
+                // - First user card: minimal spacing (top=1, bottom=0 effectively)
+                // - Middle user cards: more bottom spacing for better readability
+                // - Attachment cards: normal spacing
+                let pad_h = 1u16;
+                let pad_v_top = 1u16;
+                let pad_v_bottom = match seg.bg {
+                    Some(theme::USER_MIDDLE_CARD_BG) => 2, // extra bottom space for middle prompts
+                    _ => 0, // preserve original behavior (top-only padding) for other cards
+                };
+
+                let pad = pad_h;
                 let text_area = Rect::new(
                     render_area.x.saturating_add(pad),
-                    render_area.y.saturating_add(pad),
-                    render_area.width.saturating_sub(pad * 2),
-                    render_area.height.saturating_sub(pad),
+                    render_area.y.saturating_add(pad_v_top),
+                    render_area.width.saturating_sub(pad_h * 2),
+                    render_area.height.saturating_sub(pad_v_top + pad_v_bottom),
                 );
                 let mut para_style = Style::default().bg(bg);
                 if let Some(fg) = seg.fg {
