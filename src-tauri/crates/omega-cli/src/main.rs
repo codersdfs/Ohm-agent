@@ -732,6 +732,85 @@ impl App {
                     }
                 }
             }
+            omega_core::tui::command_palette::CommandHandler::MemStore => {
+                let parts: Vec<&str> = cmd.splitn(3, ' ').collect();
+                if parts.len() < 3 {
+                    self.transcript.add_notice("Usage: /mem-store <key> <value>".into(), true);
+                    return;
+                }
+                let key = parts[1].to_string();
+                let value = parts[2].to_string();
+                let state = self.state.clone();
+                let result = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current()
+                        .block_on(commands::memory::memory_store_project(&state, key, value))
+                });
+                match result {
+                    Ok(_) => {
+                        self.transcript.add_notice("Memory stored.".into(), false);
+                    }
+                    Err(e) => {
+                        self.transcript.add_notice(format!("Failed to store memory: {e}"), true);
+                    }
+                }
+            }
+            omega_core::tui::command_palette::CommandHandler::MemSearch => {
+                let query = cmd.trim_start_matches("/mem-search")
+                    .trim_start_matches("/memfind")
+                    .trim();
+                if query.is_empty() {
+                    self.transcript.add_notice("Usage: /mem-search <query>".into(), true);
+                    return;
+                }
+                self.transcript.add_notice(format!("Searching project memory for \"{query}\"…"), false);
+                let state = self.state.clone();
+                let query_owned = query.to_string();
+                let result = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current()
+                        .block_on(commands::memory::memory_search_project(&state, query_owned))
+                });
+                match result {
+                    Ok(response) => {
+                        if response.entries.is_empty() {
+                            self.transcript.add_notice(format!("No results found for \"{query}\""), false);
+                        } else {
+                            let mut lines = format!("Project memory results ({}):\n", response.entries.len());
+                            for (i, entry) in response.entries.iter().enumerate() {
+                                let rel = response.relevance.get(i).map(|r| format!(" [{:.2}]", r)).unwrap_or_default();
+                                lines.push_str(&format!("  {} — {}{}\n", entry.key, entry.value.chars().take(80).collect::<String>(), rel));
+                            }
+                            self.transcript.add_notice(lines, false);
+                        }
+                    }
+                    Err(e) => {
+                        self.transcript.add_notice(format!("Memory search failed: {e}"), true);
+                    }
+                }
+            }
+            omega_core::tui::command_palette::CommandHandler::MemList => {
+                self.transcript.add_notice("Listing project memories…".into(), false);
+                let state = self.state.clone();
+                let result = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current()
+                        .block_on(commands::memory::memory_list_project(&state))
+                });
+                match result {
+                    Ok(entries) => {
+                        if entries.is_empty() {
+                            self.transcript.add_notice("No project memories stored.".into(), false);
+                        } else {
+                            let mut lines = format!("Project memories ({}):\n", entries.len());
+                            for entry in &entries {
+                                lines.push_str(&format!("  {} — {}\n", entry.key, entry.value.chars().take(80).collect::<String>()));
+                            }
+                            self.transcript.add_notice(lines, false);
+                        }
+                    }
+                    Err(e) => {
+                        self.transcript.add_notice(format!("Failed to list memories: {e}"), true);
+                    }
+                }
+            }
             omega_core::tui::command_palette::CommandHandler::Memory => {
                 let query = cmd.trim_start_matches("/memory").trim_start_matches("/mem").trim();
                 if query.is_empty() {

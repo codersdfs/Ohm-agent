@@ -161,6 +161,30 @@ pub static COMMANDS: &[CommandEntry] = &[
         keywords: &["memory", "hermes", "search", "remember", "session", "project", "user"],
         handler: CommandHandler::Memory,
     },
+    CommandEntry {
+        id: "/mem-store",
+        label: "Store memory",
+        aliases: &["/memstore"],
+        description: "Store a key-value pair in project memory",
+        keywords: &["memory", "store", "save", "kv", "key", "value"],
+        handler: CommandHandler::MemStore,
+    },
+    CommandEntry {
+        id: "/mem-search",
+        label: "Search project memory",
+        aliases: &["/memfind"],
+        description: "Search project-layer memory",
+        keywords: &["memory", "search", "find", "query", "project"],
+        handler: CommandHandler::MemSearch,
+    },
+    CommandEntry {
+        id: "/mem-list",
+        label: "List project memory",
+        aliases: &["/memls"],
+        description: "List all project-layer memories",
+        keywords: &["memory", "list", "show", "all", "entries", "project"],
+        handler: CommandHandler::MemList,
+    },
 ];
 
 /// Look up a command by its id or alias and return the matching entry.
@@ -537,6 +561,9 @@ mod tests {
                 "/rules",
                 "/score",
                 "/memory",
+                "/mem-store",
+                "/mem-search",
+                "/mem-list",
             ]
         );
     }
