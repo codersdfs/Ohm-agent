@@ -25,12 +25,17 @@ pub const SUCCESS: Color = Color::Rgb(145, 194, 158);
 pub const WARN: Color = Color::Rgb(210, 177, 116);
 
 // ── User message card colors ────────────────────────────────────────────────
+// Outer card layer — a slightly darker grey that wraps the inner card for depth.
+pub const USER_CARD_OUTER: Color = Color::Rgb(40, 40, 43);
 // Grey background for plain-text user messages.
 pub const USER_CARD_BG: Color = Color::Rgb(45, 45, 48);
 // Purple background for user messages containing attachments (URL, file, skill).
 pub const USER_ATTACH_BG: Color = Color::Rgb(75, 35, 110);
 // Lavender text for user messages with attachments.
 pub const USER_ATTACH_FG: Color = Color::Rgb(230, 220, 245);
+// Subtle separator between adjacent user cards — a muted grey that sits between
+// the card background and the terminal background for a clean visual break.
+pub const USER_CARD_SEPARATOR: Color = Color::Rgb(35, 35, 38);
 
 // ── Layout / component colors ────────────────────────────────────────────────
 

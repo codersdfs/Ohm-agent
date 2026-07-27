@@ -53,17 +53,7 @@ impl TranscriptEntry {
     pub fn render_to_text(&mut self, _width: u16, activity_tick: u64) -> Text<'static> {
         match self {
             TranscriptEntry::User { content } => {
-                let mut text = markdown::render_markdown(content);
-                // Prepend user marker: cyan chevron
-                let marker = Line::from(vec![Span::styled(
-                    "> ",
-                    Style::default()
-                        .fg(theme::PRIMARY)
-                        .add_modifier(Modifier::BOLD),
-                )]);
-                let mut all = vec![marker];
-                all.append(&mut text.lines);
-                Text::from(all)
+                markdown::render_markdown(content)
             }
             TranscriptEntry::Assistant {
                 content,
@@ -1212,11 +1202,11 @@ pub fn render(
 
     // Compute total line count (including separator rows between adjacent user cards)
     let total_lines: usize = segments.iter().map(|s| s.lines.len()).sum();
-    // Add separator rows: one blank line between each pair of adjacent user-card segments
+    // Add separator rows: 2 rows between each pair of adjacent user-card segments
     let mut separator_count = 0usize;
     for i in 1..segments.len() {
         if segments[i].bg.is_some() && segments[i - 1].bg.is_some() {
-            separator_count += 1;
+            separator_count += 2;
         }
     }
     let total_lines = total_lines + separator_count;
@@ -1247,13 +1237,15 @@ pub fn render(
         // Skip segments entirely before the visible window
         if remaining >= seg_height {
             remaining -= seg_height;
-            // Skip separator if it exists
+            // Skip separator rows if they exist (2 rows per separator)
             if i + 1 < segments.len()
                 && segments[i + 1].bg.is_some()
                 && seg.bg.is_some()
             {
-                if remaining > 0 {
-                    remaining -= 1;
+                if remaining >= 2 {
+                    remaining -= 2;
+                } else {
+                    remaining = 0;
                 }
             }
             continue;
@@ -1274,7 +1266,17 @@ pub fn render(
             );
 
             if let Some(bg) = seg.bg {
-                // User card: render as individual Paragraph with background
+                // User card: fill the full render area with the card background
+                // so the card stays at its current position, then render text
+                // with 1-char horizontal padding and 1-char top padding inside it.
+                fill_area_buf(buf, render_area, bg);
+                let pad = 1u16;
+                let text_area = Rect::new(
+                    render_area.x.saturating_add(pad),
+                    render_area.y.saturating_add(pad),
+                    render_area.width.saturating_sub(pad * 2),
+                    render_area.height.saturating_sub(pad),
+                );
                 let mut para_style = Style::default().bg(bg);
                 if let Some(fg) = seg.fg {
                     para_style = para_style.fg(fg);
@@ -1285,7 +1287,7 @@ pub fn render(
                 let para = Paragraph::new(text)
                     .style(para_style)
                     .wrap(Wrap { trim: false });
-                para.render(render_area, buf);
+                para.render(text_area, buf);
             } else {
                 // Flat segment: render without background
                 let visible_seg_lines: Vec<Line<'static>> =
@@ -1300,17 +1302,23 @@ pub fn render(
             y += render_count;
         }
 
-        // Add separator row between adjacent user cards
+        // Add separator between adjacent user cards — a subtle 2-row gap
+        // that uses USER_CARD_SEPARATOR for a clean visual break between cards.
         if i + 1 < segments.len()
             && segments[i + 1].bg.is_some()
             && seg.bg.is_some()
             && y < view_height
         {
-            // Fill one row with background
-            for x in area.x..area.x + area.width {
-                buf.get_mut(x, area.y + y as u16).set_bg(theme::BG);
+            let sep_rows = 2usize;
+            for row in 0..sep_rows {
+                if y + row >= view_height {
+                    break;
+                }
+                for x in area.x..area.x + area.width {
+                    buf.get_mut(x, area.y + (y + row) as u16).set_bg(theme::USER_CARD_SEPARATOR);
+                }
             }
-            y += 1;
+            y += sep_rows;
         }
 
         if y >= view_height {
