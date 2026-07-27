@@ -419,14 +419,30 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
         let sys_prompt = request
             .system_prompt
             .unwrap_or_else(crate::commands::tools::default_system_prompt);
+
+        // P0-08: Retrieve relevant project memories and inject into system prompt
+        let memory_context = {
+            let store = state.memory_store.lock_guard();
+            let model_window = config.kind.context_window();
+            let budget = std::cmp::min(2048, (model_window / 10) as usize);
+            crate::memory_retriever::retrieve_memories(&store, &request.content, budget)
+        };
+
+        let full_prompt = if memory_context.is_empty() {
+            sys_prompt
+        } else {
+            format!("{}\n\n{}", sys_prompt, memory_context)
+        };
+
         messages.push(providers::ChatMessage {
             role: "system".into(),
-            content: sys_prompt,
+            content: full_prompt,
             tool_calls: None,
             tool_call_id: None,
             name: None,
         });
     }
+    let user_content = request.content.clone();
     messages.push(providers::ChatMessage {
         role: "user".into(),
         content: request.content,
@@ -650,6 +666,29 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
                     name: None,
                 });
             }
+
+            // P0-08: Store turn summary in project memory
+            if !full_response.is_empty() {
+                let tool_names: Vec<String> = messages
+                    .iter()
+                    .filter(|m| m.role == "assistant")
+                    .filter_map(|m| {
+                        m.tool_calls.as_ref().and_then(|tcs| tcs.first())
+                    })
+                    .map(|tc| tc.function.name.clone())
+                    .collect();
+
+                let store = state.memory_store.lock_guard();
+                if let Err(e) = crate::memory_summarizer::store_turn_summary(
+                    &store,
+                    &user_content,
+                    &full_response,
+                    &tool_names,
+                ) {
+                    log::warn!("failed to store turn summary: {}", e);
+                }
+            }
+
             flush_session(state, messages);
 
             emitter.emit_done(&full_response)?;

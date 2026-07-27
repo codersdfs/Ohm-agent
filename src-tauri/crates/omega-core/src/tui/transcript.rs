@@ -1304,10 +1304,9 @@ pub fn render(
                     render_area.width.saturating_sub(pad_h * 2),
                     render_area.height.saturating_sub(pad_v_top + pad_v_bottom),
                 );
-                let mut para_style = Style::default().bg(bg);
-                if let Some(fg) = seg.fg {
-                    para_style = para_style.fg(fg);
-                }
+                // Set foreground color based on segment type
+                let fg_color = seg.fg.unwrap_or(theme::FG);
+                let para_style = Style::default().bg(bg).fg(fg_color);
                 let visible_seg_lines: Vec<Line<'static>> =
                     seg.lines[start_line..start_line + render_count].to_vec();
                 let text = Text::from(visible_seg_lines);
