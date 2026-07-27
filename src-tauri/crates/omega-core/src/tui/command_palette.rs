@@ -27,6 +27,9 @@ pub enum CommandHandler {
     Rules,
     Score,
     Memory,
+    MemStore,
+    MemSearch,
+    MemList,
 }
 
 /// One palette row / slash command.
