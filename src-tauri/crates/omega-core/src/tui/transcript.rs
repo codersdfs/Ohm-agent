@@ -1174,21 +1174,34 @@ pub fn render(
     }
 
     // Build render segments from all entries.
+    // Track whether any preceding entries exist to identify "middle" user prompts.
     let mut segments: Vec<RenderSegment> = Vec::new();
+    let mut has_previous_entries = false;
     for entry in entries.iter_mut() {
         let rendered = entry.get_rendered(area.width, activity_tick);
         match entry {
             TranscriptEntry::User { .. } => {
-                let (bg, fg) = if entry.has_attachments() {
-                    (Some(theme::USER_ATTACH_BG), Some(theme::USER_ATTACH_FG))
+                let bg = if entry.has_attachments() {
+                    Some(theme::USER_ATTACH_BG)
+                } else if has_previous_entries {
+                    // User prompts after any prior content use a distinct gray card
+                    Some(theme::USER_MIDDLE_CARD_BG)
                 } else {
-                    (Some(theme::USER_CARD_BG), None)
+                    // First user prompt uses the standard card background
+                    Some(theme::USER_CARD_BG)
+                };
+                let fg = if entry.has_attachments() {
+                    Some(theme::USER_ATTACH_FG)
+                } else {
+                    None
                 };
                 segments.push(RenderSegment {
                     lines: rendered.lines,
                     bg,
                     fg,
                 });
+                // Mark that we now have content before future entries
+                has_previous_entries = true;
             }
             _ => {
                 segments.push(RenderSegment {
@@ -1196,6 +1209,8 @@ pub fn render(
                     bg: None,
                     fg: None,
                 });
+                // Non-user entries count as preceding content for subsequent users
+                has_previous_entries = true;
             }
         }
     }

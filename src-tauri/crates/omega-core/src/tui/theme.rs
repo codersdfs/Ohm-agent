@@ -29,6 +29,8 @@ pub const WARN: Color = Color::Rgb(210, 177, 116);
 pub const USER_CARD_OUTER: Color = Color::Rgb(40, 40, 43);
 // Grey background for plain-text user messages.
 pub const USER_CARD_BG: Color = Color::Rgb(45, 45, 48);
+// Grey background for user messages appearing after the first prompt in conversation.
+pub const USER_MIDDLE_CARD_BG: Color = Color::Rgb(50, 50, 53);
 // Purple background for user messages containing attachments (URL, file, skill).
 pub const USER_ATTACH_BG: Color = Color::Rgb(75, 35, 110);
 // Lavender text for user messages with attachments.
