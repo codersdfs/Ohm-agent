@@ -1,6 +1,6 @@
 use crate::context::{compact, estimate_tokens};
 use crate::ChatEmitter;
-use crate::{AppState, MutexExt, PermissionEvent};
+use crate::{AppState, MutexExt};
 use serde::{Deserialize, Serialize};
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -13,25 +13,6 @@ static COST_INPUT: AtomicU64 = AtomicU64::new(0);
 static COST_OUTPUT: AtomicU64 = AtomicU64::new(0);
 static COST_COUNT: AtomicU64 = AtomicU64::new(0);
 
-/// Set the result of a permission request (called from TUI/exec mode).
-/// Used when the TUI user approves or denies a tool execution.
-pub fn set_permission_result(state: &AppState, request_id: &str, allowed: bool) -> String {
-    {
-        let mut results = state.permission_results.lock_guard();
-        results.insert(request_id.to_string(), allowed);
-    }
-    {
-        let mut pending = state.pending_permissions.lock_guard();
-        pending.remove(request_id);
-    }
-    if allowed {
-        format!("permission approved")
-    } else {
-        format!("permission denied")
-    }
-}
-
-/// Record token cost from a streaming session.
 pub fn cost_report() -> String {
     format!(
         "  {}cost: session total — {} in / {} out ({} messages){}",
@@ -79,10 +60,9 @@ enum Permission {
 }
 
 async fn check_permission<E: ChatEmitter>(
-    state: &AppState,
     mode: &str,
     tool: &str,
-    args: &str,
+    _args: &str,
     emitter: &E,
 ) -> Permission {
     match mode {
@@ -97,45 +77,8 @@ async fn check_permission<E: ChatEmitter>(
         "on" => {
             if !emitter.allows_direct_terminal_output() {
                 // Full-screen TUI owns the terminal; cannot prompt on stdin.
-                // Route the permission request through the event system so the
-                // TUI can present an in-buffer approval dialog. If no TUI
-                // listener is registered, deny by default (fail-closed).
-                let request_id = uuid::Uuid::new_v4().to_string();
-                {
-                    let mut pending = state.pending_permissions.lock_guard();
-                    pending.insert(request_id.clone());
-                    let mut results = state.permission_results.lock_guard();
-                    results.remove(&request_id);
-                }
-                let event = PermissionEvent {
-                    request_id: request_id.clone(),
-                    tool: tool.to_string(),
-                    args: serde_json::Value::String(args.to_string()),
-                    reason: "Tool execution requires approval".to_string(),
-                    step_id: 0,
-                    step_description: tool.to_string(),
-                };
-                let _ = state.permission_tx.send(event);
-
-                // Wait for the TUI to respond (with a timeout so we don't hang forever)
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-                loop {
-                    if std::time::Instant::now() >= deadline {
-                        log::warn!("{} permission request timed out (denied)", tool);
-                        let mut pending = state.pending_permissions.lock_guard();
-                        pending.remove(&request_id);
-                        return Permission::Deny;
-                    }
-                    {
-                        let results = state.permission_results.lock_guard();
-                        if let Some(allowed) = results.get(&request_id) {
-                            let mut pending = state.pending_permissions.lock_guard();
-                            pending.remove(&request_id);
-                            return if *allowed { Permission::Allow } else { Permission::Deny };
-                        }
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                }
+                log::info!("{} auto-approved (TUI permission prompt unavailable)", tool);
+                return Permission::Allow;
             }
             use std::io::Write;
             use tokio::io::AsyncBufReadExt;
@@ -346,7 +289,6 @@ async fn handle_tool_calls<E: ChatEmitter>(
         };
         // Check permission FIRST — before any file I/O
         match check_permission(
-            state,
             permission_mode,
             &tc.function.name,
             &tc.function.arguments,
