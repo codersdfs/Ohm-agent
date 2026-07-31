@@ -42,6 +42,44 @@ impl Language {
         }
     }
 
+    /// Detect the primary programming language of a project from a set of
+    /// directory entry paths (or manifest filenames). Looks for well-known
+    /// manifest files: `Cargo.toml` → Rust, `package.json` → TypeScript,
+    /// `requirements.txt`/`setup.py`/`pyproject.toml` → Python,
+    /// `go.mod`/`go.sum` → Go, `*.csproj`/`*.sln` → C#, `*.java`/`pom.xml` → Java.
+    /// Falls back to `Language::Other("unknown")` if no known manifest is found.
+    pub fn detect(paths: &[String]) -> Language {
+        let lower: Vec<String> = paths.iter().map(|p| p.to_lowercase()).collect();
+        let has = |needle: &str| -> bool { lower.iter().any(|p| p.contains(needle)) };
+
+        if has("cargo.toml") { return Language::Rust; }
+        if has("package.json") { return Language::TypeScript; }
+        if has("pyproject.toml") || has("requirements.txt") || has("setup.py") || has("setup.cfg") {
+            return Language::Python;
+        }
+        if has("go.mod") || has("go.sum") { return Language::Go; }
+        if has(".csproj") || has(".sln") { return Language::CSharp; }
+        if has("pom.xml") || has("build.gradle") || has(".java") {
+            return Language::Java;
+        }
+        Language::Other("unknown".to_string())
+    }
+
+    /// Returns a human-readable label for use in prompts and diagnostics.
+    pub fn label(&self) -> String {
+        match self {
+            Language::Rust => "Rust".to_string(),
+            Language::TypeScript => "TypeScript".to_string(),
+            Language::TypeScriptReact => "TypeScript (React)".to_string(),
+            Language::JavaScript => "JavaScript".to_string(),
+            Language::Python => "Python".to_string(),
+            Language::Go => "Go".to_string(),
+            Language::CSharp => "C#".to_string(),
+            Language::Java => "Java".to_string(),
+            Language::Other(s) => s.clone(),
+        }
+    }
+
     /// Returns a string key suitable for lookup operations
     pub fn to_key(&self) -> &'static str {
         match self {
