@@ -73,7 +73,56 @@
         "004"
       ],
       "blocked_by": []
+    },
+    {
+      "id": "007",
+      "title": "Is full Path B execution technically feasible?",
+      "file": "tickets/007-path-b-feasibility.md",
+      "type": "research",
+      "status": "open",
+      "assigned_to": "omega-wayfinder",
+      "blocking": [],
+      "blocked_by": [
+        "002"
+      ]
+    },
+    {
+      "id": "008",
+      "title": "Is Path B timing viable before losing window?",
+      "file": "tickets/008-path-b-timing.md",
+      "type": "research",
+      "status": "open",
+      "assigned_to": "omega-wayfinder",
+      "blocking": [],
+      "blocked_by": [
+        "007"
+      ]
+    },
+    {
+      "id": "009",
+      "title": "What are critical risks of Path B execution and how to mitigate?",
+      "file": "tickets/009-path-b-risk-mitigation.md",
+      "type": "grilling",
+      "status": "open",
+      "assigned_to": "omega-wayfinder",
+      "blocking": [],
+      "blocked_by": [
+        "007"
+      ]
+    },
+    {
+      "id": "010",
+      "title": "What are go/no-go decision criteria for committing to full Path B?",
+      "file": "tickets/010-path-b-decision-criteria.md",
+      "type": "grilling",
+      "status": "open",
+      "assigned_to": "omega-wayfinder",
+      "blocking": [],
+      "blocked_by": [
+        "008",
+        "009"
+      ]
     }
   ],
-  "last_updated": "2026-07-31T15:00:00Z"
+  "last_updated": "2026-08-01T00:00:00Z"
 }

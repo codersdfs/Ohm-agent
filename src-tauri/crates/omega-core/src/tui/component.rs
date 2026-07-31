@@ -20,6 +20,12 @@ pub enum UiStreamEvent {
         messages: Vec<providers::ChatMessage>,
     },
     Error(String),
+    /// Permission request received - show dialog.
+    PermissionRequest { prompt: String, options: Vec<String>, default_idx: usize },
+    /// User response to a permission request (true = allow, false = deny).
+    PermissionResponse(bool),
+    /// Permission dialog was cancelled (e.g., ESC).
+    PermissionCancel,
 }
 
 /// Actions that cross component boundaries.
@@ -56,4 +62,10 @@ pub enum Action {
     StreamDone { tokens_in: u32, tokens_out: u32 },
     /// Streaming finished with an error.
     StreamError,
+    /// Permission request received - show dialog.
+    PermissionRequest { prompt: String, options: Vec<String>, default_idx: usize },
+    /// User selected permission option (index of choice).
+    PermissionResponse(usize),
+    /// Permission dialog was cancelled (e.g., ESC).
+    PermissionCancel,
 }

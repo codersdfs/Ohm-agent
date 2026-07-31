@@ -127,7 +127,7 @@ struct App {
 
     // Pending permission requests (TUI mode)
     #[allow(dead_code)]
-    pending_permissions: Vec<(String, String, String)>, // (request_id, tool, reason)
+    pending_permissions: Vec<(String, String, Vec<String>, usize)>, // (request_id, tool, options, default_idx)
     #[allow(dead_code)]
     permission_mode: String,
 
@@ -242,30 +242,27 @@ impl App {
         if !self.pending_permissions.is_empty() {
             match key.code {
                 KeyCode::Char('y') | KeyCode::Char('Y') => {
-                    let (req_id, tool, _) = self.pending_permissions.remove(0);
-                    let _ = commands::chat::set_permission_result(
-                        &self.state, &req_id, true);
+                    let (req_id, tool, _, _) = self.pending_permissions.remove(0);
+                    let _ = commands::build_cmd::respond_permission(&self.state, req_id, true);
                     self.is_streaming = false;
                     self.editor.state = EditorMode::Idle;
                     self.status.set_spinner_state(SpinnerState::Idle);
                     eprintln!("  Approved: {} (continue interacting to trigger next tool)", tool);
                 }
                 KeyCode::Char('n') | KeyCode::Char('N') => {
-                    if let Some((req_id, tool, _)) = self.pending_permissions.first() {
+                    if let Some((req_id, tool, _, _)) = self.pending_permissions.first() {
                         let req_id = req_id.clone();
                         let tool = tool.clone();
-                        let _ = commands::chat::set_permission_result(
-                            &self.state, &req_id, false);
+                        let _ = commands::build_cmd::respond_permission(&self.state, req_id, false);
                         self.pending_permissions.remove(0);
                         self.status.set_spinner_state(SpinnerState::Idle);
                         eprintln!("  Denied: {}", tool);
                     }
                 }
                 KeyCode::Char('q') | KeyCode::Char('Q') => {
-                    if let Some((req_id, _, _)) = self.pending_permissions.first() {
+                    if let Some((req_id, _, _, _)) = self.pending_permissions.first() {
                         let req_id = req_id.clone();
-                        let _ = commands::chat::set_permission_result(
-                            &self.state, &req_id, false);
+                        let _ = commands::build_cmd::respond_permission(&self.state, req_id, false);
                         self.pending_permissions.remove(0);
                     }
                 }
@@ -972,10 +969,9 @@ impl App {
                     match perm_rx.recv().await {
                         Ok(event) => {
                             let _ = perm_event_tx.send(UiStreamEvent::PermissionRequest {
-                                request_id: event.request_id,
-                                tool: event.tool,
-                                args: event.args.to_string(),
-                                reason: event.reason,
+                                prompt: event.reason,
+                                options: vec!["Allow".to_string(), "Deny".to_string()],
+                                default_idx: 0,
                             });
                         }
                         Err(_) => break,
@@ -1080,16 +1076,16 @@ impl App {
                     done = true;
                 }
                 UiStreamEvent::PermissionRequest {
-                    request_id,
-                    tool,
-                    reason,
-                    ..
+                    prompt,
+                    ref options,
+                    default_idx,
                 } => {
                     // Queue permission request for TUI rendering
                     self.pending_permissions.push((
-                        request_id.clone(),
-                        tool.clone(),
-                        reason.clone(),
+                        String::new(),
+                        format!("{}", prompt.chars().take(40).collect::<String>()),
+                        options.clone(),
+                        *default_idx,
                     ));
                 }
                 _ => {}
@@ -1227,11 +1223,11 @@ impl ratata::screen::Screen for App {
         self.render_widgets(f);
 
         // Permission prompt overlay (TUI mode)
-        if let Some((_, tool, reason)) = self.pending_permissions.first() {
+        if let Some((_, tool, _, _)) = self.pending_permissions.first() {
             let area = f.size();
             let prompt = ratatui::widgets::Paragraph::new(format!(
                 "[Permission] Tool '{}' wants to run. Reason: {} (press 'y' to approve, 'n' to deny, 'q' to quit)",
-                tool, reason
+                tool, ""
             ))
             .style(ratatui::style::Style::default()
                 .bg(ratatui::style::Color::Yellow)

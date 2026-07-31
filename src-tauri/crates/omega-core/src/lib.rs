@@ -8,6 +8,9 @@ pub mod pipeline;
 pub mod session;
 pub mod tui;
 
+// ui module for permission panel and related UI components
+pub mod ui;
+
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};

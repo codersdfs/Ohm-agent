@@ -1,3 +1,4 @@
+use crate::ui::permission_panel::PermissionPanelState;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -1416,6 +1417,7 @@ pub struct Transcript {
     pub streaming_fragment: String,
     pub tools_expanded: bool,
     pub activity_tick: u64,
+    pub permission_state: PermissionPanelState,
 }
 
 impl Transcript {
@@ -1428,6 +1430,7 @@ impl Transcript {
             streaming_fragment: String::new(),
             tools_expanded: false,
             activity_tick: 0,
+            permission_state: PermissionPanelState::default(),
         }
     }
 
@@ -1716,6 +1719,15 @@ impl Transcript {
                 }
                 Action::StreamError
             }
+            super::component::UiStreamEvent::PermissionRequest { prompt, options, default_idx } => {
+                Action::PermissionRequest { prompt: prompt.clone(), options: options.clone(), default_idx: *default_idx }
+            }
+            super::component::UiStreamEvent::PermissionResponse(_allowed) => {
+                Action::Noop
+            }
+            super::component::UiStreamEvent::PermissionCancel => {
+                Action::Noop
+            }
         }
     }
 }
@@ -1736,13 +1748,48 @@ impl Transcript {
     }
 
     pub fn render(&mut self, f: &mut ratatui::Frame, area: Rect) {
-        render(
-            area,
-            f.buffer_mut(),
-            &mut self.entries,
-            &mut self.scroll,
-            self.activity_tick,
-        );
+        // Split area: transcript gets most space, permission panel gets bottom when visible
+        if self.permission_state.visible {
+            let panel_height = 4u16;
+            if area.height > panel_height {
+                let transcript_area = Rect {
+                    x: area.x,
+                    y: area.y,
+                    width: area.width,
+                    height: area.height.saturating_sub(panel_height),
+                };
+                render(
+                    transcript_area,
+                    f.buffer_mut(),
+                    &mut self.entries,
+                    &mut self.scroll,
+                    self.activity_tick,
+                );
+                // Render permission panel at the bottom
+                crate::ui::permission_panel::render_permission_panel(
+                    area,
+                    f.buffer_mut(),
+                    &self.permission_state,
+                );
+            } else {
+                // Not enough space for both, just show transcript
+                render(
+                    area,
+                    f.buffer_mut(),
+                    &mut self.entries,
+                    &mut self.scroll,
+                    self.activity_tick,
+                );
+            }
+        } else {
+            render(
+                area,
+                f.buffer_mut(),
+                &mut self.entries,
+                &mut self.scroll,
+                self.activity_tick,
+            );
+        }
     }
 }
 

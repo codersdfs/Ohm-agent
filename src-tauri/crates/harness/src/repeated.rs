@@ -44,7 +44,7 @@ impl RepeatedPatternTracker {
             // Count only the first time this pattern transitions from not promoted to promoted
             if now_promoted && !was_promoted && !self.already_promoted.contains(&key) {
                 promoted += 1;
-                self.already_promoted.insert(key);;
+                self.already_promoted.insert(key);
             }
         }
 
