@@ -17,40 +17,50 @@
       "title": "Ship-now vs invest-in-moat: strategic path",
       "file": "tickets/002-strategic-path.md",
       "type": "grilling",
-      "status": "open",
-      "assigned_to": null,
+      "status": "closed",
+      "assigned_to": "omega-wayfinder",
       "blocking": [],
-      "blocked_by": ["001"]
+      "blocked_by": [
+        "001"
+      ]
     },
     {
       "id": "003",
       "title": "Minimum CLI parity with Codex CLI",
       "file": "tickets/003-minimum-cli-parity.md",
       "type": "research",
-      "status": "open",
-      "assigned_to": null,
+      "status": "closed",
+      "assigned_to": "omega-wayfinder",
       "blocking": [],
-      "blocked_by": ["001"]
+      "blocked_by": [
+        "001"
+      ]
     },
     {
       "id": "004",
       "title": "Honest README rewrite scope",
       "file": "tickets/004-honest-readme.md",
       "type": "research",
-      "status": "open",
-      "assigned_to": null,
-      "blocking": ["006"],
-      "blocked_by": ["001"]
+      "status": "closed",
+      "assigned_to": "omega-wayfinder",
+      "blocking": [
+        "006"
+      ],
+      "blocked_by": [
+        "001"
+      ]
     },
     {
       "id": "005",
       "title": "Is the multi-agent pipeline a moat or liability?",
       "file": "tickets/005-multiagent-moat.md",
       "type": "grilling",
-      "status": "open",
-      "assigned_to": null,
+      "status": "closed",
+      "assigned_to": "omega-wayfinder",
       "blocking": [],
-      "blocked_by": ["001"]
+      "blocked_by": [
+        "001"
+      ]
     },
     {
       "id": "006",
@@ -59,9 +69,11 @@
       "type": "task",
       "status": "closed",
       "assigned_to": "omega-wayfinder",
-      "blocking": ["004"],
+      "blocking": [
+        "004"
+      ],
       "blocked_by": []
     }
   ],
-  "last_updated": "2026-07-31T13:30:00Z"
+  "last_updated": "2026-07-31T15:00:00Z"
 }

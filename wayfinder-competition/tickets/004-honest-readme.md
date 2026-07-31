@@ -34,6 +34,6 @@ Omega should claim today, and what should it defer to Phase 1/Phase 2?
 
 ## Type: research
 
-## Status: open
+## Status: closed
 
-## Assigned to: (unclaimed)
+## Assigned to: omega-wayfinder

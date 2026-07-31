@@ -1351,6 +1351,43 @@ enum CliAction {
         new_session: bool,
     },
 
+    /// Run headless agent loop (non-TUI) - for CI, scripting, and automation.
+    ///
+    /// Streams the agent response to stdout and tool results to stderr.
+    /// Respects --permission-mode (strict|on|off; default: on).
+    ///
+    /// Example:
+    ///   omega exec "write a Cargo.toml for a serde + tokio CLI"
+    Exec {
+        /// The task prompt for the agent
+        prompt: String,
+
+        #[arg(short = 'p', long,
+            help = "Provider (openai, anthropic, google, local, ollama, groq, etc.)")]
+        provider: Option<String>,
+
+        #[arg(short = 'm', long,
+            help = "Model name (e.g. gpt-4o-mini, llama3.1:8b, claude-sonnet-4)")]
+        model: Option<String>,
+
+        #[arg(short = 'b', long, help = "Base URL for the provider API")]
+        base_url: Option<String>,
+
+        #[arg(long, value_name = "MODE", help = "Permission mode: off (auto-approve), on (prompt), strict (deny)")]
+        permission_mode: Option<String>,
+
+        #[arg(long, help = "Print token usage after execution")]
+        show_tokens: bool,
+
+        /// Resume a specific conversation session by id
+        #[arg(long = "session", value_name = "ID", help = "Resume session <id>")]
+        session: Option<String>,
+
+        /// Force a brand-new conversation session
+        #[arg(long = "new-session", help = "Start a new session instead of resuming the last one")]
+        new_session: bool,
+    },
+
     /// Start the MCP server to expose agent tools via Model Context Protocol
     ServeMcp {
         #[arg(long, default_value = "3100", help = "Port to listen on")]
@@ -1391,6 +1428,17 @@ fn main() -> Result<()> {
             session,
             new_session,
         } => run_chat(provider, model, base_url, session, new_session),
+        CliAction::Exec {
+            prompt,
+            provider,
+            model,
+            base_url,
+            permission_mode,
+            show_tokens,
+            session,
+            new_session,
+        } => run_exec(provider, model, base_url, permission_mode, prompt, show_tokens, session, new_session),
+
         CliAction::ServeMcp {
             port,
             host,
@@ -1446,6 +1494,106 @@ fn run_mcp_server(port: u16, host: String, auth_token: Option<String>) -> Result
 fn list_tool_count() -> usize {
     let registry = tool_harness::tools::default_tool_registry();
     registry.list().len()
+}
+
+fn run_exec(
+    provider: Option<String>,
+    model: Option<String>,
+    base_url: Option<String>,
+    permission_mode: Option<String>,
+    prompt: String,
+    show_tokens: bool,
+    session: Option<String>,
+    new_session: bool,
+) -> Result<()> {
+    let config = load_provider_config(provider, model, base_url);
+
+    let model_name = config.model.clone();
+
+    // Headless mode: no full-screen TUI, so direct terminal output is safe.
+    // TerminalPrinter streams tokens to stdout, tool calls/results to stderr.
+    let emitter = omega_core::TerminalPrinter::new();
+
+    let (session_store, session_load) = SessionStore::resolve(session, new_session)
+        .map_err(|e| anyhow::anyhow!("session: {e}"))?;
+    let session_id = session_store.id.clone();
+
+    let state = Arc::new(AppState::new_with_provider_config(
+        &default_db_path(),
+        config,
+    ));
+    state.set_session_store(session_store);
+
+    // Restore prior conversation context for session continuity
+    let mut messages: Vec<providers::ChatMessage> = session_load
+        .messages
+        .into_iter()
+        .map(|rec| providers::ChatMessage {
+            role: rec.role,
+            content: rec.content,
+            tool_calls: None,
+            tool_call_id: rec.tool_call_id,
+            name: rec.name,
+        })
+        .collect();
+
+    let perm_mode = permission_mode.unwrap_or_else(|| "on".to_string());
+
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        let cancel_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        // Ctrl+C handler for clean interruption
+        let cancel_flag_clone = Arc::clone(&cancel_flag);
+        tokio::spawn(async move {
+            tokio::signal::ctrl_c().await.ok();
+            cancel_flag_clone.store(true, std::sync::atomic::Ordering::Relaxed);
+        });
+
+        let request = omega_core::commands::chat::StreamMessageRequest {
+            content: prompt.clone(),
+            agent_type: "exec".to_string(),
+            provider: None,
+            system_prompt: Some(crate::commands::tools::CHAT_SYSTEM_PROMPT.to_string()),
+            permission_mode: perm_mode,
+            show_progress: true,
+            max_tool_loops: None,
+        };
+
+        match omega_core::commands::chat::stream_message_with_history_cancel(
+            &state,
+            request,
+            &emitter,
+            &mut messages,
+            Some(cancel_flag),
+        )
+        .await
+        {
+            Ok(_) => {
+                // Persist the full conversation
+                if let Err(e) = state.persist_session(&messages) {
+                    log::warn!("Failed to persist session: {}", e);
+                }
+
+                if show_tokens {
+                    let (tokens_in, tokens_out) =
+                        omega_core::commands::chat::session_token_counts();
+                    eprintln!();
+                    eprintln!("Omega exec  session: {}", session_id);
+                    eprintln!("  Model:     {}", model_name);
+                    eprintln!("  Tokens:    {} in / {} out", tokens_in, tokens_out);
+                    eprintln!();
+                }
+
+                Ok(())
+            }
+            Err(e) => {
+                eprintln!();
+                eprintln!("Omega exec error: {}", e);
+                std::process::exit(1);
+            }
+        }
+    })
 }
 
 fn run_chat(
