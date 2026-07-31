@@ -1286,12 +1286,12 @@ pub fn render(
                 // with padding around the edges.
                 fill_area_buf(buf, render_area, bg);
 
-                // Horizontal padding is always 1 char. Vertical spacing varies by card type:
-                // - First user card: minimal spacing (top=1, bottom=0 effectively)
-                // - Middle user cards: more bottom spacing for better readability
-                // - Attachment cards: normal spacing
-                let pad_h = 1u16;
-                let pad_v_top = 1u16;
+                // Horizontal padding increased from 1 to 2 chars for more side space.
+// Vertical spacing also increased for better readability.
+// - All user cards now have top/bottom padding of 2 lines
+// - Middle user cards get extra bottom space (3 lines) for breathing room
+                let pad_h = 2u16;
+                let pad_v_top = 2u16;
                 let pad_v_bottom_requested = match seg.bg {
                     Some(theme::USER_MIDDLE_CARD_BG) => 2, // extra bottom space for middle prompts
                     _ => 0, // preserve original behavior (top-only padding) for other cards
@@ -1715,6 +1715,15 @@ impl Transcript {
                     }
                 }
                 Action::StreamError
+            }
+            // Permission events are handled at the App level (check_permission
+            // routes them through the broadcast channel, which the TUI forwards
+            // to the mpsc channel). The transcript does not need to render them.
+            super::component::UiStreamEvent::PermissionRequest { .. } => {
+                Action::Noop
+            }
+            super::component::UiStreamEvent::PermissionResponse { .. } => {
+                Action::Noop
             }
         }
     }

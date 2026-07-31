@@ -20,6 +20,18 @@ pub enum UiStreamEvent {
         messages: Vec<providers::ChatMessage>,
     },
     Error(String),
+    /// Permission request from the agent loop (TUI mode)
+    PermissionRequest {
+        request_id: String,
+        tool: String,
+        args: String,
+        reason: String,
+    },
+    /// User response to a permission request (true = allow, false = deny)
+    PermissionResponse {
+        request_id: String,
+        allowed: bool,
+    },
 }
 
 /// Actions that cross component boundaries.
