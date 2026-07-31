@@ -1,4 +1,4 @@
-use crate::Language;
+use super::Language;
 use tree_sitter::{Language as TSLanguage, Node, Parser};
 
 #[derive(Debug, Clone)]

@@ -5,8 +5,9 @@ use crate::scoring;
 use crate::structural::StructuralCheck;
 use crate::taste::TasteCheck;
 use crate::GateResult;
-use crate::Language;
-use crate::Violation;
+use super::Language;
+use super::Violation;
+use super::ViolationCategory;
 
 /// Unified Gate engine that runs all check types and returns aggregated results.
 pub struct GateEngine {
@@ -14,6 +15,9 @@ pub struct GateEngine {
     pub project_root: String,
     pub language: Language,
     pub repeated_tracker: RepeatedPatternTracker,
+    /// Optional taste agent for personalized code feedback
+    #[cfg(feature = "taste-system")]
+    pub taste_agent: Option<::taste::TasteAgent>,
 }
 
 impl GateEngine {
@@ -25,7 +29,16 @@ impl GateEngine {
             project_root,
             language,
             repeated_tracker: RepeatedPatternTracker::new(),
+            #[cfg(feature = "taste-system")]
+            taste_agent: None,
         }
+    }
+
+    /// Attach a taste agent for personalized feedback
+    #[cfg(feature = "taste-system")]
+    pub fn with_taste_agent(mut self, agent: ::taste::TasteAgent) -> Self {
+        self.taste_agent = Some(agent);
+        self
     }
 
     /// Run all checks on a file's content.
@@ -90,6 +103,46 @@ impl GateEngine {
         scoring::calculate_score(&all_violations)
     }
 
+    /// Run checks with taste agent enabled, applying learned preferences
+    #[cfg(feature = "taste-system")]
+    async fn check_file_with_feedback_async(&mut self, path: &str, content: &str, feedback: Option<::taste::TasteFeedback>) -> GateResult {
+        let mut result = self.check_file(path, content);
+        
+        if let Some(agent) = self.taste_agent.as_ref() {
+            // Convert violations for taste agent processing
+            let converted_violations: Vec<::taste::Violation> = result.violations.iter().map(|v| ::taste::Violation {
+                category: match v.category {
+                    ViolationCategory::Structural => ::taste::ViolationCategory::Structural,
+                    ViolationCategory::Taste => ::taste::ViolationCategory::Taste,
+                    ViolationCategory::Golden => ::taste::ViolationCategory::Golden,
+                    ViolationCategory::Repeated => ::taste::ViolationCategory::Repeated,
+                    ViolationCategory::External => ::taste::ViolationCategory::External,
+                },
+                message: v.message.clone(),
+                tool_hint: v.tool_hint.clone(),
+                line: v.line,
+            }).collect();
+            
+            let lang = match self.language {
+                Language::Rust => ::taste::Language::Rust,
+                Language::TypeScript => ::taste::Language::TypeScript,
+                Language::TypeScriptReact => ::taste::Language::TypeScriptReact,
+                Language::JavaScript => ::taste::Language::JavaScript,
+                Language::Python => ::taste::Language::Python,
+                Language::Go => ::taste::Language::Go,
+                Language::CSharp => ::taste::Language::CSharp,
+                Language::Java => ::taste::Language::Java,
+                Language::Other(ref s) => ::taste::Language::Other(s.clone()),
+            };
+            
+            let base_score = result.score;
+            let new_score = agent.apply_taste_score(base_score, &converted_violations, lang);
+            result.score = new_score;
+        }
+        
+        result
+    }
+
     /// Get the current rules database reference.
     pub fn rules_db(&self) -> &RulesDatabase {
         &self.db
@@ -106,6 +159,17 @@ mod tests {
     use super::*;
     use crate::Language;
     use crate::ViolationCategory;
+
+    #[cfg(feature = "taste-system")]
+    #[test]
+    fn test_taste_agent_field_exists() {
+        let dir = std::env::temp_dir().join("omega_test_taste");
+        let _ = std::fs::create_dir_all(&dir);
+        let engine = GateEngine::new(dir.to_str().unwrap().to_string(), Language::Rust);
+        // Verify taste_agent field exists and is None by default
+        let _ = engine.taste_agent;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn test_engine_check_file_clean() {

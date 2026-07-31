@@ -1,5 +1,5 @@
 use crate::rules::RulesDatabase;
-use crate::Language;
+use super::Language;
 use std::collections::HashMap;
 
 /// Tracks repeated pattern occurrences and auto-promotes at frequency ≥ 3.
@@ -33,7 +33,8 @@ impl RepeatedPatternTracker {
                 .next()
                 .unwrap_or(&v.message)
                 .to_string();
-            let key = (lang.to_key(), pattern.clone());
+            let key_str = lang.to_key().to_string();
+            let key = (key_str, pattern.clone());
 
             // Always promote_or_increment — this is an idempotent database operation
             let was_promoted = db.is_pattern_promoted(lang, &pattern);
@@ -43,7 +44,7 @@ impl RepeatedPatternTracker {
             // Count only the first time this pattern transitions from not promoted to promoted
             if now_promoted && !was_promoted && !self.already_promoted.contains(&key) {
                 promoted += 1;
-                self.already_promoted.insert(key);
+                self.already_promoted.insert(key);;
             }
         }
 

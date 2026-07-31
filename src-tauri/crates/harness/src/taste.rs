@@ -1,6 +1,6 @@
-use crate::Language;
-use crate::Violation;
-use crate::ViolationCategory;
+use super::Language;
+use super::Violation;
+use super::ViolationCategory;
 
 pub struct TasteCheck;
 

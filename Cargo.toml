@@ -11,4 +11,5 @@ members = [
     "src-tauri/crates/tool-harness",
     "src-tauri/crates/omega-core",
     "src-tauri/crates/omega-cli",
+    "src-tauri/crates/taste",
 ]

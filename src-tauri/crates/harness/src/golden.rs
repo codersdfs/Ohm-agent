@@ -1,9 +1,7 @@
-use crate::Language;
-use crate::Violation;
-use crate::ViolationCategory;
+use super::Language;
+use super::Violation;
+use super::ViolationCategory;
 
-/// Golden rules are permanent anti-patterns that are always enforced.
-/// They are seeded with high-frequency count so they're auto-promoted from the start.
 pub struct GoldenRules;
 
 impl GoldenRules {

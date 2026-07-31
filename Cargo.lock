@@ -63,7 +63,7 @@ dependencies = [
 name = "anstyle"
 version = "1.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "940b3a0ca603d1eade50a4846a2afffd5ef57a9feac2c0e2ec2e14f9ead76000"
+checksum = "940b3a0ca603d1eade50a4846a2afffd5ef57a9feac2c0e2ec2e14f9ead7600
 
 [[package]]
 name = "anstyle-parse"
@@ -780,11 +780,14 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "log",
+ "once_cell",
  "regex",
  "rusqlite",
  "serde",
  "serde_json",
+ "taste",
  "tempfile",
+ "thiserror 1.0.69",
  "toml",
  "tree-sitter",
  "tree-sitter-python",
@@ -2368,6 +2371,24 @@ checksum = "8e1d1b10ced5ca923a1fcb8d03e96b8d3268065d724548c0211415ff6ac6bac4"
 dependencies = [
  "core-foundation-sys",
  "libc",
+]
+
+[[package]]
+name = "taste"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "clap",
+ "log",
+ "memory",
+ "once_cell",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
