@@ -5,7 +5,7 @@ edition = "2021"
 
 [features]
 default = []
-onnx-embed = ["ort"]
+onnx-embed = ["ort", "tokenizers"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -14,4 +14,5 @@ log = "0.4"
 uuid = { version = "1", features = ["v4"] }
 chrono = "0.4"
 rusqlite = { version = "0.31", features = ["bundled", "vtab"] }
-ort = { version = "2.0.0-rc.12", optional = true }
+ort = { version = "2.0.0-rc.13", features = ["ndarray"], optional = true }
+tokenizers = { version = "0.23", optional = true }

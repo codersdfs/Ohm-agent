@@ -36,6 +36,8 @@ The commitment to full Path B is not a single yes/no decision but a series of pr
 | Tool call reliability | ≥98% success rate on repeated calls | Stress test with 1000+ sequential tool calls |
 | Process lifecycle management | No orphaned processes after crashes | System monitoring during chaos experiments |
 
+**Status**: ✅ ALREADY IMPLEMENTED. `mcp/src/stdio.rs` implements Content-Length framed transport with `StdioTransport::spawn()`. Integration test (`mcp/tests/stdio_integration.rs`) passes. Bug found during ticket 007 research (read_line → raw byte reads) fixed. Proceed to P1-03.
+
 **Go/No-Go**: If stdio is reliable enough for production-grade tooling → proceed to P1-03 repo map and begin multi-agent prototype. If not, extend integration testing; may require architectural redesign before proceeding.
 
 ---
@@ -117,3 +119,5 @@ This is the definitive "commit to Path B or change course" meeting, occurring ap
 ## Conclusion
 
 The commitment to full Path B should never be a binary pre-alpha decision. Instead, it should be progressively validated through measured checkpoints where each major component must demonstrate competitive justification before enabling the next layer of complexity. The multi-agent pipeline (Gate 2.2) is the ultimate make-or-break decision—if it doesn't deliver substantially better outcomes than a well-tuned single-agent system with an excellent Gate, then the ambitious investment may not be justified. The hybrid strategy's strength lies in establishing early revenue/validation (Path A) while systematically de-risking the larger investment (Path B) through incremental gating.
+
+**Status update**: Gates 0.1 and 1.1 are the only ones with concrete implementation status — 0.1 is pending alpha release, 1.1 is resolved (MCP stdio implemented + tested, bug fixed). Gates 1.2–2.2 remain future work tied to Path B Phase 1/Phase 2 execution. The framework is approved; execution depends on whether the team commits to building P1-03 (repo map) and P1-04 (real embeddings).

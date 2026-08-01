@@ -4,18 +4,18 @@
 
 Given the hybrid strategy decided in ticket 002 (ship Path A alpha first, keep Path B components gated behind experimental flags), what is the technical feasibility of executing the full Phase 1 + Phase 2 ROADMAP as described in Path B? Can all the complex components actually be built and integrated without fundamental architectural blockers?
 
-## Current Path B Components (from ROADMAP)
+## Current Path B Components (from ROADMAP) — as of research
 
 | Component | Crate(s) Affected | Status | Notes |
 |-----------|-------------------|--------|-------|
-| Real MCP stdio client (`mcp`) | `mcp`, `omega-cli` | HTTP-only implementation exists | Need transport layer rewrite from HTTP to stdio JSON-RPC |
-| Repo map + tree-sitter indexing | `memory`, `repomap` (new) | None implemented yet | Need to add Rust/TypeScript/Python grammars, caching layer |
-| Real embeddings | `memory`, `entropy` | n-grams only | Need fastembed/ONNX integration, model weight management |
-| Provider routing with health checks | `providers`, `omega-core` | Static enum only | Need dynamic routing, health probes, fallback logic |
-| Working multi-agent pipeline | `omega-core`, `harness` | Experimental, behind flag | Plan→Build→Gate→Review→Fix needs production quality |
-| Binary releases | `omega-cli`, CI/CD | Partial | Need GitHub Actions for Windows/macOS/Linux |
-| Eval harness | `harness`, `evals` | Minimal skeleton | Need 20+ task suite, runner, baseline metrics |
-| VS Code extension | `taste`, web UI stub | Minimal | Low effort but separate repo/toolchain |
+| Real MCP stdio client (`mcp`) | `mcp`, `omega-cli` | ✅ IMPLEMENTED | `mcp/src/stdio.rs` with Content-Length framing + `StdioTransport::spawn()`. Bug (read_line → raw bytes) found + fixed during research. Integrated via `stdio://` URL in `omega-core/src/commands/mcp.rs`. |
+| Repo map + tree-sitter indexing | `harness` (repomap) | ✅ IMPLEMENTED | `harness/src/repomap.rs` — walks dirs, tree-sitter symbol extraction, LRU cache. 7 tests. |
+| Real embeddings | `memory`, `entropy` | ⚠️ PARTIAL | n-gram default; ONNX engine behind `onnx-embed` feature with placeholder tokenizer. Needs real `tokenizers` crate + ORT 2.x upgrade. |
+| Provider routing with health checks | `providers`, `omega-core` | ✅ IMPLEMENTED | Circuit-breaker `LatencyTracker` + `HealthMonitor` with CW/WP/HO states. 18 tests. |
+| Working multi-agent pipeline | `omega-core`, `harness` | ⚠️ Experimental | All 3 agents (Plan/Build/Review) exist but behind `OMEGA_EXPERIMENTAL_PIPELINE=1`, not wired into CLI. |
+| Binary releases | `omega-cli`, CI/CD | ❌ Not started | No CI/CD workflows. `cargo-dist` recommended. |
+| Eval harness | `harness`, `evals` | ⚠️ Skeleton | Only `evals/baseline.md`; no automated runner. |
+| VS Code extension | `taste`, web UI stub | ❌ Not started | Separate repo/toolchain — out of scope for Path B core.
 
 ## Critical Interdependencies
 

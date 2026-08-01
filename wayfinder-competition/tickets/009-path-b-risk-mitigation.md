@@ -8,27 +8,27 @@ Executing the full Phase 1 + Phase 2 ROADMAP (Path B) carries significant techni
 
 ### High Probability / High Impact Risks
 
-| # | Risk Category | Specific Risk | Probability | Impact | Mitigation Strategy |
-|---|---------------|---------------|-------------|--------|---------------------|
-| R1 | Technical | Tree-sitter grammar maintenance burden | Medium | High | Maintain community-sourced grammars locally; prioritize Rust/TS/Python first; add grammar version pinning to CI |
-| R2 | Technical | ONNX Runtime cross-platform compatibility | Medium | High | Test on all target platforms early; include fallback to CPU-only builds; document known issues clearly |
-| R3 | Scheduling | Multi-agent pipeline complexity exceeds estimates | High | High | Use spike prototypes for P2-02; limit scope to Plan→Build→Gate (minimum viable pipeline); defer Review/Fix to later iteration |
-| R4 | Market | Claude Code integrates equivalent gate features within 6 months | High | High | Ship Path A alpha immediately; document unique advantages (zero-token, in-process); focus marketing on differentiator |
-| R5 | Resource | Team bandwidth insufficient for parallel Path A + Path B development | Medium | High | Prioritize Path A core features; defer non-critical Path B tasks (VS Code extension, advanced evals) to after alpha launch |
+| # | Risk Category | Specific Risk | Probability | Impact | Mitigation Strategy | Status |
+|---|---------------|---------------|-------------|--------|---------------------|--------|
+| R1 | Technical | Tree-sitter grammar maintenance burden | Medium | High | Maintain community-sourced grammars locally; prioritize Rust/TS/Python first; add grammar version pinning to CI | ✅ PINNED at v0.20 in `harness/Cargo.toml`. Risk downgraded: upgrade to 0.23 is a one-time cost, not ongoing churn. |
+| R2 | Technical | ONNX Runtime cross-platform compatibility | Medium | High | Test on all target platforms early; include fallback to CPU-only builds; document known issues clearly | ✅ `memory` crate has `onnx-embed` feature gate with `ort 2.0.0-rc.12`. n-gram fallback covers until ONNX loads. Binary size ~100-200MB. |
+| R3 | Scheduling | Multi-agent pipeline complexity exceeds estimates | High | High | Use spike prototypes for P2-02; limit scope to Plan→Build→Gate (minimum viable pipeline); defer Review/Fix to later iteration | ⚠️ 3 agents (Plan/Build/Review) exist, env-gated. State machine is 130 lines (7 states) — manageable. Adding Gate+Fix = ~200 lines, not combinatorial. |
+| R4 | Market | Claude Code integrates equivalent gate features within 6 months | High | High | Ship Path A alpha immediately; document unique advantages (zero-token, in-process); focus marketing on differentiator | ⏳ Path A alpha not yet shipped. |
+| R5 | Resource | Team bandwidth insufficient for parallel Path A + Path B development | Medium | High | Prioritize Path A core features; defer non-critical Path B tasks (VS Code extension, advanced evals) to after alpha launch | ⏳ |
 
 ### Medium Probability / High Impact Risks
 
 | # | Risk Category | Specific Risk | Probability | Impact | Mitigation Strategy |
 |---|---------------|---------------|-------------|--------|---------------------|
 | R6 | Technical | Memory bloat from repo map + embeddings + three-layer store | Medium | High | Implement progressive loading limits; add memory usage metrics with alerts; provide `--disable-embeddings` CLI flag |
-| R7 | Technical | MCP stdio transport reliability | Medium | High | Add comprehensive error handling and recovery; implement message ID tracking; write integration tests for process lifecycles |
+| R7 | Technical | MCP stdio transport reliability | Medium | High | Add comprehensive error handling and recovery; implement message ID tracking; write integration tests for process lifecycles | ✅ FIXED: Content-Length framing bug (read_line → raw byte reads) found and fixed during 007 research. Integration test `stdio_integration.rs` passes. |
 | R8 | Technical | CI/CD matrix increases build time significantly | Medium | Medium | Use matrix optimization (only build on PR to main); leverage caching; consider containerized build agents |
 
 ### Low Probability / High Impact Risks
 
 | # | Risk Category | Specific Risk | Probability | Impact | Mitigation Strategy |
 |---|---------------|---------------|-------------|--------|---------------------|
-| R9 | Supply Chain | tree-sitter or ONNX repository changes break builds | Low | High | Pin dependencies explicitly; monitor security advisories; maintain local vendored copies of critical assets |
+| R9 | Supply Chain | tree-sitter or ONNX repository changes break builds | Low | High | Pin dependencies explicitly; monitor security advisories; maintain local vendored copies of critical assets | ✅ tree-sitter pinned at 0.20 in `harness/Cargo.toml`; `ort` pinned at `2.0.0-rc.12` in `memory/Cargo.toml`. |
 | R10 | Team Key Person Dependency | Single developer owns complex subsystems (e.g., pipeline state machine) | Low | High | Document architecture decisions; pair programming on critical paths; rotate maintenance ownership quarterly |
 
 ## Contingency Plans for Path B Failure Modes
@@ -54,7 +54,7 @@ To avoid sunk-cost fallacy, establish formal go/no-go gates before advancing eac
 Phase 0 Completion → Gate 0.1: Path A Alpha Release
      │
      ▼
-Phase 1.1 (MCP stdio) → Gate 1.1: Can we call tools via stdio reliably?
+~~Phase 1.1 (MCP stdio) → Gate 1.1: Can we call tools via stdio reliably?~~ ✅ PASSED
      │
      ▼
 Phase 1.2 (Repo map) → Gate 1.2: Does repo map improve code understanding measurably?
@@ -86,3 +86,5 @@ Given the optimistic nature of technical estimates for complex integrations:
 ## Conclusion
 
 The most critical risk is investing heavily in Path B components (especially multi-agent pipeline) without validating their competitive advantage at incremental checkpoints. The hybrid strategy with Path A alpha release provides an essential safety valve—early market validation while de-risking larger investments through gated progression. Formalize the go/no-go gates, define clear pivot options for each major component, and maintain capacity buffers to absorb technical surprises without derailing the entire roadmap.
+
+**Status update**: P1-02 (MCP stdio) is already implemented and tested (see ticket 007 findings). R2 (ONNX), R3 (state machine), R7 (MCP stdio), and R9 (supply chain) are downgraded from "open risks" to "managed/known" based on codebase audit. The remaining high-impact risks are R4 (Claude Code competitive threat) and R5 (team bandwidth) — both require market/organizational decisions, not technical mitigation.

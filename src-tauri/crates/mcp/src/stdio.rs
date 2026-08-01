@@ -13,7 +13,7 @@
 use crate::{McpRequest, McpResponse};
 use serde_json::Value;
 use std::collections::HashMap;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use std::process::Stdio;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
@@ -170,20 +170,19 @@ impl StdioTransport {
         let mut buf: Vec<u8> = Vec::new();
 
         loop {
-            let line = {
+            // Read raw bytes (not lines) — Content-Length framing does not
+            // require newline delimiters, and JSON bodies may contain newlines.
+            let mut chunk = vec![0u8; 8192];
+            let bytes_read = {
                 let mut reader = self.reader.lock().await;
-                let mut line = String::new();
-                let n = reader
-                    .read_line(&mut line)
-                    .await
-                    .map_err(|e| format!("Failed to read from MCP subprocess: {e}"))?;
-                if n == 0 {
-                    return Err("MCP subprocess closed stdout unexpectedly".into());
+                match reader.read(&mut chunk).await {
+                    Ok(0) => return Err("MCP subprocess closed stdout unexpectedly".into()),
+                    Ok(n) => n,
+                    Err(e) => return Err(format!("Failed to read from MCP subprocess: {e}")),
                 }
-                line
             };
 
-            buf.extend_from_slice(line.as_bytes());
+            buf.extend_from_slice(&chunk[..bytes_read]);
 
             let (frames, remaining) = parse_frames(&mut buf);
             buf = remaining;

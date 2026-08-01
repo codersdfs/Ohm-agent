@@ -85,14 +85,22 @@
       "blocked_by": [
         "002"
       ],
-      "findings": "research/007-findings.md"
+      "findings": "research/007-findings.md",
+      "implementation_status": {
+        "P1-02 MCP stdio": "complete",
+        "P1-03 repo map": "complete",
+        "P1-05 provider routing": "complete",
+        "P1-04 real embeddings": "complete",
+        "P1-07 binary releases": "not-started",
+        "P1-08 eval harness": "skeleton"
+      }
     },
     {
       "id": "008",
       "title": "Is Path B timing viable before losing window?",
       "file": "tickets/008-path-b-timing.md",
       "type": "research",
-      "status": "open",
+      "status": "closed",
       "assigned_to": "omega-wayfinder",
       "blocking": [],
       "blocked_by": [
@@ -104,7 +112,7 @@
       "title": "What are critical risks of Path B execution and how to mitigate?",
       "file": "tickets/009-path-b-risk-mitigation.md",
       "type": "grilling",
-      "status": "open",
+      "status": "closed",
       "assigned_to": "omega-wayfinder",
       "blocking": [],
       "blocked_by": [
@@ -116,7 +124,7 @@
       "title": "What are go/no-go decision criteria for committing to full Path B?",
       "file": "tickets/010-path-b-decision-criteria.md",
       "type": "grilling",
-      "status": "open",
+      "status": "closed",
       "assigned_to": "omega-wayfinder",
       "blocking": [],
       "blocked_by": [
@@ -124,6 +132,5 @@
         "009"
       ]
     }
-  ],
-  "last_updated": "2026-08-01T00:00:00Z"
+  ]
 }

@@ -54,7 +54,7 @@ pub struct SearchResult {
 /// and n-gram based embedding similarity.
 pub struct MemoryStore {
     conn: Connection,
-    embedding: embed::EmbeddingEngine,
+    embedding: Box<dyn crate::embed::Embedder + Send + Sync>,
 }
 
 impl MemoryStore {
@@ -92,8 +92,43 @@ impl MemoryStore {
 
         Ok(Self {
             conn,
-            embedding: embed::EmbeddingEngine::new(),
+            embedding: Box::new(embed::EmbeddingEngine::new()),
         })
+    }
+
+    /// Create a MemoryStore with a custom embedding engine.
+    /// Use this to inject an `ONNXEmbeddingEngine` or any other `Embedder`.
+    pub fn with_embedder(db_path: &str, embedder: Box<dyn crate::embed::Embedder + Send + Sync>) -> Result<Self, String> {
+        let conn =
+            Connection::open(db_path).map_err(|e| format!("Failed to open memory db: {}", e))?;
+
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS memory (
+                id TEXT PRIMARY KEY,
+                layer TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                embedding BLOB,
+                timestamp TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_memory_layer ON memory(layer);
+            CREATE INDEX IF NOT EXISTS idx_memory_key ON memory(key);
+            CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
+                key, value, content='memory', content_rowid='rowid'
+            );
+            CREATE TRIGGER IF NOT EXISTS memory_ai AFTER INSERT ON memory BEGIN
+                INSERT INTO memory_fts(rowid, key, value) VALUES (new.rowid, new.key, new.value);
+            END;
+            CREATE TRIGGER IF NOT EXISTS memory_ad AFTER DELETE ON memory BEGIN
+                INSERT INTO memory_fts(memory_fts, rowid, key, value) VALUES('delete', old.rowid, old.key, old.value);
+            END;
+            CREATE TRIGGER IF NOT EXISTS memory_au AFTER UPDATE ON memory BEGIN
+                INSERT INTO memory_fts(memory_fts, rowid, key, value) VALUES('delete', old.rowid, old.key, old.value);
+                INSERT INTO memory_fts(rowid, key, value) VALUES (new.rowid, new.key, new.value);
+            END;"
+        ).map_err(|e| format!("Failed to initialize memory schema: {}", e))?;
+
+        Ok(Self { conn, embedding: embedder })
     }
 
     /// Store a memory entry. Generates embedding and persists to SQLite.

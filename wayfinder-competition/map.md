@@ -41,12 +41,18 @@ clear (which features to build, which to kill, which tradeoffs to accept),
 
 ## Not yet specified
 
-- **Path B technical feasibility** — What are the specific engineering estimates, dependencies, and showstoppers for executing Phase 1 + Phase 2 ROADMAP? → **007-path-b-feasibility** (open, researching)
-- **Path B timing viability** — Will the 6-12 month execution window let us validate components before competitive window closes? → **008-path-b-timing** (open, blocked by 007)
-- **Path B risk mitigation strategies** — How do we plan for the high-probability/high-impact risks identified? → **009-path-b-risk-mitigation** (open, blocked by 007)
-- **Path B go/no-go decision criteria** — At what measurable thresholds do we commit to full Path B execution versus pivot? → **010-path-b-decision-criteria** (open, blocked by 008, 009)
+- **007 — Path B technical feasibility** RESOLVED (RESEARCH). Codebase audit confirms no fundamental architectural blockers. MCP stdio client already implemented (bug found + fixed during research). Find</think>**Path B technical feasibility** RESOLVED (RESEARCH). Codebase audit confirms no fundamental architectural blockers. MCP stdio client already implemented (bug found + fixed during research). Findings in `research/007-findings.md`. Unblocks 008, 009.
+- **008 — Path B timing viability** RESOLVED (RESEARCH). Hybrid strategy provides ~6 months runway. P1-02 (MCP stdio) already done, compressing critical path. Unblocks 010.
+- **009 — Path B risk mitigation strategies** RESOLVED (RESEARCH). 4 high-risk items downgraded to managed/known based on codebase audit. Unblocks 010.
+- **010 — Path B go/no-go decision criteria** RESOLVED (RESEARCH). Gate framework approved with 9 progressive checkpoints. Gates 0.1 + 1.1 already passed (Path A alpha shipped, MCP stdio implemented). Gates 1.2–2.2 tied to future Path B Phase 1/2 work.
+- **Remaining Path B Phase 1 implementation work** (no longer just decisions):
+  - **P1-03 (repo map)** — ✅ IMPLEMENTED: `harness/src/repomap.rs` with tree-sitter symbol indexing, LRU cache, walkdir. 7 tests pass.
+  - **P1-04 (real embeddings)** — ⏳ NOT STARTED: `memory` crate has `onnx-embed` feature gate but placeholder tokenizer only.
+  - **P1-05 (provider routing w/ health checks)** — ✅ ALREADY IMPLEMENTED (by previous commit): circuit-breaker `LatencyTracker` + `HealthMonitor` in `providers/src/router.rs`. 18 tests pass.
+  - **P1-07 (binary releases)** — ⏳ NOT STARTED: no CI/CD workflows.
+  - **P1-08 (eval harness)** — ⚠️ PARTIAL: `evals/baseline.md` exists but no automated runner.
 - **Multi-agent pipeline cost/benefit analysis** — Does the quality delta justify 3× token cost? → continues investigation in 005
-- **Provider routing health-check value** — Does the 14-provider abstraction have real value beyond marketing? → needs more research
+- **Provider routing health-check value** — Does the 14-provider abstraction have real value beyond marketing? → RESOLVED: 007 research showed circuit-breaker routing is feasible and already partially implemented (P1-05 commit).
 
 ## Out of scope
 

@@ -185,3 +185,89 @@ This matches similar projects: the Rust `rmcp` crate (modelcontextprotocol/rust-
 ### Out of scope for Path B core
 - VS Code extension (separate repo/toolchain)
 - Taste-1 ML model (separate `taste-system/` plan)
+
+---
+
+## 8. Post-research code audit finding — MCP stdio transport bug (FIXED)
+
+> NOTE: By the time this research was being synthesized, another agent had already
+> implemented the MCP stdio client (`mcp/src/stdio.rs`), a mock MCP server binary
+> (`mcp/src/bin/mock_mcp_server.rs`), and an integration test (`mcp/tests/stdio_integration.rs`).
+> The implementation was **mostly correct** but contained a latent framing bug.
+
+### The bug
+`read_response()` used `read_line()` (newline-delimited) to consume subprocess stdout.
+This is incompatible with the MCP Content-Length framing spec: if a JSON body ever
+contains a `\n` character (valid in JSON), `read_line` splits the frame mid-body and
+`parse_frames` receives a truncated/invalid JSON fragment.
+
+The integration test passed **by accident**: the mock server's response body
+(`{"jsonrpc":"2.0","id":"test-1","result":"pong"}`) contains no newlines, and
+Content-Length matched the body exactly.
+
+### The fix
+Replaced `read_line` with raw byte reads (`AsyncReadExt::read` into an 8KB chunk)
+feeding `parse_frames`. This correctly handles:
+- Bodies containing newlines
+- Partial frames across reads
+- Multiple frames in one buffer
+
+```diff
+- use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
++ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+```
+```diff
+- let mut line = String::new();
+- let n = reader.read_line(&mut line).await...
+- buf.extend_from_slice(line.as_bytes());
++ let mut chunk = vec![0u8; 8192];
++ let bytes_read = match reader.read(&mut chunk).await {
++     Ok(0) => return Err("MCP subprocess closed stdout unexpectedly".into()),
++     Ok(n) => n,
++     Err(e) => return Err(format!("Failed to read from MCP subprocess: {e}")),
++ };
++ buf.extend_from_slice(&chunk[..bytes_read]);
+```
+
+### Verification
+- `cargo test -p mcp` → 8 lib tests + 1 integration test pass
+- `cargo check --workspace` → passes (1 pre-existing warning in `harness/src/engine.rs`)
+- `cargo test -p omega-core` → 135 tests pass (3 ignored)
+- This is the same class of bug documented in MCP python-sdk issue #2546
+
+---
+
+## 9. Post-research implementation status (follow-up work)
+
+### P1-02 (MCP stdio client) — COMPLETE
+- Implemented and committed (`0a93eee`) with Content-Length framing, subprocess lifecycle, mock server binary, and integration test.
+- Bug found during research (read_line → raw byte reads) — fixed.
+- **Status**: ✅ Done. Gate 1.1 passed.
+
+### P1-03 (repo map + tree-sitter indexing) — COMPLETE
+- New module `harness/src/repomap.rs` (17.7k bytes, 7 tests).
+- `RepoMap` walks project directories, parses with existing tree-sitter grammars (Rust/TS/JS/Python/Go/C#/Java), extracts symbols (functions, structs, enums, traits, imports, etc.) with file path + line range.
+- LRU cache with mtime-based invalidation (100-entry cache).
+- `walkdir` dependency added to `harness/Cargo.toml`.
+- `SymbolKind::from_ts_node_kind` updated to handle grammar-specific node kinds (e.g., `function_item`, `struct_item` in Rust grammar).
+- Made `get_ts_language` public in `tree_sitter_metrics.rs`.
+- **Status**: ✅ Done. 7 new tests pass alongside existing 63 harness tests (70 total).
+
+### P1-05 (provider routing w/ health checks) — COMPLETE (by previous commit)
+- Circuit-breaker `LatencyTracker` (EWMA latency, closed/open/half-open states).
+- `HealthMonitor` for thread-safe per-provider state registry.
+- `route_request` made async with optional `&HealthMonitor` parameter.
+- `RoutingConfig` extended with `health_checks`, `max_failures`, `circuit_reset_timeout`.
+- **Status**: ✅ Done. 18 tests pass.
+
+### P1-04 (real embeddings) — NOT STARTED
+- `memory` crate has `onnx-embed` feature gate using `ort = "2.0.0-rc.12"` (older RC).
+- `ONNXEmbeddingEngine` exists but has a **placeholder tokenizer** (whitespace split, not HF `tokenizers` crate).
+- n-gram fallback (`EmbeddingEngine`) is the active default.
+- **Next step**: Upgrade to `ort 2.x` stable, integrate `tokenizers` crate for proper tokenization, swap default.
+
+### Remaining Path B work
+- P1-04 real embeddings (4-6 weeks)
+- P1-07 binary releases (2-3 weeks — add `cargo-dist` + GitHub Actions)
+- P1-08 eval harness (3-4 weeks — automated runner + task suite)
+- P2-02 wire multi-agent pipeline into CLI (2-3 weeks — ungate `OMEGA_EXPERIMENTAL_PIPELINE`)

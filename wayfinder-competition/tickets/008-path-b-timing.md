@@ -11,9 +11,9 @@ Given that Path A can ship in 2-3 weeks and Path B requires 6-12 months of execu
 - README overclaims ❌ (ticket 004 addresses this)
 - Entropy compile fixed ✅ (ticket 006 done)
 - Multi-agent pipeline experimental only ⚠️
-- No real MCP stdio client ❌
-- No tree-sitter repo map ❌
-- No real embeddings ❌
+- **MCP stdio client implemented** ✅ (ticket 007 research confirmed; `mcp/src/stdio.rs` with Content-Length framing; integrated via `stdio://` URL scheme in `omega-core/src/commands/mcp.rs`). Bug found during research (read_line vs raw byte reads) — FIXED.
+- No tree-sitter repo map ❌ (tree-sitter grammars at v0.20 exist for Rust/TS/Python/Go in harness, but no repo-wide symbol index)
+- No real embeddings ❌ (n-gram fallback only; `onnx-embed` feature gate with placeholder tokenizer exists)
 
 ### Path Alpha (Path A) — Day 21 Target
 | Milestone | Effort | Owner |
@@ -28,11 +28,11 @@ Given that Path A can ship in 2-3 weeks and Path B requires 6-12 months of execu
 ### Path B Component Validation Timeline (Parallel Work)
 
 #### Phase 1 (Months 1-3)
-| Task | Dependency | Duration | Success Criteria |
-|------|------------|----------|-----------------|
-| P1-02: MCP stdio rewrite | None | 4 weeks | Basic tool calls via stdin/stdout |
-| P1-03: Repo map + tree-sitter | P1-02 (for tooling) | 6 weeks | Query projects, file contents |
-| P1-08: Eval harness skeleton | None (in parallel with alpha) | 3 weeks | 20-task suite, runner framework |
+| Task | Dependency | Duration | Success Criteria | Status |
+|------|------------|----------|-----------------|--------|
+| ~~P1-02: MCP stdio rewrite~~ | None | 4 weeks | Basic tool calls via stdin/stdout | ✅ COMPLETED (research 007) — `mcp/src/stdio.rs` implements Content-Length framed stdio transport + `StdioTransport::spawn()` + integration in `omega-core/src/commands/mcp.rs` via `stdio://` URL scheme. Bug (read_line framing) fixed. |
+| P1-03: Repo map + tree-sitter | P1-02 (for tooling) | 6 weeks | Query projects, file contents | ⏳ NOT STARTED |
+| P1-08: Eval harness skeleton | None (in parallel with alpha) | 3 weeks | 20-task suite, runner framework | ⏳ NOT STARTED |
 
 #### Phase 2 (Months 4-9)
 | Task | Dependency | Duration | Success Criteria |
@@ -86,11 +86,11 @@ But there's also the risk of being perceived as "just an alpha" while competitor
 
 ## Decision Points Before Full Path B Commitment
 
-1. **Month 2 checkpoint**: Does MCP stdio (P1-02) work reliably enough to unblock multi-agent pipeline? If not, pivot to simplified architecture.
+1. **Month 2 checkpoint**: ~~Does MCP stdio (P1-02) work reliably enough to unblock multi-agent pipeline?~~ ✅ MCP stdio is already implemented and tested (007 research). Does the integration test (`mcp/tests/stdio_integration.rs`) pass reliably? Can `StdioTransport::spawn()` invoke real MCP server subprocesses? If no, additional work needed on process lifecycle/error recovery.
 2. **Month 3 checkpoint**: Do early eval results from P1-08 show meaningful differentiator vs single-agent baseline? If no, multi-agent may not justify complexity.
 3. **Month 5 checkpoint**: Are embedding-based retrieval actually useful for code context? If tree-sitter alone suffices, skip complex ML stack.
 4. **Month 8 checkpoint**: Can multi-agent pipeline achieve ≥60% multi-file task success as per roadmap north-star metric? If not substantially better than single-agent, reconsider investment.
 
 ## Conclusion
 
-The hybrid strategy provides critical runway (~6 months) to validate key Path B components before committing full resources. The competitive window for "deterministic quality gate" is narrowing as Claude Code evolves its hooks system, but Alpha release establishes first-mover advantage in *integrated* deterministic checking rather than opt-in scripts. If Path B component validation shows meaningful improvement over Path A foundation by Month 3-5, proceed with full execution; otherwise, pivot to focused incremental enhancement of Path A.
+The hybrid strategy provides critical runway (~6 months) to validate key Path B components before committing full resources. The competitive window for "deterministic quality gate" is narrowing as Claude Code evolves its hooks system, but Alpha release establishes first-mover advantage in *integrated* deterministic checking rather than opt-in scripts. ~~P1-02 MCP stdio is already implemented~~ — the next critical path item is P1-03 (repo map) which feeds into both the multi-agent pipeline (P2-02) and provider routing (P2-03). If Path B component validation shows meaningful improvement over Path A foundation by Month 3-5, proceed with full execution; otherwise, pivot to focused incremental enhancement of Path A.
