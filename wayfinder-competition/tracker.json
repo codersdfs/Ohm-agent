@@ -79,12 +79,13 @@
       "title": "Is full Path B execution technically feasible?",
       "file": "tickets/007-path-b-feasibility.md",
       "type": "research",
-      "status": "open",
+      "status": "closed",
       "assigned_to": "omega-wayfinder",
       "blocking": [],
       "blocked_by": [
         "002"
-      ]
+      ],
+      "findings": "research/007-findings.md"
     },
     {
       "id": "008",

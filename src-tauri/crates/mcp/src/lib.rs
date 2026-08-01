@@ -2,6 +2,7 @@
 // Discovers and invokes skills via the MCP registry.
 
 pub mod skills;
+pub mod stdio;
 pub mod transport;
 
 use serde::{Deserialize, Serialize};
