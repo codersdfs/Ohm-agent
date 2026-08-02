@@ -17,6 +17,18 @@ pub struct ToolResult {
     pub output: String,
     pub error: Option<String>,
     pub gate_result: Option<GateCheckResult>,
+    pub verification: Option<EditVerification>,
+}
+
+/// Deterministic post-write verification result.
+/// After every `write`/`edit`, we read back the target file and run a
+/// lightweight syntax sanity check (bracket balance +, for Rust, rustfmt --check
+/// if available) to catch truncated or corrupted edits before they propagate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EditVerification {
+    pub passed: bool,
+    pub language: String,
+    pub issues: Vec<String>,
 }
 
 impl ToolResult {
@@ -26,6 +38,7 @@ impl ToolResult {
             output,
             error: None,
             gate_result,
+            verification: None,
         }
     }
     pub fn err(error: String) -> Self {
@@ -34,6 +47,7 @@ impl ToolResult {
             output: String::new(),
             error: Some(error),
             gate_result: None,
+            verification: None,
         }
     }
 }
@@ -155,14 +169,110 @@ pub async fn execute_tool_inner(
     }
 
     if result.success {
-        Ok(ToolResult::ok(result.output, gate_result))
+        let verification = if matches!(tool_name.as_str(), "write" | "edit") {
+            let lang = state.detected_language.lock_guard().clone();
+            verify_edit(&request, &lang).await
+        } else {
+            None
+        };
+        let mut tr = ToolResult::ok(result.output, gate_result);
+        tr.verification = verification;
+        Ok(tr)
     } else {
         Ok(ToolResult {
             success: false,
             output: String::new(),
             error: result.error,
             gate_result,
+            verification: None,
         })
+    }
+}
+
+/// Read back the written/edited file and run a lightweight syntax sanity check.
+/// ponytail: minimal verification — bracket balance (all langs) + rustfmt --check (Rust only).
+/// Catches truncated/corrupted edits in microseconds. Upgrade path: delegate to
+/// real parser on demand.
+async fn verify_edit(request: &ToolRequest, lang: &harness::Language) -> Option<EditVerification> {
+    let path = request
+        .args
+        .get("filePath")
+        .and_then(|v| v.as_str())
+        .or_else(|| request.args.get("path").and_then(|v| v.as_str()))?;
+
+    let content = match tokio::fs::read_to_string(path).await {
+        Ok(c) => c,
+        Err(e) => {
+            return Some(EditVerification {
+                passed: false,
+                language: lang.label(),
+                issues: vec![format!("Failed to read back {}: {}", path, e)],
+            });
+        }
+    };
+
+    let mut issues = verify_brackets(&content);
+
+    // For Rust files, try `rustfmt --check` if available — catches syntax errors.
+    if matches!(lang, harness::Language::Rust) {
+        issues.extend(verify_rustfmt(path));
+    }
+
+    Some(EditVerification {
+        passed: issues.is_empty(),
+        language: lang.label(),
+        issues,
+    })
+}
+
+/// Check that (), {}, [] are balanced — catches truncated edits.
+fn verify_brackets(content: &str) -> Vec<String> {
+    let mut issues = vec![];
+    let mut paren = 0i32;
+    let mut brace = 0i32;
+    let mut bracket = 0i32;
+    for ch in content.chars() {
+        match ch {
+            '(' => paren += 1,
+            ')' => paren -= 1,
+            '{' => brace += 1,
+            '}' => brace -= 1,
+            '[' => bracket += 1,
+            ']' => bracket -= 1,
+            _ => {}
+        }
+        if paren < 0 || brace < 0 || bracket < 0 {
+            issues.push("Unmatched closing bracket — file may be truncated".into());
+            return issues;
+        }
+    }
+    if paren != 0 {
+        issues.push(format!("Unbalanced parentheses: {} remaining", paren));
+    }
+    if brace != 0 {
+        issues.push(format!("Unbalanced braces: {} remaining", brace));
+    }
+    if bracket != 0 {
+        issues.push(format!("Unbalanced brackets: {} remaining", bracket));
+    }
+    issues
+}
+
+/// Run `rustfmt --check` on a Rust file and return issues if there are syntax errors.
+/// Exit code 2 = hard parse error; exit code 1 = formatting diff (not an error).
+/// If rustfmt isn't installed, returns empty (silently skipped).
+/// ponytail: best-effort, zero-cost when rustfmt absent.
+fn verify_rustfmt(path: &str) -> Vec<String> {
+    use std::process::Command;
+    match Command::new("rustfmt").arg("--check").arg(path).status() {
+        Ok(status) if !status.success() => {
+            if status.code() == Some(2) {
+                vec![format!("rustfmt reports syntax error in {}", path)]
+            } else {
+                vec![]
+            }
+        }
+        _ => vec![],
     }
 }
 
@@ -333,5 +443,23 @@ mod tests {
             !prompt.contains("Respond with ONLY a JSON function call"),
             "should not force raw JSON-only tool protocol"
         );
+    }
+
+    #[test]
+    fn test_verify_brackets_balanced() {
+        assert!(verify_brackets("fn x() { let v = vec![1, 2]; }").is_empty());
+    }
+
+    #[test]
+    fn test_verify_brackets_unbalanced() {
+        let issues = verify_brackets("fn x() { let v = vec![1, 2]; ");
+        assert!(!issues.is_empty());
+        assert!(issues[0].contains("braces"));
+    }
+
+    #[test]
+    fn test_verify_brackets_extra_closing() {
+        let issues = verify_brackets("fn x() { } }");
+        assert!(issues.iter().any(|i| i.contains("truncated")));
     }
 }

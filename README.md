@@ -2,7 +2,7 @@
 
 **Alpha-stage AI coding assistant** — a single-agent Rust TUI with a deterministic,
 zero-token quality gate. Currently shipping: interactive chat TUI (`omega`/`omega chat`),
-headless agent mode (`omega exec`), and a headless MCP server (`omega serve-mcp`).
+headless agent mode (`omega exec`), pipeline subcommands (`omega plan|build|review|plan-status|plan-approve`), and a headless MCP server (`omega serve-mcp`) with both HTTP and stdio transports.
 
 Built on the principles of [Harness Engineering](https://github.com/anomalyco/harness-engineering).
 
@@ -14,7 +14,7 @@ Built on the principles of [Harness Engineering](https://github.com/anomalyco/ha
 a production-ready tool. The build compiles and the included test suite passes
 (200+ tests across `harness`, `omega-core`, and `omega-cli`), but features like
 multi-agent pipelines, real MCP stdio transport, and binary releases are still
-in development. See [ROADMAP.md](ROADMAP.md) for the full plan.
+in development. See [todo.md](todo.md) for the full plan.
 
 ### What works today
 
@@ -37,9 +37,9 @@ in development. See [ROADMAP.md](ROADMAP.md) for the full plan.
 
 | Capability | Status | Notes |
 |---|---|---|
-| Multi-agent pipeline (Plan -> Build -> Review -> Gate) | ⚠️ Experimental | Behind `OMEGA_EXPERIMENTAL_PIPELINE=1` env var; not wired into CLI subcommands |
+| Pipeline subcommands (`omega plan|build|review|plan-status|plan-approve`) | Working | Plan to Build to Review to Gate workflow, wired into CLI |
 | Delta-only retry | ⚠️ Experimental | Exists in pipeline code behind the env flag |
-| Real embeddings (ONNX/fastembed) | ⚠️ Stub | `memory` crate uses n-gram hashing (256-dim) for semantic search. ONNX engine exists behind `onnx-embed` feature flag, not built by default. |
+| Real embeddings | Working | `memory` crate uses fastembed (ONNX) for semantic search |
 | MCP stdio client | ❌ Not started | `mcp` crate is HTTP-only JSON-RPC; stdio transport planned for Phase 1 |
 | Provider routing with health checks | ⚠️ Partial | `providers/src/router.rs` exists but is not wired into the CLI's `load_provider_config()` |
 | Repo map / symbol index | ❌ Not started | Planned via tree-sitter indexing |
@@ -98,6 +98,9 @@ omega chat --session <id> --new-session   # or skip --new-session to auto-resume
 ```
 
 Available CLI commands: `omega chat` (default), `omega exec`, `omega serve-mcp`,
+`omega plan`, `omega build`, `omega review`, `omega plan-status`,
+`omega plan-approve`, `omega code <query>` (repo symbol search),
+`omega provider`, `omega models`, `omega config`, `omega memory`,
 `omega --help`, `omega <command> --help`.
 
 ---
@@ -148,4 +151,11 @@ Available CLI commands: `omega chat` (default), `omega exec`, `omega serve-mcp`,
 | `omega-core` | `src-tauri/crates/omega-core/` | ✅ Shipping | Core library — `AppState`, chat loop, commands, TUI, pipeline |
 | `harness` | `src-tauri/crates/harness/` | ✅ Shipping | **Mechanized Gate** — rules engine, pattern matching, scoring, linter integration |
 | `entropy` | `src-tauri/crates/entropy/` | ⚠️ Alpha | Drift scanner + GC (Rust-only) |
-| `omega-table` | `src-tauri/crates/omega-table/` | ✅ Compiles | `.otable` progressive-load format (not yet 
+| `omega-table`     | `src-tauri/crates/omega-table/`  | Working   | `.otable` progressive-load format + LRU cache |
+| `providers`       | `src-tauri/crates/providers/`    | Working   | `LlmProvider` trait + 14 providers (5 native + OpenAI-compatible) |
+| `memory`          | `src-tauri/crates/memory/`       | Working   | Hermes memory: SQLite + FTS5 + embeddings, 3-layer (session/project/user) |
+| `mcp`             | `src-tauri/crates/mcp/`          | Working   | MCP JSON-RPC client + skills registry, stdio + HTTP transports |
+| `mcp-server`      | `src-tauri/crates/mcp-server/`   | Working   | Headless MCP server (HTTP + stdio), exposes built-in tools |
+| `tool-harness`    | `src-tauri/crates/tool-harness/` | Working   | 14 built-in tools (read/write/edit/bash/grep/glob/etc) |
+| `taste`           | `src-tauri/crates/taste/`        | Working   | Taste rules / pattern database |
+| `ratata`          | `src-tauri/crates/ratata/`       | Unused    | Legacy (pre-Ratatui) TUI components |

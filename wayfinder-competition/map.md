@@ -47,10 +47,12 @@ clear (which features to build, which to kill, which tradeoffs to accept),
 - **010 — Path B go/no-go decision criteria** RESOLVED (RESEARCH). Gate framework approved with 9 progressive checkpoints. Gates 0.1 + 1.1 already passed (Path A alpha shipped, MCP stdio implemented). Gates 1.2–2.2 tied to future Path B Phase 1/2 work.
 - **Remaining Path B Phase 1 implementation work** (no longer just decisions):
   - **P1-03 (repo map)** — ✅ IMPLEMENTED: `harness/src/repomap.rs` with tree-sitter symbol indexing, LRU cache, walkdir. 7 tests pass.
-  - **P1-04 (real embeddings)** — ⏳ NOT STARTED: `memory` crate has `onnx-embed` feature gate but placeholder tokenizer only.
+  - **P1-04 (real embeddings)** — ✅ COMPLETE: Upgraded `ort` to 2.0.0-rc.13, integrated `tokenizers` crate (HuggingFace tokenizer), fixed ort 2.x API compat (Tensor::from_array, try_extract_array, Mutex for Send+Sync). `Embedder` trait enables engine swapping. `MemoryStore::with_embedder()` added.
   - **P1-05 (provider routing w/ health checks)** — ✅ ALREADY IMPLEMENTED (by previous commit): circuit-breaker `LatencyTracker` + `HealthMonitor` in `providers/src/router.rs`. 18 tests pass.
   - **P1-07 (binary releases)** — ⏳ NOT STARTED: no CI/CD workflows.
   - **P1-08 (eval harness)** — ⚠️ PARTIAL: `evals/baseline.md` exists but no automated runner.
+  - **P1-04 → P1-03 integration** — ✅ COMPLETE: `omega-core/src/code_search.rs` indexes `RepoMap` symbols into `MemoryStore` (project layer, `sym:` prefix) and runs semantic search via FTS5 + embeddings. `search_repo()` lazy-indexes + idempotent reindex. `omega code-search <query>` CLI subcommand wired in. 2 tests pass.
+  - **P2-02 (ungate pipeline)** — ✅ COMPLETE: wired `plan`, `build`, `review`, `plan-status`, `plan-approve` CLI subcommands into `omega-cli/src/main.rs`. Pipeline was already implemented in `omega-core/src/commands/`.
 - **Multi-agent pipeline cost/benefit analysis** — Does the quality delta justify 3× token cost? → continues investigation in 005
 - **Provider routing health-check value** — Does the 14-provider abstraction have real value beyond marketing? → RESOLVED: 007 research showed circuit-breaker routing is feasible and already partially implemented (P1-05 commit).
 

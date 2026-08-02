@@ -7,6 +7,7 @@ pub mod memory_summarizer;
 pub mod pipeline;
 pub mod session;
 pub mod tui;
+pub mod code_search;
 
 // ui module for permission panel and related UI components
 pub mod ui;

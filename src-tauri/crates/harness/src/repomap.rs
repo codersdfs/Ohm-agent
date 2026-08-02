@@ -402,6 +402,11 @@ impl RepoMap {
             .collect()
     }
 
+    /// All indexed symbols across every file.
+    pub fn symbols(&self) -> Vec<&Symbol> {
+        self.files.values().flatten().collect()
+    }
+
     /// Drop the cache and re-index.
     pub fn clear(&mut self) {
         self.files.clear();

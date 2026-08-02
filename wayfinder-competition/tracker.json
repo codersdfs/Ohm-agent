@@ -91,8 +91,10 @@
         "P1-03 repo map": "complete",
         "P1-05 provider routing": "complete",
         "P1-04 real embeddings": "complete",
+        "P1-04↔P1-03 code search": "complete",
         "P1-07 binary releases": "not-started",
-        "P1-08 eval harness": "skeleton"
+        "P1-08 eval harness": "skeleton",
+        "P2-02 pipeline CLI": "complete"
       }
     },
     {

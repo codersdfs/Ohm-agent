@@ -4,6 +4,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use std::io::Read;
 
 use anyhow::Result;
 use clap::Parser;
@@ -1503,6 +1504,64 @@ enum CliAction {
         #[arg(long, help = "Directory to load custom MCP skills from")]
         skills_dir: Option<String>,
     },
+
+    /// Generate a structured plan for a coding task (pipeline step 1)
+    Plan {
+        /// The task to plan
+        task: String,
+
+        #[arg(short = 'p', long,
+            help = "Provider (openai, anthropic, google, local, ollama, groq, etc.)")]
+        provider: Option<String>,
+
+        #[arg(short = 'm', long,
+            help = "Model name (e.g. gpt-4o-mini, llama3.1:8b, claude-sonnet-4)")]
+        model: Option<String>,
+
+        #[arg(short = 'b', long, help = "Base URL for the provider API")]
+        base_url: Option<String>,
+    },
+
+    /// Execute a plan and apply changes (pipeline step 2)
+    Build {
+        #[arg(short = 'p', long,
+            help = "Provider (openai, anthropic, google, local, ollama, groq, etc.)")]
+        provider: Option<String>,
+
+        #[arg(short = 'm', long,
+            help = "Model name (e.g. gpt-4o-mini, llama3.1:8b, claude-sonnet-4)")]
+        model: Option<String>,
+
+        #[arg(short = 'b', long, help = "Base URL for the provider API")]
+        base_url: Option<String>,
+    },
+
+    /// Review generated code through the gate engine (pipeline step 3)
+    Review {
+        /// File path to review (defaults to reading from stdin)
+        file: Option<String>,
+
+        #[arg(long, help = "Context description for the review")]
+        context: Option<String>,
+    },
+
+    /// Show current plan status
+    PlanStatus,
+
+    /// Approve the current plan (allows build to proceed)
+    PlanApprove,
+
+    /// Index repo symbols and semantically search code
+    CodeSearch {
+        /// Query to search for (e.g. "database connection")
+        query: Option<String>,
+
+        #[arg(long, help = "Re-index symbols from the repo before searching")]
+        reindex: bool,
+
+        #[arg(long, default_value_t = 10, help = "Max results")]
+        limit: usize,
+    },
 }
 
 // entry point
@@ -1546,6 +1605,21 @@ fn main() -> Result<()> {
             auth_token,
             skills_dir: _,
         } => run_mcp_server(port, host, auth_token),
+        CliAction::Plan {
+            task,
+            provider,
+            model,
+            base_url,
+        } => run_plan(provider, model, base_url, task),
+        CliAction::Build {
+            provider,
+            model,
+            base_url,
+        } => run_build(provider, model, base_url),
+        CliAction::Review { file, context } => run_review(file, context),
+        CliAction::PlanStatus => run_plan_status(),
+        CliAction::PlanApprove => run_plan_approve(),
+        CliAction::CodeSearch { query, reindex, limit } => run_code_search(query, reindex, limit),
     }
 }
 
@@ -1750,4 +1824,150 @@ fn run_chat(
     println!();
 
     Ok(())
+}
+
+fn run_plan(provider: Option<String>, model: Option<String>, base_url: Option<String>, task: String) -> Result<()> {
+    let config = load_provider_config(provider, model, base_url);
+    let state = Arc::new(AppState::new_with_provider_config(&default_db_path(), config));
+
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async move {
+        let payload = commands::plan_cmd::generate_plan(&state, task)
+            .await
+            .map_err(|e| anyhow::anyhow!("Plan failed: {}", e))?;
+        println!("Ω Plan generated");
+        println!("  Task ID: {}", payload.task_id);
+        println!("  Complexity: {}", payload.plan.estimated_complexity);
+        println!("  Risk: {}", payload.plan.risk_level);
+        println!("  Steps: {}", payload.plan.steps.len());
+        println!();
+        println!("  Approve with: omega plan-approve");
+        println!("  Build with:   omega build");
+        println!("  Status with:  omega plan-status");
+        Ok(())
+    })
+}
+
+fn run_build(provider: Option<String>, model: Option<String>, base_url: Option<String>) -> Result<()> {
+    let config = load_provider_config(provider, model, base_url);
+    let state = Arc::new(AppState::new_with_provider_config(&default_db_path(), config));
+
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async move {
+        let session = commands::build_cmd::execute_build(&state)
+            .await
+            .map_err(|e| anyhow::anyhow!("Build failed: {}", e))?;
+        println!("Ω Build complete: {}/{} steps succeeded",
+            session.iter().filter(|s| s.success).count(),
+            session.len());
+        for entry in &session {
+            let status = if entry.success { "✓" } else { "✗" };
+            println!("  {} {}", status, entry.tool);
+        }
+        Ok(())
+    })
+}
+
+fn run_review(file: Option<String>, context: Option<String>) -> Result<()> {
+    let code = match file {
+        Some(path) => std::fs::read_to_string(&path)
+            .map_err(|e| anyhow::anyhow!("Failed to read {}: {}", path, e))?,
+        None => {
+            let mut buf = String::new();
+            std::io::stdin().read_to_string(&mut buf)?;
+            buf
+        }
+    };
+
+    let ctx = context.unwrap_or_else(|| "No context provided".to_string());
+
+    let config = load_provider_config(None, None, None);
+    let state = Arc::new(AppState::new_with_provider_config(&default_db_path(), config));
+
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async move {
+        let request = commands::review_cmd::ReviewRequest { code, context: ctx };
+        let output = commands::review_cmd::run_review(&state, request)
+            .await
+            .map_err(|e| anyhow::anyhow!("Review failed: {}", e))?;
+        println!("Ω Review score: {}/100", output.score_breakdown.combined_score);
+        if output.score_breakdown.passed {
+            println!("  Gate: PASSED");
+        } else {
+            println!("  Gate: FAILED");
+            for v in &output.gate_violations {
+                println!("  - [{:?}] {}", v.category, v.message);
+            }
+        }
+        Ok(())
+    })
+}
+
+fn run_plan_status() -> Result<()> {
+    let state = Arc::new(AppState::new_with_provider_config(&default_db_path(), load_provider_config(None, None, None)));
+
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async move {
+        let plan = commands::plan_cmd::get_plan(&state)
+            .await
+            .map_err(|e| anyhow::anyhow!("Plan status failed: {}", e))?;
+        match plan {
+            Some(p) => {
+                println!("Ω Plan status");
+                println!("  Task: {}", p.task_summary);
+                println!("  Language: {}", p.language);
+                println!("  Complexity: {}", p.estimated_complexity);
+                println!("  Risk: {}", p.risk_level);
+                println!("  Steps: {}", p.steps.len());
+                println!("  Files: {}", p.files_affected.len());
+            }
+            None => println!("No plan has been generated yet. Use `omega plan <task>` to generate one."),
+        }
+        Ok(())
+    })
+}
+
+fn run_plan_approve() -> Result<()> {
+    let state = Arc::new(AppState::new_with_provider_config(&default_db_path(), load_provider_config(None, None, None)));
+
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async move {
+        let result = commands::plan_cmd::approve_plan(&state)
+            .await
+            .map_err(|e| anyhow::anyhow!("Plan approval failed: {}", e))?;
+        println!("{}", result);
+        Ok(())
+    })
+}
+
+fn run_code_search(query: Option<String>, reindex: bool, limit: usize) -> Result<()> {
+    use omega_core::code_search;
+
+    let repo_root = std::env::current_dir()
+        .map_err(|e| anyhow::anyhow!("current dir: {}", e))?;
+    let root_str = repo_root.to_string_lossy().to_string();
+
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async move {
+        let query = match query {
+            Some(q) => q,
+            None => {
+                println!("Usage: omega code-search <query> [--reindex]");
+                return Ok(());
+            }
+        };
+
+        let hits = code_search::search_repo(&root_str, &query, limit, &default_db_path(), reindex)
+            .map_err(|e| anyhow::anyhow!("search: {}", e))?;
+        if hits.is_empty() {
+            println!("No matches for {:?}", query);
+            return Ok(());
+        }
+        println!("Ω {} results for {:?}", hits.len(), query);
+        for h in &hits {
+            println!("  {:.3}  {}:{}  {} ({})",
+                h.relevance, h.file_path, h.start_line, h.name, h.kind);
+        }
+        Ok(())
+    })
 }
