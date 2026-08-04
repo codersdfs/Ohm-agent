@@ -4,6 +4,7 @@ pub mod context_manager;
 pub mod error;
 pub mod events;
 pub mod learning;
+pub mod memory_injector;
 pub mod memory_retriever;
 pub mod memory_summarizer;
 pub mod pipeline;
