@@ -1,4 +1,3 @@
-use crate::context::{compact, estimate_tokens};
 use crate::ChatEmitter;
 use crate::{AppState, MutexExt};
 use serde::{Deserialize, Serialize};
@@ -420,23 +419,9 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
             .system_prompt
             .unwrap_or_else(crate::commands::tools::default_system_prompt);
 
-        // P0-08: Retrieve relevant project memories and inject into system prompt
-        let memory_context = {
-            let store = state.memory_store.lock_guard();
-            let model_window = config.kind.context_window();
-            let budget = std::cmp::min(2048, (model_window / 10) as usize);
-            crate::memory_retriever::retrieve_memories(&store, &request.content, budget)
-        };
-
-        let full_prompt = if memory_context.is_empty() {
-            sys_prompt
-        } else {
-            format!("{}\n\n{}", sys_prompt, memory_context)
-        };
-
         messages.push(providers::ChatMessage {
             role: "system".into(),
-            content: full_prompt,
+            content: sys_prompt,
             tool_calls: None,
             tool_call_id: None,
             name: None,
@@ -454,24 +439,30 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
     // kill still leaves the prompt on disk.
     flush_session(state, messages);
 
-    // P0-07: compact history once per turn if over 70% of the model window.
-    // `compact` already inserts the extractive summary; do not append again.
+    // P1: assemble context — graph-ranked repo-map + JIT Hermes memory +
+    // structured compaction, budgeted per provider window. Replaces the old
+    // chars/4 `estimate_tokens` + keep-last-N `compact` block.
     let window = config.kind.context_window();
-    let threshold = (window as f64 * 0.7) as usize;
-    if estimate_tokens(messages) > threshold {
-        let before = messages.len();
-        let (compacted, summary) = compact(messages.clone(), 6, window);
-        *messages = compacted;
-        flush_session(state, messages);
-        log::info!(
-            "context compacted: {} → {} messages (window={}, threshold={}, summary_empty={})",
-            before,
-            messages.len(),
-            window,
-            threshold,
-            summary.is_empty()
+    let context_manager = crate::context_manager::ContextManager::new(
+        std::env::current_dir().unwrap_or_default(),
+        window,
+        &config.model,
+        6,
+    );
+    {
+        let store = state.memory_store.lock_guard();
+        let assembled = context_manager
+            .prepare(messages, Some(&store), &user_content)
+            .map_err(|e| format!("context preparation failed: {}", e))?;
+        log::debug!(
+            "context prepared: {} tokens, repo_map={} chars, memory={} chars, compacted={}",
+            assembled.total_tokens,
+            assembled.repo_map.len(),
+            assembled.memory.len(),
+            assembled.compacted.is_some()
         );
     }
+    flush_session(state, messages);
 
     let provider = std::sync::Arc::new(providers::create_provider(&config)?);
     let mut full_response = String::new();

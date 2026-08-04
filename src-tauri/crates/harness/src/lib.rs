@@ -6,6 +6,7 @@ pub mod negative_knowledge;
 pub mod patterns;
 pub mod persistence;
 pub mod repeated;
+pub mod repomap;
 pub mod rules;
 pub mod scoring;
 pub mod structural;
