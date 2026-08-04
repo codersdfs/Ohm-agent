@@ -8,7 +8,8 @@ use memory::MemoryStore;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
-use crate::context::estimate_tokens;
+use crate::context_manager::token_counter::Chars4Counter;
+use crate::context_manager::token_counter::TokenCounter;
 use crate::MutexExt;
 
 pub const DEFAULT_MAX_TOKENS: u32 = 2000;
@@ -79,15 +80,15 @@ impl MemoryInjector {
                 } else {
                     entry.value.clone()
                 };
-
                 let line = format!("- {}: {}", entry.key, value);
-                let line_tokens = estimate_tokens(&[providers::ChatMessage {
+                let counter = Chars4Counter;
+                let line_tokens = counter.count_messages(&[providers::ChatMessage {
                     role: "system".into(),
                     content: line.clone(),
                     tool_calls: None,
                     tool_call_id: None,
                     name: None,
-                }]);
+                }]) as usize;
 
                 if line_tokens > token_budget {
                     break;

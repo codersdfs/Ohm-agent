@@ -1752,7 +1752,7 @@ fn run_exec(
 
                 if show_tokens {
                     let (tokens_in, tokens_out) =
-                        omega_core::commands::chat::session_token_counts();
+                        omega_core::commands::cost_tracker::session_token_counts();
                     eprintln!();
                     eprintln!("Omega exec  session: {}", session_id);
                     eprintln!("  Model:     {}", model_name);

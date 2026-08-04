@@ -3,7 +3,7 @@
 //! Retrieves relevant project memories from the SQLite memory store and
 //! formats them into a system-prompt snippet with a dynamic token budget.
 
-use crate::context::estimate_tokens;
+use crate::context_manager::token_counter::{Chars4Counter, TokenCounter};
 use memory::{MemoryEntry, MemoryStore};
 
 /// Maximum characters per memory entry in the formatted output.
@@ -102,14 +102,14 @@ pub fn retrieve_memories(store: &MemoryStore, query: &str, budget_tokens: usize)
             entry.value.clone()
         };
         let line = format!("- {}: {}\n", entry.key, value);
-
-        let line_tokens = estimate_tokens(&[providers::ChatMessage {
+        let counter = Chars4Counter;
+        let line_tokens = counter.count_messages(&[providers::ChatMessage {
             role: "system".into(),
             content: line.clone(),
             tool_calls: None,
             tool_call_id: None,
             name: None,
-        }]);
+        }]) as usize;
 
         if current_tokens + line_tokens > budget_tokens && !context.is_empty() {
             log::info!(
@@ -198,13 +198,14 @@ mod tests {
             ).unwrap();
         }
         let result = retrieve_memories(&store, "value", 50);
-        let token_count = estimate_tokens(&[providers::ChatMessage {
+        let counter = Chars4Counter;
+        let token_count = counter.count_messages(&[providers::ChatMessage {
             role: "system".into(),
             content: result.clone(),
             tool_calls: None,
             tool_call_id: None,
             name: None,
-        }]);
+        }]) as usize;
         assert!(token_count <= 100, "should stay within budget, got {} tokens", token_count);
     }
 

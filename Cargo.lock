@@ -1751,6 +1751,8 @@ dependencies = [
  "serde_json",
  "similar",
  "syntect",
+ "tempfile",
+ "tokenizers",
  "tokio",
  "tool-harness",
  "uuid",

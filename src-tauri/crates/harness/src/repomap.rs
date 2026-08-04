@@ -412,6 +412,145 @@ impl RepoMap {
         self.files.clear();
         self.cache.clear();
     }
+
+    /// Build a reference graph from the indexed symbols and return ranked
+    /// `(Symbol, score)` pairs sorted descending by graph-centrality score.
+    ///
+    /// Nodes are symbols; edges go from a symbol that references another
+    /// to the referenced symbol. Edge weights derive from symbol kind.
+    /// Ranking uses a simplified iterative PageRank (damping 0.85, 50 max
+    /// iterations, 1e-6 convergence threshold) over a custom adjacency list.
+    pub fn build_graph(&self) -> Vec<(&Symbol, f64)> {
+        let symbols: Vec<&Symbol> = self.symbols();
+        if symbols.is_empty() {
+            return vec![];
+        }
+
+        let n = symbols.len();
+
+        let kind_weight = |s: &Symbol| -> f64 {
+            match s.kind {
+                SymbolKind::Trait | SymbolKind::Struct | SymbolKind::Enum | SymbolKind::TypeAlias => 3.0,
+                SymbolKind::Function => 2.0,
+                SymbolKind::Impl | SymbolKind::Class | SymbolKind::Interface => 2.5,
+                SymbolKind::Module => 1.5,
+                SymbolKind::Import => 0.5,
+                SymbolKind::Variable | SymbolKind::Const => 0.8,
+                SymbolKind::Call | SymbolKind::Unknown => 1.0,
+            }
+        };
+
+        let mut adj: Vec<Vec<(usize, f64)>> = vec![vec![]; n];
+        let mut base_weights: Vec<f64> = vec![0.0; n];
+
+        for (i, s) in symbols.iter().enumerate() {
+            base_weights[i] = kind_weight(s);
+        }
+
+        for (i, s) in symbols.iter().enumerate() {
+            let sig = s.signature.as_deref().unwrap_or("");
+            let text = format!("{} {} {}", s.name, sig, s.file_path);
+            for (j, other) in symbols.iter().enumerate() {
+                if i == j { continue; }
+                if text.contains(&other.name) && other.name.len() > 2 {
+                    let weight = kind_weight(other) * 0.5;
+                    adj[i].push((j, weight));
+                    base_weights[i] += weight * 0.3;
+                }
+            }
+        }
+
+        let total_weight: f64 = base_weights.iter().sum::<f64>().max(1.0);
+        for w in &mut base_weights {
+            *w /= total_weight;
+        }
+
+        let d: f64 = 0.85;
+        let epsilon: f64 = 1e-6;
+        let max_iter: usize = 50;
+        let mut ranks = vec![1.0 / n as f64; n];
+
+        for _ in 0..max_iter {
+            let mut new_ranks = vec![0.0; n];
+            for j in 0..n {
+                let mut sum = 0.0;
+                for (src, outgoing) in adj.iter().enumerate() {
+                    for (tgt, w) in outgoing {
+                        if *tgt == j {
+                            let out_weight: f64 = adj[src].iter().map(|(_, w)| *w).sum::<f64>().max(1.0);
+                            sum += ranks[src] * (*w / out_weight);
+                        }
+                    }
+                }
+                new_ranks[j] = (1.0 - d) / n as f64 + d * sum;
+            }
+            let diff: f64 = ranks.iter().zip(new_ranks.iter()).map(|(a, b)| (a - b).abs()).sum();
+            ranks = new_ranks;
+            if diff < epsilon { break; }
+        }
+
+        let mut indexed: Vec<(usize, f64)> = (0..n).map(|i| (i, ranks[i])).collect();
+        indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let mut result: Vec<(&Symbol, f64)> = vec![];
+        for (i, rank) in indexed {
+            result.push((symbols[i], rank));
+        }
+        result
+    }
+
+    /// Render the repo-map within a token budget.
+    ///
+    /// Produces a tree-format string grouping symbols by file, ordered by
+    /// graph rank. Symbols with lower rank are dropped first when the budget
+    /// is tight. Uses chars/4 as token approximation for the repo-map section.
+    pub fn render(&self, token_budget: u32) -> String {
+        if token_budget == 0 {
+            return String::new();
+        }
+
+        let ranked = self.build_graph();
+        if ranked.is_empty() {
+            return String::new();
+        }
+
+        let max_chars = (token_budget as usize) * 4;
+        let mut out = String::new();
+        out.push_str("# Repo map (ranked by graph centrality):\n");
+
+        let mut file_groups: std::collections::HashMap<&str, Vec<(&Symbol, f64)>> = std::collections::HashMap::new();
+        let mut file_order: Vec<&str> = vec![];
+
+        for (symbol, rank) in &ranked {
+            let entry = file_groups.entry(symbol.file_path.as_str()).or_default();
+            if entry.is_empty() {
+                file_order.push(symbol.file_path.as_str());
+            }
+            entry.push((symbol, *rank));
+        }
+
+        for file_path in &file_order {
+            let symbols = file_groups.get(file_path).unwrap();
+            let mut block = String::new();
+            block.push_str(&format!("{}/:\n", file_path));
+
+            for (symbol, rank) in symbols {
+                let sig = symbol.signature.as_deref().unwrap_or(&symbol.name);
+                let line = format!("  ├── {} ({:?}) [rank: {:.3}]\n", sig, symbol.kind, rank);
+                if out.len() + block.len() + line.len() > max_chars {
+                    if out.len() + block.len() <= max_chars {
+                        out.push_str(&block);
+                        out.push_str("  …[truncated]\n");
+                    }
+                    return out;
+                }
+                block.push_str(&line);
+            }
+            out.push_str(&block);
+        }
+
+        out
+    }
 }
 
 // Suppress unused import warning — PathBuf is used by walkdir's API indirectly
@@ -545,3 +684,73 @@ mod tests {
         assert!(!names.contains(&"skip"), "skip function should not be indexed");
     }
 }
+    #[test]
+    fn build_graph_empty_repo() {
+        let map = RepoMap::new();
+        let ranked = map.build_graph();
+        assert!(ranked.is_empty());
+    }
+
+    #[test]
+    fn build_graph_returns_sorted_ranks() {
+        let mut map = RepoMap::new();
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join("a.rs"),
+            "fn main() { foo(); bar(); }\nfn foo() {}\nfn bar() {}",
+        )
+        .unwrap();
+        let symbols = map.parse_file(temp.path().join("a.rs").as_path()).unwrap();
+        map.files.insert("a.rs".to_string(), symbols);
+
+        let ranked = map.build_graph();
+        assert!(!ranked.is_empty());
+        // Verify descending order.
+        for w in ranked.windows(2) {
+            assert!(
+                w[0].1 >= w[1].1,
+                "ranks not descending: {} < {}",
+                w[0].1,
+                w[1].1
+            );
+        }
+    }
+
+    #[test]
+    fn render_respects_budget() {
+        let mut map = RepoMap::new();
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join("a.rs"),
+            "fn alpha() {}\nfn beta() {}\nstruct Gamma;",
+        )
+        .unwrap();
+        let symbols = map.parse_file(temp.path().join("a.rs").as_path()).unwrap();
+        map.files.insert("a.rs".to_string(), symbols);
+
+        // With zero budget → empty.
+        assert_eq!(map.render(0), "");
+
+        // With small budget → should fit.
+        let rendered = map.render(512);
+        assert!(rendered.contains("a.rs"));
+        assert!(rendered.contains("alpha"));
+        assert!(rendered.contains("beta"));
+        assert!(rendered.contains("Gamma"));
+    }
+
+    #[test]
+    fn render_groups_by_file() {
+        let mut map = RepoMap::new();
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("a.rs"), "fn foo() {}\nstruct Bar;").unwrap();
+        std::fs::write(temp.path().join("b.rs"), "fn baz() {}").unwrap();
+        let syms_a = map.parse_file(temp.path().join("a.rs").as_path()).unwrap();
+        let syms_b = map.parse_file(temp.path().join("b.rs").as_path()).unwrap();
+        map.files.insert("a.rs".to_string(), syms_a);
+        map.files.insert("b.rs".to_string(), syms_b);
+
+        let rendered = map.render(2048);
+        assert!(rendered.contains("a.rs/"));
+        assert!(rendered.contains("b.rs/"));
+    }
