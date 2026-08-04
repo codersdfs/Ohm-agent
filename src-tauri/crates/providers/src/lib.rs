@@ -3,8 +3,10 @@ pub mod google;
 pub mod local;
 pub mod openai;
 pub mod router;
+pub mod types;
 
 pub use router::*;
+pub use types::*;
 
 use serde::{Deserialize, Serialize};
 

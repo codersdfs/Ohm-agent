@@ -13,6 +13,7 @@ mod grep;
 mod read;
 mod todo;
 mod web_fetch;
+mod spawn_subagent;
 mod write;
 
 use crate::ToolRegistry;
@@ -30,6 +31,7 @@ pub use grep::GrepTool;
 pub use read::ReadTool;
 pub use todo::{TodoItem, TodoStatus, TodoTool, TodoStore, new_todo_store};
 pub use web_fetch::WebFetchTool;
+pub use spawn_subagent::SpawnSubagentTool;
 pub use write::WriteTool;
 
 /// Create default tool registry with all built-in tools
@@ -49,5 +51,6 @@ pub fn default_tool_registry() -> ToolRegistry {
     registry.register(Box::new(WebFetchTool));
     registry.register(Box::new(TodoTool::new(new_todo_store())));
     registry.register(Box::new(AskUserTool));
+    registry.register(Box::new(SpawnSubagentTool));
     registry
 }

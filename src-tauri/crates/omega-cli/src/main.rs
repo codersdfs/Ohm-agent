@@ -993,7 +993,7 @@ impl App {
             };
 
             let (tokens_in_before, tokens_out_before) =
-                omega_core::commands::chat::session_token_counts();
+                omega_core::commands::cost_tracker::session_token_counts();
 
             let (result, saved_msgs) = {
                 let mut msgs = messages.lock().await;
@@ -1018,7 +1018,7 @@ impl App {
 
             // Delta recorded by chat::record_cost during the stream.
             let (tokens_in_after, tokens_out_after) =
-                omega_core::commands::chat::session_token_counts();
+                omega_core::commands::cost_tracker::session_token_counts();
             let tokens_in = tokens_in_after.saturating_sub(tokens_in_before) as u32;
             let tokens_out = tokens_out_after.saturating_sub(tokens_out_before) as u32;
 
@@ -1814,7 +1814,7 @@ fn run_chat(
         .run::<App>()?;
 
     // Session summary (tokens from global statics, config captured before run)
-    let (tokens_in, tokens_out) = omega_core::commands::chat::session_token_counts();
+    let (tokens_in, tokens_out) = omega_core::commands::cost_tracker::session_token_counts();
     println!();
     println!("Ω Omega Agent — session summary");
     println!("  Model:     {}", model);
