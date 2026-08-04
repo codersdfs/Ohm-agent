@@ -2,7 +2,7 @@ use crate::ChatEmitter;
 use crate::{AppState, MutexExt};
 use serde::{Deserialize, Serialize};
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use super::cost_tracker;
@@ -562,7 +562,7 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
 
             emitter.emit_done(&full_response)?;
             if let Some(ref u) = last_usage {
-                record_cost(u.input_tokens, u.output_tokens);
+                cost_tracker::record_cost(u.input_tokens, u.output_tokens);
                 if emitter.allows_direct_terminal_output() {
                     eprintln!(
                         "  {}tokens: {} in / {} out{}",
@@ -635,7 +635,7 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
             flush_session(state, messages);
             emitter.emit_done(&full_response)?;
             if let Some(ref u) = response.usage {
-                record_cost(u.input_tokens, u.output_tokens);
+                cost_tracker::record_cost(u.input_tokens, u.output_tokens);
                 if emitter.allows_direct_terminal_output() {
                     eprintln!(
                         "  {}tokens: {} in / {} out{}",
