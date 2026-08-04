@@ -2,137 +2,15 @@ use crate::ChatEmitter;
 use crate::{AppState, MutexExt};
 use serde::{Deserialize, Serialize};
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
+
+use super::cost_tracker;
+use super::diff_display::show_diff;
+use super::permission_prompt::{check_permission, NoopEmitter, Permission};
 
 const DIM: &str = "\x1b[2m";
 const RESET: &str = "\x1b[0m";
-
-static COST_INPUT: AtomicU64 = AtomicU64::new(0);
-static COST_OUTPUT: AtomicU64 = AtomicU64::new(0);
-static COST_COUNT: AtomicU64 = AtomicU64::new(0);
-
-pub fn cost_report() -> String {
-    format!(
-        "  {}cost: session total — {} in / {} out ({} messages){}",
-        DIM,
-        COST_INPUT.load(Ordering::Relaxed),
-        COST_OUTPUT.load(Ordering::Relaxed),
-        COST_COUNT.load(Ordering::Relaxed),
-        RESET,
-    )
-}
-
-fn record_cost(input: u32, output: u32) {
-    COST_INPUT.fetch_add(input as u64, Ordering::Relaxed);
-    COST_OUTPUT.fetch_add(output as u64, Ordering::Relaxed);
-    COST_COUNT.fetch_add(1, Ordering::Relaxed);
-}
-
-/// Read the current session's cumulative token counts.
-pub fn session_token_counts() -> (u64, u64) {
-    (
-        COST_INPUT.load(Ordering::Relaxed),
-        COST_OUTPUT.load(Ordering::Relaxed),
-    )
-}
-
-/// A no-op ChatEmitter used by send_message (non-interactive API call).
-pub struct NoopEmitter;
-
-impl ChatEmitter for NoopEmitter {
-    fn emit_token(&self, _token: &str) -> Result<(), String> {
-        Ok(())
-    }
-    fn emit_done(&self, _full: &str) -> Result<(), String> {
-        Ok(())
-    }
-    fn emit_error(&self, _error: &str) -> Result<(), String> {
-        Ok(())
-    }
-}
-
-enum Permission {
-    Allow,
-    Deny,
-    Abort,
-}
-
-async fn check_permission<E: ChatEmitter>(
-    mode: &str,
-    tool: &str,
-    _args: &str,
-    emitter: &E,
-) -> Permission {
-    match mode {
-        "strict" => {
-            if emitter.allows_direct_terminal_output() {
-                eprintln!("  {}{} denied (strict mode){}", DIM, tool, RESET);
-            } else {
-                log::info!("{} denied (strict mode)", tool);
-            }
-            Permission::Deny
-        }
-        "on" => {
-            if !emitter.allows_direct_terminal_output() {
-                // Full-screen TUI owns the terminal; cannot prompt on stdin.
-                log::info!("{} auto-approved (TUI permission prompt unavailable)", tool);
-                return Permission::Allow;
-            }
-            use std::io::Write;
-            use tokio::io::AsyncBufReadExt;
-            let mut input = String::new();
-            let mut reader = tokio::io::BufReader::new(tokio::io::stdin());
-            loop {
-                eprint!("  Allow {}? (y/N/q): ", tool);
-                std::io::stderr().flush().ok();
-                input.clear();
-                if reader.read_line(&mut input).await.is_err() {
-                    return Permission::Deny;
-                }
-                match input.trim().to_lowercase().as_str() {
-                    "y" | "yes" => return Permission::Allow,
-                    "" | "n" | "no" => return Permission::Deny,
-                    "q" | "quit" => return Permission::Abort,
-                    _ => continue,
-                }
-            }
-        }
-        _ => Permission::Allow,
-    }
-}
-fn show_diff<E: ChatEmitter>(path: &str, old: &str, new: &str, emitter: &E) {
-    if old == new {
-        return;
-    }
-    if !emitter.allows_direct_terminal_output() {
-        // The bounded edit preview inside ToolExecutionComponent already shows
-        // the file path and diff. Direct stderr writes here would bypass the
-        // Ratatui buffer and corrupt the full-screen TUI.
-        return;
-    }
-    eprintln!("  {} {} {}", "──", path, "──");
-    let diff = similar::TextDiff::from_lines(old, new);
-    for change in diff.iter_all_changes() {
-        let sign = match change.tag() {
-            similar::ChangeTag::Delete => "-",
-            similar::ChangeTag::Insert => "+",
-            similar::ChangeTag::Equal => " ",
-        };
-        let line = change.value().trim_end_matches('\n');
-        if line.is_empty() {
-            continue;
-        }
-        match change.tag() {
-            similar::ChangeTag::Equal => {
-                eprintln!("  {} {}{}{}", sign, DIM, line, RESET);
-            }
-            _ => {
-                eprintln!("  {} {}", sign, line);
-            }
-        }
-    }
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SendMessageRequest {
