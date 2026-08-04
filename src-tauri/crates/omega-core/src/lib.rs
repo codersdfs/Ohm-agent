@@ -6,6 +6,7 @@ pub mod learning;
 pub mod memory_retriever;
 pub mod memory_summarizer;
 pub mod pipeline;
+pub mod subagent;
 pub mod session;
 pub mod tui;
 
