@@ -2,6 +2,7 @@ pub mod commands;
 pub mod context;
 pub mod context_manager;
 pub mod error;
+pub mod events;
 pub mod learning;
 pub mod memory_retriever;
 pub mod memory_summarizer;
