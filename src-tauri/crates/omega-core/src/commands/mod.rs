@@ -1,9 +1,12 @@
 pub mod build_cmd;
 pub mod chat;
+pub mod cost_tracker;
+pub mod diff_display;
 pub mod entropy_cmd;
 pub mod gate;
 pub mod mcp;
 pub mod memory;
+pub mod permission_prompt;
 pub mod plan_cmd;
 pub mod review_cmd;
 pub mod router_cmd;

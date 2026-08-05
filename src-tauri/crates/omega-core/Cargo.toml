@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 description = "Omega Agent core library — shared between Tauri GUI and CLI"
 
+[features]
+default = []
+token-counting = ["dep:tokenizers"]
+
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -24,6 +28,7 @@ indicatif = "0.17"
 anyhow = "1"
 ratatui = "0.26"
 crossterm = "0.27"
+tokenizers = { version = "0.23", default-features = false, features = ["onig"], optional = true }
 
 providers = { path = "../providers" }
 entropy = { path = "../entropy" }
@@ -32,3 +37,6 @@ memory = { path = "../memory" }
 mcp = { path = "../mcp" }
 omega-table = { path = "../omega-table" }
 tool-harness = { path = "../tool-harness" }
+
+[dev-dependencies]
+tempfile = "3"

@@ -106,7 +106,7 @@ pub fn render_full_layout(frame: &mut Frame, area: Rect, chrome: &mut LayoutChro
 
     // ── Footer bar ───────────────────────────────────────────────────────
     chrome.status.hint_text = Some("[CR] COMMIT | [^C] ABORT | ^K cmds | ? help".into());
-    let (tokens_in, tokens_out) = commands::chat::session_token_counts();
+    let (tokens_in, tokens_out) = commands::cost_tracker::session_token_counts();
     chrome.status.tokens_in = tokens_in;
     chrome.status.tokens_out = tokens_out;
     chrome.status.messages_count = chrome.session_messages;
@@ -320,7 +320,7 @@ fn render_metrics_panel(
 
     // Row 0: real session input/output usage
     let gauge_y = inner.y;
-    let (tokens_in, tokens_out) = commands::chat::session_token_counts();
+    let (tokens_in, tokens_out) = commands::cost_tracker::session_token_counts();
     let usage = StatusState::format_token_usage(tokens_in, tokens_out);
     let gauge_spans = vec![
         Span::styled("TOKENS ", theme::style_dim()),

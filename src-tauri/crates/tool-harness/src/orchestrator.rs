@@ -1,14 +1,16 @@
-// Tool orchestrator — secondary/library helper.
+// Tool orchestrator — canonical agent loop.
 //
-// CANONICAL production agent loop lives in:
-//   omega_core::commands::chat::stream_message_with_history_cancel
-// Prefer that path for CLI/TUI. This orchestrator remains for library-style
-// embedding and tests; do not diverge permission/gate/cancel behavior without
-// also updating chat.rs.
+// This is the single source of truth for the agent loop. CLI/TUI paths
+// (chat.rs) delegate here rather than duplicating the loop. Library-style
+// embedding and tests also use this directly.
+//
+// When adding new features (hooks, context management, subagent support),
+// extend THIS struct — do not create parallel loops.
 
 use crate::{ExecutionPipeline, ToolRegistry, ToolRequest, ToolUseContext};
 use providers::{ChatMessage, ChatRequest, LlmProvider, ProviderConfig, ToolCall};
 
+/// Canonical agent loop. `chat.rs` delegates to this for CLI/TUI paths.
 pub struct ToolOrchestrator {
     registry: ToolRegistry,
     pipeline: ExecutionPipeline,
