@@ -136,14 +136,16 @@ impl MemoryStore {
         let id = uuid::Uuid::new_v4().to_string();
         let timestamp = chrono::Utc::now().to_rfc3339();
 
-        let embedding = self
-            .embedding
-            .embed(value)
-            .map(|v| {
+        let embedding = match self.embedding.embed(value) {
+            Ok(v) => {
                 let bytes: Vec<u8> = v.iter().flat_map(|f| f.to_le_bytes()).collect();
                 Some(bytes)
-            })
-            .unwrap_or(None);
+            }
+            Err(e) => {
+                log::warn!("MemoryStore: embedding generation failed for key={}; entry stored without semantic ranking: {}", key, e);
+                None
+            }
+        };
 
         self.conn.execute(
             "INSERT INTO memory (id, layer, key, value, embedding, timestamp) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -180,7 +182,7 @@ impl MemoryStore {
         let mut relevances: Vec<f64> = Vec::new();
 
         // Try FTS5 search first
-        let fts_found = match layer {
+        let fts_result = match layer {
             Some(l) => self.search_fts(
                 &fts_query,
                 Some(l),
@@ -199,16 +201,20 @@ impl MemoryStore {
             ),
         };
 
-        // Fall back to full scan
-        if !fts_found {
-            entries.clear();
-            relevances.clear();
-            match layer {
-                Some(l) => {
-                    self.search_scan(Some(l), limit, &query_vec, &mut entries, &mut relevances)
+        match fts_result {
+            Ok(false) => {
+                // No FTS results — fall back to full-scan
+                entries.clear();
+                relevances.clear();
+                match layer {
+                    Some(l) => {
+                        self.search_scan(Some(l), limit, &query_vec, &mut entries, &mut relevances)
+                    }
+                    None => self.search_scan(None, limit, &query_vec, &mut entries, &mut relevances),
                 }
-                None => self.search_scan(None, limit, &query_vec, &mut entries, &mut relevances),
             }
+            Ok(true) => {}
+            Err(e) => return Err(format!("FTS search failed: {}", e)),
         }
 
         Ok(SearchResult {
@@ -225,7 +231,7 @@ impl MemoryStore {
         query_vec: &[f32],
         entries: &mut Vec<MemoryEntry>,
         relevances: &mut Vec<f64>,
-    ) -> bool {
+    ) -> Result<bool, rusqlite::Error> {
         let sql = match layer {
             Some(_) => {
                 "SELECT m.id, m.layer, m.key, m.value, m.embedding, m.timestamp
@@ -243,7 +249,7 @@ impl MemoryStore {
 
         let mut stmt = match self.conn.prepare(sql) {
             Ok(s) => s,
-            Err(_) => return false,
+            Err(e) => return Err(e),
         };
 
         let result = match layer {
@@ -264,9 +270,9 @@ impl MemoryStore {
                     entries.push(row);
                     relevances.push(relevance);
                 }
-                found
+                Ok(found)
             }
-            Err(_) => false,
+            Err(e) => Err(e),
         }
     }
 
@@ -469,6 +475,23 @@ mod tests {
         store.store(MemoryLayer::User, "config", "light_mode")?;
         let all = store.search("config", None, 10)?;
         assert_eq!(all.entries.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_search_fts_error_propagated() -> Result<(), String> {
+        let store = test_store()?;
+        store.store(MemoryLayer::Session, "key1", "hello world")?;
+        // Drop the FTS5 virtual table so the FTS query will error.
+        store.conn.execute("DROP TABLE memory_fts", [])
+            .map_err(|e| format!("Failed to drop fts table: {}", e))?;
+        // FTS error must propagate out of search() rather than silently falling back.
+        let result = store.search("hello", Some("session"), 10);
+        assert!(
+            result.is_err(),
+            "Expected search to return Err when FTS query fails, got {:?}",
+            result
+        );
         Ok(())
     }
 }
