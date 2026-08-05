@@ -67,7 +67,7 @@ impl RemoteMcpClient {
                 log::info!("Connecting to remote MCP server at {url}");
 
                 let transport = JsonRpcTransport::new(url);
-                *self.transport.write().await = Some(transport);
+                *self.transport.write().await = Some(transport?);
 
                 // Do initialize handshake
                 let result = self.send_request("initialize", Some(serde_json::json!({

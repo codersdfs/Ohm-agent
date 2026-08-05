@@ -1,5 +1,6 @@
 //! Config loading + validation (P5 split from main.rs).
 
+use std::str::FromStr;
 use providers::ProviderConfig;
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]

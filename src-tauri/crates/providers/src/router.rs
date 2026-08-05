@@ -1,5 +1,6 @@
 use crate::{create_provider, ProviderConfig, ProviderKind, LlmProvider};
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 use std::time::Instant;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,7 +100,8 @@ fn parse_provider_string(s: &str) -> (String, String) {
 }
 
 fn build_provider_config(provider_str: &str, model: &str) -> ProviderConfig {
-    let kind = ProviderKind::from_str(provider_str);
+    let kind = ProviderKind::from_str(provider_str)
+        .unwrap_or_else(|e| panic!("Invalid provider kind '{provider_str}': {e}"));
     let base_url = kind.default_base_url();
     let model = if model.is_empty() {
         match &kind {

@@ -71,7 +71,14 @@ pub fn render_full_layout(frame: &mut Frame, area: Rect, chrome: &mut LayoutChro
     // ── Layout: vertical stack ───────────────────────────────────────────
     let top_bar_h = 1u16;
     let metrics_h = 3u16;
-    let editor_h: u16 = if chrome.is_command_mode { 7 } else { 3 };
+    // Editor height: base of 3, grow with content, max 6
+    let editor_h: u16 = if chrome.is_command_mode {
+        7
+    } else {
+        let content_width = area.width.saturating_sub(2) as usize;
+        let lines = chrome.editor.visual_line_count(content_width);
+        (lines as u16).min(6).max(3)
+    };
 
     let vert = Layout::default()
         .direction(Direction::Vertical)
@@ -398,26 +405,84 @@ fn render_command_panel(
     if !showing_palette {
         let out_style = Style::default().fg(theme::OUTLINE);
         let rule = "─".repeat(area.width as usize);
-        // Fix panel to exactly 3 lines to avoid excess bottom padding
-        let panel_area = Rect::new(area.x, area.y, area.width, 3);
+
+        // Calculate soft-wrapped display lines
+        let content_width = area.width.saturating_sub(2) as usize;
+        let display_lines: Vec<String> = if content_width == 0 {
+            Vec::new()
+        } else {
+            let raw = &editor.buffer;
+            let mut lines = Vec::new();
+            for logical_line in raw.lines() {
+                if logical_line.is_empty() {
+                    lines.push(String::new());
+                } else {
+                    let mut remaining = logical_line;
+                    while !remaining.is_empty() {
+                        let mut char_count = 0;
+                        let mut byte_offset = 0;
+                        for (i, c) in remaining.char_indices() {
+                            if char_count >= content_width {
+                                break;
+                            }
+                            char_count += 1;
+                            byte_offset = i + c.len_utf8();
+                        }
+                        if byte_offset == 0 {
+                            // Single char wider than content_width? force one char
+                            if let Some(c) = remaining.chars().next() {
+                                lines.push(c.to_string());
+                                remaining = &remaining[c.len_utf8()..];
+                            } else {
+                                break;
+                            }
+                        } else {
+                            lines.push(remaining[..byte_offset].to_string());
+                            remaining = &remaining[byte_offset..];
+                        }
+                    }
+                }
+            }
+            // If buffer ends with newline, add an empty trailing line
+            if raw.ends_with('\n') {
+                lines.push(String::new());
+            }
+            // Show last available_lines in viewport
+            let avail = area.height.saturating_sub(2) as usize;
+            if lines.len() <= avail {
+                lines
+            } else {
+                lines[lines.len() - avail..].to_vec()
+            }
+        };
 
         // Top rule
         Paragraph::new(Line::from(Span::styled(&rule, out_style)))
-            .render(Rect::new(panel_area.x, panel_area.y, panel_area.width, 1), frame.buffer_mut());
+            .render(Rect::new(area.x, area.y, area.width, 1), frame.buffer_mut());
 
-        let input_text = if is_streaming || editor.buffer.lines().last().map(|l| l.is_empty()).unwrap_or(true) {
-            "█".to_string()
-        } else {
-            let display = editor.buffer.lines().last().unwrap_or("");
-            let available = (panel_area.width.saturating_sub(2)) as usize;
-            format!("{}{}", display.chars().take(available).collect::<String>(), '█')
-        };
-        Paragraph::new(Line::from(Span::styled(input_text, Style::default().fg(theme::FG))))
-            .render(Rect::new(panel_area.x, panel_area.y + 1, panel_area.width.saturating_sub(2), 1), frame.buffer_mut());
+        // Content lines — display_lines are already soft-wrapped and viewport-limited
+        for (i, line) in display_lines.iter().enumerate() {
+            let is_last = i == display_lines.len().saturating_sub(1);
+            let display = if is_last && !is_streaming {
+                format!("{}{}", line, '█')
+            } else if is_last && is_streaming {
+                "█".to_string()
+            } else {
+                line.to_string()
+            };
+            Paragraph::new(Line::from(Span::styled(display, Style::default().fg(theme::FG))))
+                .render(
+                    Rect::new(area.x, area.y + 1 + i as u16, area.width.saturating_sub(2), 1),
+                    frame.buffer_mut(),
+                );
+        }
 
         // Bottom rule
         Paragraph::new(Line::from(Span::styled(&rule, out_style)))
-            .render(Rect::new(panel_area.x, panel_area.y + 2, panel_area.width, 1), frame.buffer_mut());
+            .render(
+                Rect::new(area.x, area.y + area.height.saturating_sub(1), area.width, 1),
+                frame.buffer_mut(),
+            );
     }
 
     // ── Command palette (top rule with centered label, no side borders) ──

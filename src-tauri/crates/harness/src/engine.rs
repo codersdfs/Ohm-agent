@@ -7,6 +7,7 @@ use crate::taste::TasteCheck;
 use crate::GateResult;
 use super::Language;
 use super::Violation;
+#[cfg(feature = "taste-system")]
 use super::ViolationCategory;
 
 /// Unified Gate engine that runs all check types and returns aggregated results.

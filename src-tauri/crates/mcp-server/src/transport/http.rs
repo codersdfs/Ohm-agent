@@ -105,6 +105,7 @@ impl HttpTransport {
             auth_token: None,
             rate_limit: 0,
         }
+    }
     /// Require clients to send `Authorization: Bearer <token>`.
     pub fn with_auth_token(mut self, token: String) -> Self {
         self.auth_token = Some(token);
@@ -177,7 +178,7 @@ impl HttpTransport {
         &mut self,
         server: Arc<McpServer>,
         shutdown: F,
-    ) -> Result<axum::serve::WithGracefulShutdown<tokio::net::TcpListener, Router, F>, String> {
+    ) -> Result<axum::serve::WithGracefulShutdown<Router, Router, F>, String> {
         let router = Self::build_router(server, self.auth_token.clone());
         let addr = format!("{}:{}", self.host, self.port)
             .parse::<std::net::SocketAddr>()

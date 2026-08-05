@@ -279,7 +279,12 @@ impl ratata::screen::Screen for App {
                 self.handle_mouse(event.kind);
                 None
             }
-            Message::Resize(_, _) => None,
+            Message::Paste(text) => {
+                if !self.is_streaming && !self.show_provider_panel && !self.show_command_palette {
+                    self.editor.handle_paste(&text);
+                }
+                None
+            }
             _ => None,
         }
     }

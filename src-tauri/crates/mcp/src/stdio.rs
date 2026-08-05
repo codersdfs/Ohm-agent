@@ -13,7 +13,7 @@
 use crate::{McpRequest, McpResponse};
 use serde_json::Value;
 use std::collections::HashMap;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use std::process::Stdio;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
@@ -109,7 +109,7 @@ pub struct StdioTransport {
     child: Mutex<Option<Child>>,
     stderr_task: Option<tokio::task::JoinHandle<()>>,
 }
-
+impl StdioTransport {
     pub fn spawn(program: &str, args: &[&str]) -> Result<Self, String> {
         let mut child = Command::new(program)
             .args(args)

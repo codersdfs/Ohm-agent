@@ -98,7 +98,7 @@ pub async fn invoke_skill(
         resp
     } else {
         let transport = JsonRpcTransport::new(&skill.endpoint);
-        transport.send(request).await?
+        transport?.send(request).await?
     };
 
     if let Some(err) = response.error {
