@@ -49,7 +49,7 @@ pub struct LayoutChrome<'a> {
     pub anim_tick: u64,
 }
 
-/// Render the full TUI layout: chrome (bars, panels, editor, footer) plus
+/// Render the full TUI layout: chrome (bars, panels, editor) plus
 /// overlays (help, command palette, provider panel). This is the single public
 /// entry point; all other rendering helpers are private to this module.
 pub fn render_full_layout(frame: &mut Frame, area: Rect, chrome: &mut LayoutChrome<'_>) {
@@ -71,7 +71,6 @@ pub fn render_full_layout(frame: &mut Frame, area: Rect, chrome: &mut LayoutChro
     // ── Layout: vertical stack ───────────────────────────────────────────
     let top_bar_h = 1u16;
     let metrics_h = 3u16;
-    let footer_h = 1u16;
     let editor_h: u16 = if chrome.is_command_mode { 7 } else { 3 };
 
     let vert = Layout::default()
@@ -81,7 +80,6 @@ pub fn render_full_layout(frame: &mut Frame, area: Rect, chrome: &mut LayoutChro
             Constraint::Length(metrics_h),
             Constraint::Min(4),
             Constraint::Length(editor_h),
-            Constraint::Length(footer_h),
         ])
         .split(area);
 
@@ -104,14 +102,7 @@ pub fn render_full_layout(frame: &mut Frame, area: Rect, chrome: &mut LayoutChro
         chrome.is_streaming,
     );
 
-    // ── Footer bar ───────────────────────────────────────────────────────
-    chrome.status.hint_text = Some("[CR] COMMIT | [^C] ABORT | ^K cmds | ? help".into());
-    let (tokens_in, tokens_out) = commands::cost_tracker::session_token_counts();
-    chrome.status.tokens_in = tokens_in;
-    chrome.status.tokens_out = tokens_out;
-    chrome.status.messages_count = chrome.session_messages;
-    chrome.status.streaming_estimate = 0;
-    frame.render_widget(&*chrome.status, vert[4]);
+
 
     // ── Overlays ─────────────────────────────────────────────────────────
     if chrome.show_help {
@@ -405,25 +396,28 @@ fn render_command_panel(
     let showing_palette = is_command_mode && palette.visible;
 
     if !showing_palette {
-        // Two rules with input between them
         let out_style = Style::default().fg(theme::OUTLINE);
         let rule = "─".repeat(area.width as usize);
+        // Fix panel to exactly 3 lines to avoid excess bottom padding
+        let panel_area = Rect::new(area.x, area.y, area.width, 3);
 
+        // Top rule
         Paragraph::new(Line::from(Span::styled(&rule, out_style)))
-            .render(Rect::new(area.x, area.y, area.width, 1), frame.buffer_mut());
+            .render(Rect::new(panel_area.x, panel_area.y, panel_area.width, 1), frame.buffer_mut());
 
         let input_text = if is_streaming || editor.buffer.lines().last().map(|l| l.is_empty()).unwrap_or(true) {
             "█".to_string()
         } else {
             let display = editor.buffer.lines().last().unwrap_or("");
-            let available = (area.width.saturating_sub(2)) as usize;
+            let available = (panel_area.width.saturating_sub(2)) as usize;
             format!("{}{}", display.chars().take(available).collect::<String>(), '█')
         };
         Paragraph::new(Line::from(Span::styled(input_text, Style::default().fg(theme::FG))))
-            .render(Rect::new(area.x, area.y + 1, area.width.saturating_sub(2), 1), frame.buffer_mut());
+            .render(Rect::new(panel_area.x, panel_area.y + 1, panel_area.width.saturating_sub(2), 1), frame.buffer_mut());
 
+        // Bottom rule
         Paragraph::new(Line::from(Span::styled(&rule, out_style)))
-            .render(Rect::new(area.x, area.y + 2, area.width, 1), frame.buffer_mut());
+            .render(Rect::new(panel_area.x, panel_area.y + 2, panel_area.width, 1), frame.buffer_mut());
     }
 
     // ── Command palette (top rule with centered label, no side borders) ──

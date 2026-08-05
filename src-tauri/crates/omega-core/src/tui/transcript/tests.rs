@@ -287,7 +287,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_box_borders_close() {
+    fn tool_box_accent_bar() {
         let mut entry = TranscriptEntry::ToolCall {
             tool_name: "bash".into(),
             args: "cargo build --release".into(),
@@ -297,43 +297,31 @@ mod tests {
         let s = text_to_string(&rendered);
         let lines: Vec<&str> = s.lines().collect();
 
+        // Left-accent-bar design: first line starts with │ (accent)
         assert!(
-            lines[0].starts_with("┌─"),
-            "top border should start with ┌─"
+            lines[0].starts_with("│"),
+            "accent bar should start with │, got: {:?}",
+            lines[0]
         );
-        assert!(lines[0].ends_with("┐"), "top border should end with ┐");
-
-        for line in &lines[1..lines.len() - 1] {
-            if line.starts_with("├") || line.starts_with("└") {
-                continue;
-            }
-            assert!(line.starts_with("│"), "content lines should start with │");
-            assert!(line.ends_with("│"), "content lines should end with │");
-        }
-
+        // Tool name should appear somewhere in first line
         assert!(
-            lines.last().unwrap().starts_with("└"),
-            "bottom border should start with └"
-        );
-        assert!(
-            lines.last().unwrap().ends_with("┘"),
-            "bottom border should end with ┘"
+            lines[0].contains("bash"),
+            "tool name \"bash\" should appear in first line, got: {:?}",
+            lines[0]
         );
 
-        let widths: Vec<usize> = lines.iter().map(|l| l.chars().count()).collect();
-        let expected = widths[0];
-        for (i, w) in widths.iter().enumerate() {
-            assert_eq!(
-                *w, expected,
-                "line {} is {} chars wide, expected {}: '{}'",
-                i, w, expected, lines[i]
+        // All subsequent lines should also start with │ (accent continuation)
+        for line in &lines[1..] {
+            assert!(
+                line.starts_with("│"),
+                "continuation line should start with │, got: {:?}",
+                line
             );
         }
 
         println!(
-            "Tool box borders OK — {} lines, {} chars wide",
+            "Tool accent bar OK — {} lines",
             lines.len(),
-            expected
         );
     }
 }

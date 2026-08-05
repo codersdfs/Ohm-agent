@@ -87,7 +87,7 @@ pub async fn send_message(
 
         if let Some(tool_calls) = response.tool_calls {
             // Shared handle_tool_calls: permission, diff, emitter hooks.
-            handle_tool_calls(state, &tool_calls, &mut messages, "off", &NoopEmitter, None).await?;
+            handle_tool_calls(state, &tool_calls, &mut messages, "off", &NoopEmitter, None, provider.as_ref(), &tools).await?;
         } else {
             return Ok(SendMessageResponse {
                 message_id: uuid::Uuid::new_v4().to_string(),
@@ -108,6 +108,99 @@ fn flush_session(state: &AppState, messages: &[providers::ChatMessage]) {
     if let Err(e) = state.persist_session(messages) {
         log::warn!("session persist failed: {e}");
     }
+
+}
+
+/// Handle a `spawn_subagent` tool call by forking the parent's conversation
+/// context, running an isolated subagent loop, and returning the structured
+/// summary.
+///
+/// This intercepts the tool before `execute_tool_inner` since the subagent
+/// needs access to the provider and current conversation state.
+async fn handle_spawn_subagent<E: ChatEmitter>(
+    state: &AppState,
+    args_json: &str,
+    messages: &Vec<providers::ChatMessage>,
+    provider: &dyn providers::LlmProvider,
+    tools: &[providers::ToolDefinition],
+    emitter: &E,
+) -> Result<String, String> {
+    use crate::subagent::{SubagentConfig, spawn_subagent};
+    use serde_json::Value;
+
+    let args: Value = serde_json::from_str(args_json)
+        .map_err(|e| format!("Failed to parse spawn_subagent arguments: {}", e))?;
+
+    let task = args
+        .get("task")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required argument: task".to_string())?;
+
+    let token_budget = args
+        .get("token_budget")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(30_000);
+
+    let max_turns = args
+        .get("max_turns")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(10) as u32;
+
+    let tool_whitelist: Vec<String> = args
+        .get("tool_whitelist")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let deliverable = args
+        .get("deliverable")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "condensed summary".to_string());
+
+    // Build the subagent config with Full fork mode (per ticket 01 decision)
+    let config = SubagentConfig {
+        context_mode: crate::subagent::ContextForkMode::Full,
+        token_budget,
+        max_turns,
+        tool_whitelist,
+        deliverable,
+        task: task.to_string(),
+    };
+    let provider_config = state.provider_config.lock_guard().clone();
+    let _ = emitter.emit_token(&format!("  Subagent running task: {}…\n", task));
+
+    // Fork parent context and run the subagent loop
+    let parent_id = state.session_id().unwrap_or_else(|| "unknown".to_string());
+    let parent_session = parent_id.clone();
+
+    let result = spawn_subagent(
+        config,
+        &messages,
+        &parent_id,
+        &parent_session,
+        state,
+        provider,
+        &provider_config,
+        tools.to_vec(),
+        emitter,
+    )
+    .await?;
+
+    // Build the two-part summary: prose + structured line
+    let line = result.structured_line();
+    let summary = result.summary.unwrap_or_default();
+    let output = if summary.is_empty() {
+        line.clone()
+    } else {
+        format!("{}\n\n{}", summary, line)
+    };
+
+    Ok(output)
 }
 
 async fn handle_tool_calls<E: ChatEmitter>(
@@ -117,6 +210,8 @@ async fn handle_tool_calls<E: ChatEmitter>(
     permission_mode: &str,
     emitter: &E,
     cancel: Option<&Arc<AtomicBool>>,
+    provider: &dyn providers::LlmProvider,
+    tools: &[providers::ToolDefinition],
 ) -> Result<(), String> {
     messages.push(providers::ChatMessage {
         role: "assistant".into(),
@@ -188,6 +283,41 @@ async fn handle_tool_calls<E: ChatEmitter>(
             Permission::Abort => return Err("Message aborted by user".into()),
         }
 
+        // isolated subagent loop. Other tools go through the normal pipeline.
+        if tc.function.name == "spawn_subagent" {
+            let result = handle_spawn_subagent(
+                state,
+                &tc.function.arguments,
+                messages,
+                provider,
+                tools,
+                emitter,
+            )
+            .await;
+            match result {
+                Ok(output) => {
+                    emitter.emit_tool_result(&tc.function.name, true, &output)?;
+                    messages.push(providers::ChatMessage {
+                        role: "tool".into(),
+                        content: output,
+                        tool_calls: None,
+                        tool_call_id: Some(tc.id.clone()),
+                        name: Some(tc.function.name.clone()),
+                    });
+                }
+                Err(e) => {
+                    emitter.emit_tool_result(&tc.function.name, false, &e)?;
+                    messages.push(providers::ChatMessage {
+                        role: "tool".into(),
+                        content: format!("spawn_subagent failed: {}", e),
+                        tool_calls: None,
+                        tool_call_id: Some(tc.id.clone()),
+                        name: Some(tc.function.name.clone()),
+                    });
+                }
+            }
+            continue;
+        }
         // Read old file content for diff (permission already granted)
         let diff_path = if matches!(tc.function.name.as_str(), "write" | "edit") {
             tool_request
@@ -515,9 +645,11 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
                     &request.permission_mode,
                     emitter,
                     cancel.as_ref(),
+                    &**provider,
+                    &tools,
                 )
                 .await?;
-                // Snapshot after each completed tool round.
+            // Snapshot after each completed tool round.
                 flush_session(state, messages);
                 // Reset text accumulator between tool rounds so final answer is clean.
                 full_response.clear();
@@ -612,6 +744,8 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
                     &request.permission_mode,
                     emitter,
                     cancel.as_ref(),
+                    &**provider,
+                    &tools,
                 )
                 .await?;
                 flush_session(state, messages);

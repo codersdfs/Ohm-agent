@@ -359,7 +359,12 @@ impl RepoMap {
                     return None;
                 }
                 if trimmed.len() > 200 {
-                    Some(format!("{}...", &trimmed[..200]))
+                    // Find the nearest char boundary at or before byte 200
+                    let mut end = 200;
+                    while !trimmed.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    Some(format!("{}...", &trimmed[..end]))
                 } else {
                     Some(trimmed.to_string())
                 }

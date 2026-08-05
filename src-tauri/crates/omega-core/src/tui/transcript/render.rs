@@ -128,7 +128,13 @@ pub fn render(
         let available = view_height.saturating_sub(y);
 
         if visible_lines > 0 && available > 0 {
-            let render_count = visible_lines.min(available);
+            // User cards: minimum 3 lines so padding fits; non-bg segments use natural height
+            let content_count = visible_lines.min(seg.lines.len());
+            let render_count = if seg.bg.is_some() {
+                content_count.max(3).min(available)
+            } else {
+                content_count.min(available)
+            };
             let render_area = Rect::new(
                 area.x,
                 area.y + y as u16,
@@ -147,20 +153,25 @@ pub fn render(
                 // - Middle user cards: more bottom spacing for better readability
                 // - Attachment cards: normal spacing
                 let pad_h = 1u16;
-                let pad_v_top = 1u16;
-                let pad_v_bottom_requested = match seg.bg {
-                    Some(theme::USER_MIDDLE_CARD_BG) => 2, // extra bottom space for middle prompts
-                    _ => 0, // preserve original behavior (top-only padding) for other cards
+                let pad_v_top_desired = 2u16;
+                let pad_v_bottom_desired = 1u16;
+
+                // Clamp padding so text always gets at least 1 line
+                let total_desired = pad_v_top_desired + pad_v_bottom_desired;
+                let (pad_v_top, pad_v_bottom) = if render_area.height > total_desired + 1 {
+                    (pad_v_top_desired, pad_v_bottom_desired)
+                } else if render_area.height > 2 {
+                    let pad_v_top = (render_area.height / 3).max(1);
+                    let pad_v_bottom = render_area.height.saturating_sub(pad_v_top).saturating_sub(1);
+                    (pad_v_top, pad_v_bottom)
+                } else {
+                    (0u16, 0u16)
                 };
 
-                // Calculate effective bottom padding to ensure at least one line of text fits
-                let available_after_top = render_area.height.saturating_sub(pad_v_top);
-                let max_bottom_for_text = available_after_top.saturating_sub(1); // reserve 1 line for text
-                let pad_v_bottom = pad_v_bottom_requested.min(max_bottom_for_text);
-
-                // Text area height after accounting for top and bottom padding
-                let text_area_height = render_area.height.saturating_sub(pad_v_top).saturating_sub(pad_v_bottom);
-                let text_area_height = text_area_height.max(1); // ensure minimum one line
+                let text_area_height = render_area.height
+                    .saturating_sub(pad_v_top)
+                    .saturating_sub(pad_v_bottom)
+                    .max(1);
 
                 let pad = pad_h;
                 let text_area = Rect::new(
@@ -172,8 +183,9 @@ pub fn render(
                 // Set foreground color based on segment type
                 let fg_color = seg.fg.unwrap_or(theme::FG);
                 let para_style = Style::default().bg(bg).fg(fg_color);
+                let actual_lines = content_count.min(seg.lines.len().saturating_sub(start_line));
                 let visible_seg_lines: Vec<Line<'static>> =
-                    seg.lines[start_line..start_line + render_count].to_vec();
+                    seg.lines[start_line..start_line + actual_lines].to_vec();
                 let text = Text::from(visible_seg_lines);
                 let para = Paragraph::new(text)
                     .style(para_style)
@@ -181,8 +193,9 @@ pub fn render(
                 para.render(text_area, buf);
             } else {
                 // Flat segment: render without background
+                let actual_lines = content_count.min(seg.lines.len().saturating_sub(start_line));
                 let visible_seg_lines: Vec<Line<'static>> =
-                    seg.lines[start_line..start_line + render_count].to_vec();
+                    seg.lines[start_line..start_line + actual_lines].to_vec();
                 let text = Text::from(visible_seg_lines);
                 let para = Paragraph::new(text)
                     .style(Style::default().bg(theme::BG))

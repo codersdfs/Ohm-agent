@@ -2,6 +2,7 @@ pub mod commands;
 pub mod context_manager;
 pub mod error;
 pub mod events;
+pub mod gate_hook;
 pub mod learning;
 pub mod memory_injector;
 pub mod memory_retriever;

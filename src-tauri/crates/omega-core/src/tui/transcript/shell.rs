@@ -4,7 +4,6 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 
 use super::state::{ToolCallState, ToolCallStatus};
-use super::preview::{push_edit_diff_panel, push_write_code_panel};
 use super::toolbox::COLLAPSED_SOURCE_LINES;
 use crate::tui::theme;
 
@@ -216,8 +215,8 @@ fn render_source_tool_shell(state: &ToolCallState, width: u16) -> Option<Text<'s
     Some(Text::from(lines))
 }
 
-/// Render a tool call as a simple green/red box.
-/// Green = OK, red = error. Error details only shown when expanded.
+/// Minimal left-accent-bar rendering for compact tool calls.
+/// One line per call; expanded state adds result/error lines.
 pub fn render_tool_call_compact(state: &ToolCallState, _avail_width: u16) -> Text<'static> {
     if let Some(source_shell) = render_source_tool_shell(state, _avail_width) {
         return source_shell;
@@ -226,100 +225,58 @@ pub fn render_tool_call_compact(state: &ToolCallState, _avail_width: u16) -> Tex
     let status = state.status;
     let expanded = state.expanded;
 
-    let (border_color, fill_bg, icon_str) = match status {
-        ToolCallStatus::Completed => (theme::SUCCESS, Color::Rgb(6, 18, 10), "✓"),
-        ToolCallStatus::Errored => (theme::ERROR, Color::Rgb(22, 8, 8), "✗"),
-        ToolCallStatus::Running => (theme::PRIMARY, Color::Rgb(8, 14, 20), "▶"),
-        ToolCallStatus::Pending => (theme::DIM, Color::Rgb(8, 10, 14), "⋯"),
+    let accent = match status {
+        ToolCallStatus::Completed => theme::SUCCESS,
+        ToolCallStatus::Errored => theme::ERROR,
+        ToolCallStatus::Running => theme::WARN,
+        ToolCallStatus::Pending => theme::DIM,
     };
 
-    let bstyle = Style::default().fg(border_color).bg(fill_bg);
-    let content_style = Style::default().fg(theme::FG).bg(fill_bg);
-
-    // Never force a minimum wider than the actual transcript area. A narrow
-    // terminal must produce a narrow box, not overflow into adjacent layout.
-    let avail = usize::from(56u16.min(_avail_width.saturating_sub(2)).max(4));
+    let accent_style = Style::default().fg(accent);
+    let max_name = 12usize;
+    let name_short = fit_to_width(&name, max_name);
+    let name_w = name_short.chars().count() as u16;
 
     let mut lines: Vec<Line<'static>> = Vec::new();
 
-    // All rows are `avail + 2` chars wide: 1 left border + `avail` inner
-    // chars + 1 right border. Any leading space inside a row must be
-    // accounted for by subtracting it from the trailing padding so the
-    // inner width — and therefore the full row width — stays constant.
-    // (Off-by-one misalignment here distorted the box grid and, at small
-    // widths, could underflow and panic the full-screen TUI.)
+    // Summary or tool name line
+    let summary = fit_to_width(&state.tool_summary, _avail_width.saturating_sub(name_w + 2).max(1) as usize);
 
-    // Top border with tool name — total width = avail + 2
-    let title = fit_to_width(&format!(" {} {} ", icon_str, name), avail.saturating_sub(1));
-    let title_len = title.chars().count();
-    // ┌ (1) + ─ (1) + title (N) + dashes (avail − 1 − N) + ┐ (1) = avail + 2
-    let right_dashes = avail.saturating_sub(title_len + 1);
-    lines.push(Line::from(Span::styled(
-        format!("┌─{}{}┐", title, "─".repeat(right_dashes)),
-        bstyle,
-    )));
-
-    // Summary line — total width = avail + 2. `" "` prefix is one of the
-    // inner chars, so trailing padding = avail − 1 − summary_len.
-    let summary = fit_to_width(&state.tool_summary, avail.saturating_sub(1));
-    let spad = avail
-        .saturating_sub(1)
-        .saturating_sub(summary.chars().count());
-    lines.push(Line::from(vec![
-        Span::styled("│", bstyle),
-        Span::styled(format!(" {}{}", summary, " ".repeat(spad)), content_style),
-        Span::styled("│", bstyle),
-    ]));
-
-    // Source-changing tools get bounded nested panels. The renderer never sees
-    // their complete payloads, only previews captured at event ingestion.
-    push_write_code_panel(&mut lines, state, avail, bstyle, fill_bg);
-    push_edit_diff_panel(&mut lines, state, avail, bstyle, fill_bg);
+    if !summary.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled("│", accent_style),
+            Span::styled(format!(" {} ", name_short), accent_style),
+            Span::styled(summary, Style::default().fg(theme::FG)),
+        ]));
+    } else {
+        // Just the tool name, no summary
+        lines.push(Line::from(vec![
+            Span::styled("│", accent_style),
+            Span::styled(format!(" {}", name_short), accent_style),
+        ]));
+    }
 
     // Expanded body
     if expanded {
         match status {
             ToolCallStatus::Errored => {
                 if let Some(e) = &state.error {
-                    // Error label row: inner width = avail.
-                    let err_label = " error ";
-                    let err_len = err_label.chars().count();
-                    let err_pad = avail.saturating_sub(err_len);
-                    lines.push(Line::from(vec![
-                        Span::styled("│", bstyle),
-                        Span::styled(
-                            err_label.to_string(),
-                            Style::default()
-                                .fg(theme::ERROR)
-                                .add_modifier(Modifier::BOLD)
-                                .bg(fill_bg),
-                        ),
-                        Span::styled(" ".repeat(err_pad), fill_bg),
-                        Span::styled("│", bstyle),
-                    ]));
-                    for l in e.message.lines().take(4) {
-                        let line = fit_to_width(l, avail.saturating_sub(1));
-                        let lpad = avail.saturating_sub(1).saturating_sub(line.chars().count());
+                    for l in e.message.lines().take(3) {
+                        let line = fit_to_width(l, _avail_width.saturating_sub(2).max(1) as usize);
                         lines.push(Line::from(vec![
-                            Span::styled("│", bstyle),
-                            Span::styled(
-                                format!(" {}{}", line, " ".repeat(lpad)),
-                                Style::default().fg(theme::ERROR).bg(fill_bg),
-                            ),
-                            Span::styled("│", bstyle),
+                            Span::styled("│", accent_style),
+                            Span::styled(format!(" {}", line), Style::default().fg(theme::ERROR)),
                         ]));
                     }
                 }
             }
             ToolCallStatus::Completed => {
                 if let Some(preview) = &state.result_preview {
-                    for l in preview.lines().take(6) {
-                        let line = fit_to_width(l, avail.saturating_sub(1));
-                        let lpad = avail.saturating_sub(1).saturating_sub(line.chars().count());
+                    for l in preview.lines().take(3) {
+                        let line = fit_to_width(l, _avail_width.saturating_sub(2).max(1) as usize);
                         lines.push(Line::from(vec![
-                            Span::styled("│", bstyle),
-                            Span::styled(format!(" {}{}", line, " ".repeat(lpad)), content_style),
-                            Span::styled("│", bstyle),
+                            Span::styled("│", accent_style),
+                            Span::styled(format!(" {}", line), Style::default().fg(theme::FG)),
                         ]));
                     }
                 }
@@ -327,12 +284,6 @@ pub fn render_tool_call_compact(state: &ToolCallState, _avail_width: u16) -> Tex
             _ => {}
         }
     }
-
-    // Bottom border — total width = avail + 2
-    lines.push(Line::from(Span::styled(
-        format!("└{}┘", "─".repeat(avail)),
-        bstyle,
-    )));
 
     Text::from(lines)
 }
