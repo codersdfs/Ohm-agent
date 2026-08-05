@@ -616,4 +616,38 @@ mod tests {
         // Notifications return 202 Accepted (no JSON-RPC response body)
         assert_eq!(response.status(), StatusCode::ACCEPTED);
     }
+    /// When the SSE semaphore is exhausted, new connections get HTTP 503.
+    #[tokio::test]
+    async fn test_sse_backpressure_rejects_with_503() {
+        let server = Arc::new(McpServer::new());
+        let state = AppState {
+            inner: Arc::new(HttpTransportStateInner {
+                server,
+                metrics: TransportMetrics::default(),
+                rate_limit_per_minute: 0,
+                sse_semaphore: Arc::new(tokio::sync::Semaphore::new(0)), // fully exhausted
+            }),
+        };
+
+        let app = Router::new()
+            .route("/sse", get(handle_sse))
+            .with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/sse")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Should reject with 503 when semaphore is exhausted"
+        );
+    }
 }

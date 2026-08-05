@@ -137,7 +137,6 @@ impl ProviderKind {
                 | Self::MiniMax
                 | Self::OpenRouter
                 | Self::Azure
-                | Self::Bedrock
                 | Self::HuggingFace
                 | Self::Mistral
                 | Self::Custom
@@ -181,8 +180,14 @@ impl ProviderKind {
             | Self::Local
             | Self::Custom => 128_000,
             Self::Anthropic => 200_000,
-            Self::Google => 1_048_576,
+            Self::Google => 200_000,
         }
+    }
+}
+impl std::str::FromStr for ProviderKind {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_name(s)
     }
 }
 

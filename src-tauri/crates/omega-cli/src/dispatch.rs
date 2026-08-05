@@ -96,14 +96,13 @@ pub fn run_mcp_server(port: u16, host: String, auth_token: Option<String>) -> Re
                 .with_tool_registry(registry),
         );
 
-        // Start serving — server is passed to transport to wire into Axum state
-        let handle = transport.serve(server).await
+        // Start serving — pass shutdown signal for graceful drain
+        let serve = transport.serve(server, mcp_server::transport::http::shutdown_signal()).await
             .map_err(|e| anyhow::anyhow!("Failed to start MCP server: {e}"))?;
 
-        // Ctrl+C handler
-        tokio::signal::ctrl_c().await.ok();
+        // Wait for shutdown signal (Ctrl+C / SIGTERM), then drain
         log::info!("Shutting down MCP server");
-        handle.await.ok();
+        serve.await.ok();
 
         // Print server stats on shutdown
         println!();
@@ -115,4 +114,71 @@ pub fn run_mcp_server(port: u16, host: String, auth_token: Option<String>) -> Re
 fn list_tool_count() -> usize {
     let registry = tool_harness::tools::default_tool_registry();
     registry.list().len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verify that run_chat's argument wiring produces the expected config.
+    /// We test the config-building path without launching the TUI.
+    #[test]
+    fn run_chat_config_building_with_max_tokens_and_temperature() {
+        let config = load_provider_config(
+            Some("anthropic".into()),
+            Some("claude-sonnet-4".into()),
+            None,
+            Some(8192),
+            Some(1.2),
+        );
+        assert!(matches!(config.kind, providers::ProviderKind::Anthropic));
+        assert_eq!(config.model, "claude-sonnet-4");
+        assert_eq!(config.max_tokens, 8192);
+        assert!((config.temperature - 1.2).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn run_chat_config_defaults_when_no_overrides() {
+        // Clean env to ensure defaults
+        std::env::remove_var("OMEGA_API_KEY");
+        std::env::remove_var("OMEGA_MODEL");
+        std::env::remove_var("OMEGA_MAX_TOKENS");
+        std::env::remove_var("OMEGA_TEMPERATURE");
+
+        let config = load_provider_config(None, None, None, None, None);
+        // No API key → Local provider
+        assert!(matches!(config.kind, providers::ProviderKind::Local));
+        assert_eq!(config.max_tokens, 4096);
+        assert!((config.temperature - 0.7).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn run_chat_config_cli_overrides_take_priority() {
+        let config = load_provider_config(
+            Some("openai".into()),
+            Some("gpt-4o".into()),
+            Some("https://custom.api.test".into()),
+            Some(16384),
+            Some(0.1),
+        );
+        assert!(matches!(config.kind, providers::ProviderKind::OpenAI));
+        assert_eq!(config.model, "gpt-4o");
+        assert_eq!(config.base_url.as_deref(), Some("https://custom.api.test"));
+        assert_eq!(config.max_tokens, 16384);
+        assert!((config.temperature - 0.1).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn run_chat_config_max_tokens_zero_override() {
+        // Edge case: user explicitly sets max_tokens to 0
+        let config = load_provider_config(None, None, None, Some(0), None);
+        assert_eq!(config.max_tokens, 0);
+    }
+
+    #[test]
+    fn run_chat_config_temperature_zero_override() {
+        // Edge case: user explicitly sets temperature to 0
+        let config = load_provider_config(None, None, None, None, Some(0.0));
+        assert!((config.temperature).abs() < f32::EPSILON);
+    }
 }
