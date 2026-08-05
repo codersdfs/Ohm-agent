@@ -39,6 +39,7 @@ plan.md
 
 # Subagent artifacts
 .pi-subagents/
+.omo/
 
 # Windows reserved device name
 nul
