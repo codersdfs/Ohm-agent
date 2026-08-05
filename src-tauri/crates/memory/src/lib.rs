@@ -54,7 +54,7 @@ pub struct SearchResult {
 /// and n-gram based embedding similarity.
 pub struct MemoryStore {
     conn: Connection,
-    embedding: embed::EmbeddingEngine,
+    embedding: Box<dyn crate::embed::Embedder + Send + Sync>,
 }
 
 impl MemoryStore {
@@ -92,8 +92,43 @@ impl MemoryStore {
 
         Ok(Self {
             conn,
-            embedding: embed::EmbeddingEngine::new(),
+            embedding: Box::new(embed::EmbeddingEngine::new()),
         })
+    }
+
+    /// Create a MemoryStore with a custom embedding engine.
+    /// Use this to inject an `ONNXEmbeddingEngine` or any other `Embedder`.
+    pub fn with_embedder(db_path: &str, embedder: Box<dyn crate::embed::Embedder + Send + Sync>) -> Result<Self, String> {
+        let conn =
+            Connection::open(db_path).map_err(|e| format!("Failed to open memory db: {}", e))?;
+
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS memory (
+                id TEXT PRIMARY KEY,
+                layer TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                embedding BLOB,
+                timestamp TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_memory_layer ON memory(layer);
+            CREATE INDEX IF NOT EXISTS idx_memory_key ON memory(key);
+            CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
+                key, value, content='memory', content_rowid='rowid'
+            );
+            CREATE TRIGGER IF NOT EXISTS memory_ai AFTER INSERT ON memory BEGIN
+                INSERT INTO memory_fts(rowid, key, value) VALUES (new.rowid, new.key, new.value);
+            END;
+            CREATE TRIGGER IF NOT EXISTS memory_ad AFTER DELETE ON memory BEGIN
+                INSERT INTO memory_fts(memory_fts, rowid, key, value) VALUES('delete', old.rowid, old.key, old.value);
+            END;
+            CREATE TRIGGER IF NOT EXISTS memory_au AFTER UPDATE ON memory BEGIN
+                INSERT INTO memory_fts(memory_fts, rowid, key, value) VALUES('delete', old.rowid, old.key, old.value);
+                INSERT INTO memory_fts(rowid, key, value) VALUES (new.rowid, new.key, new.value);
+            END;"
+        ).map_err(|e| format!("Failed to initialize memory schema: {}", e))?;
+
+        Ok(Self { conn, embedding: embedder })
     }
 
     /// Store a memory entry. Generates embedding and persists to SQLite.
@@ -101,14 +136,16 @@ impl MemoryStore {
         let id = uuid::Uuid::new_v4().to_string();
         let timestamp = chrono::Utc::now().to_rfc3339();
 
-        let embedding = self
-            .embedding
-            .embed(value)
-            .map(|v| {
+        let embedding = match self.embedding.embed(value) {
+            Ok(v) => {
                 let bytes: Vec<u8> = v.iter().flat_map(|f| f.to_le_bytes()).collect();
                 Some(bytes)
-            })
-            .unwrap_or(None);
+            }
+            Err(e) => {
+                log::warn!("MemoryStore: embedding generation failed for key={}; entry stored without semantic ranking: {}", key, e);
+                None
+            }
+        };
 
         self.conn.execute(
             "INSERT INTO memory (id, layer, key, value, embedding, timestamp) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -145,7 +182,7 @@ impl MemoryStore {
         let mut relevances: Vec<f64> = Vec::new();
 
         // Try FTS5 search first
-        let fts_found = match layer {
+        let fts_result = match layer {
             Some(l) => self.search_fts(
                 &fts_query,
                 Some(l),
@@ -164,16 +201,20 @@ impl MemoryStore {
             ),
         };
 
-        // Fall back to full scan
-        if !fts_found {
-            entries.clear();
-            relevances.clear();
-            match layer {
-                Some(l) => {
-                    self.search_scan(Some(l), limit, &query_vec, &mut entries, &mut relevances)
+        match fts_result {
+            Ok(false) => {
+                // No FTS results — fall back to full-scan
+                entries.clear();
+                relevances.clear();
+                match layer {
+                    Some(l) => {
+                        self.search_scan(Some(l), limit, &query_vec, &mut entries, &mut relevances)
+                    }
+                    None => self.search_scan(None, limit, &query_vec, &mut entries, &mut relevances),
                 }
-                None => self.search_scan(None, limit, &query_vec, &mut entries, &mut relevances),
             }
+            Ok(true) => {}
+            Err(e) => return Err(format!("FTS search failed: {}", e)),
         }
 
         Ok(SearchResult {
@@ -190,7 +231,7 @@ impl MemoryStore {
         query_vec: &[f32],
         entries: &mut Vec<MemoryEntry>,
         relevances: &mut Vec<f64>,
-    ) -> bool {
+    ) -> Result<bool, rusqlite::Error> {
         let sql = match layer {
             Some(_) => {
                 "SELECT m.id, m.layer, m.key, m.value, m.embedding, m.timestamp
@@ -208,7 +249,7 @@ impl MemoryStore {
 
         let mut stmt = match self.conn.prepare(sql) {
             Ok(s) => s,
-            Err(_) => return false,
+            Err(e) => return Err(e),
         };
 
         let result = match layer {
@@ -229,9 +270,9 @@ impl MemoryStore {
                     entries.push(row);
                     relevances.push(relevance);
                 }
-                found
+                Ok(found)
             }
-            Err(_) => false,
+            Err(e) => Err(e),
         }
     }
 
@@ -434,6 +475,23 @@ mod tests {
         store.store(MemoryLayer::User, "config", "light_mode")?;
         let all = store.search("config", None, 10)?;
         assert_eq!(all.entries.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_search_fts_error_propagated() -> Result<(), String> {
+        let store = test_store()?;
+        store.store(MemoryLayer::Session, "key1", "hello world")?;
+        // Drop the FTS5 virtual table so the FTS query will error.
+        store.conn.execute("DROP TABLE memory_fts", [])
+            .map_err(|e| format!("Failed to drop fts table: {}", e))?;
+        // FTS error must propagate out of search() rather than silently falling back.
+        let result = store.search("hello", Some("session"), 10);
+        assert!(
+            result.is_err(),
+            "Expected search to return Err when FTS query fails, got {:?}",
+            result
+        );
         Ok(())
     }
 }

@@ -1,6 +1,6 @@
-use crate::GateResult;
-use crate::Violation;
-use crate::ViolationCategory;
+use super::GateResult;
+use super::Violation;
+use super::ViolationCategory;
 
 const BASE_SCORE: u32 = 100;
 const STRUCTURAL_PENALTY: u32 = 15;
@@ -22,5 +22,5 @@ pub fn calculate_score(violations: &[Violation]) -> GateResult {
         };
     }
 
-    GateResult::fail(score, violations.to_vec())
+    GateResult::evaluate(score, violations.to_vec())
 }

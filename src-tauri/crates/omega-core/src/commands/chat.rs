@@ -1,139 +1,16 @@
-use crate::context::{compact, estimate_tokens};
 use crate::ChatEmitter;
 use crate::{AppState, MutexExt};
 use serde::{Deserialize, Serialize};
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+
+use super::cost_tracker;
+use super::diff_display::show_diff;
+use super::permission_prompt::{check_permission, NoopEmitter, Permission};
 
 const DIM: &str = "\x1b[2m";
 const RESET: &str = "\x1b[0m";
-
-static COST_INPUT: AtomicU64 = AtomicU64::new(0);
-static COST_OUTPUT: AtomicU64 = AtomicU64::new(0);
-static COST_COUNT: AtomicU64 = AtomicU64::new(0);
-
-pub fn cost_report() -> String {
-    format!(
-        "  {}cost: session total — {} in / {} out ({} messages){}",
-        DIM,
-        COST_INPUT.load(Ordering::Relaxed),
-        COST_OUTPUT.load(Ordering::Relaxed),
-        COST_COUNT.load(Ordering::Relaxed),
-        RESET,
-    )
-}
-
-fn record_cost(input: u32, output: u32) {
-    COST_INPUT.fetch_add(input as u64, Ordering::Relaxed);
-    COST_OUTPUT.fetch_add(output as u64, Ordering::Relaxed);
-    COST_COUNT.fetch_add(1, Ordering::Relaxed);
-}
-
-/// Read the current session's cumulative token counts.
-pub fn session_token_counts() -> (u64, u64) {
-    (
-        COST_INPUT.load(Ordering::Relaxed),
-        COST_OUTPUT.load(Ordering::Relaxed),
-    )
-}
-
-/// A no-op ChatEmitter used by send_message (non-interactive API call).
-pub struct NoopEmitter;
-
-impl ChatEmitter for NoopEmitter {
-    fn emit_token(&self, _token: &str) -> Result<(), String> {
-        Ok(())
-    }
-    fn emit_done(&self, _full: &str) -> Result<(), String> {
-        Ok(())
-    }
-    fn emit_error(&self, _error: &str) -> Result<(), String> {
-        Ok(())
-    }
-}
-
-enum Permission {
-    Allow,
-    Deny,
-    Abort,
-}
-
-async fn check_permission<E: ChatEmitter>(
-    mode: &str,
-    tool: &str,
-    _args: &str,
-    emitter: &E,
-) -> Permission {
-    match mode {
-        "strict" => {
-            if emitter.allows_direct_terminal_output() {
-                eprintln!("  {}{} denied (strict mode){}", DIM, tool, RESET);
-            } else {
-                log::info!("{} denied (strict mode)", tool);
-            }
-            Permission::Deny
-        }
-        "on" => {
-            if !emitter.allows_direct_terminal_output() {
-                // Full-screen TUI owns the terminal; cannot prompt on stdin.
-                log::info!("{} auto-approved (TUI permission prompt unavailable)", tool);
-                return Permission::Allow;
-            }
-            use std::io::Write;
-            use tokio::io::AsyncBufReadExt;
-            let mut input = String::new();
-            let mut reader = tokio::io::BufReader::new(tokio::io::stdin());
-            loop {
-                eprint!("  Allow {}? (y/N/q): ", tool);
-                std::io::stderr().flush().ok();
-                input.clear();
-                if reader.read_line(&mut input).await.is_err() {
-                    return Permission::Deny;
-                }
-                match input.trim().to_lowercase().as_str() {
-                    "y" | "yes" => return Permission::Allow,
-                    "" | "n" | "no" => return Permission::Deny,
-                    "q" | "quit" => return Permission::Abort,
-                    _ => continue,
-                }
-            }
-        }
-        _ => Permission::Allow,
-    }
-}
-fn show_diff<E: ChatEmitter>(path: &str, old: &str, new: &str, emitter: &E) {
-    if old == new {
-        return;
-    }
-    if !emitter.allows_direct_terminal_output() {
-        // The bounded edit preview inside ToolExecutionComponent already shows
-        // the file path and diff. Direct stderr writes here would bypass the
-        // Ratatui buffer and corrupt the full-screen TUI.
-        return;
-    }
-    eprintln!("  {} {} {}", "──", path, "──");
-    let diff = similar::TextDiff::from_lines(old, new);
-    for change in diff.iter_all_changes() {
-        let sign = match change.tag() {
-            similar::ChangeTag::Delete => "-",
-            similar::ChangeTag::Insert => "+",
-            similar::ChangeTag::Equal => " ",
-        };
-        let line = change.value().trim_end_matches('\n');
-        if line.is_empty() {
-            continue;
-        }
-        match change.tag() {
-            similar::ChangeTag::Equal => {
-                eprintln!("  {} {}{}{}", sign, DIM, line, RESET);
-            }
-            _ => {
-                eprintln!("  {} {}", sign, line);
-            }
-        }
-    }
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SendMessageRequest {
@@ -210,7 +87,7 @@ pub async fn send_message(
 
         if let Some(tool_calls) = response.tool_calls {
             // Shared handle_tool_calls: permission, diff, emitter hooks.
-            handle_tool_calls(state, &tool_calls, &mut messages, "off", &NoopEmitter, None).await?;
+            handle_tool_calls(state, &tool_calls, &mut messages, "off", &NoopEmitter, None, provider.as_ref(), &tools).await?;
         } else {
             return Ok(SendMessageResponse {
                 message_id: uuid::Uuid::new_v4().to_string(),
@@ -231,6 +108,99 @@ fn flush_session(state: &AppState, messages: &[providers::ChatMessage]) {
     if let Err(e) = state.persist_session(messages) {
         log::warn!("session persist failed: {e}");
     }
+
+}
+
+/// Handle a `spawn_subagent` tool call by forking the parent's conversation
+/// context, running an isolated subagent loop, and returning the structured
+/// summary.
+///
+/// This intercepts the tool before `execute_tool_inner` since the subagent
+/// needs access to the provider and current conversation state.
+async fn handle_spawn_subagent<E: ChatEmitter>(
+    state: &AppState,
+    args_json: &str,
+    messages: &Vec<providers::ChatMessage>,
+    provider: &dyn providers::LlmProvider,
+    tools: &[providers::ToolDefinition],
+    emitter: &E,
+) -> Result<String, String> {
+    use crate::subagent::{SubagentConfig, spawn_subagent};
+    use serde_json::Value;
+
+    let args: Value = serde_json::from_str(args_json)
+        .map_err(|e| format!("Failed to parse spawn_subagent arguments: {}", e))?;
+
+    let task = args
+        .get("task")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required argument: task".to_string())?;
+
+    let token_budget = args
+        .get("token_budget")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(30_000);
+
+    let max_turns = args
+        .get("max_turns")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(10) as u32;
+
+    let tool_whitelist: Vec<String> = args
+        .get("tool_whitelist")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let deliverable = args
+        .get("deliverable")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "condensed summary".to_string());
+
+    // Build the subagent config with Full fork mode (per ticket 01 decision)
+    let config = SubagentConfig {
+        context_mode: crate::subagent::ContextForkMode::Full,
+        token_budget,
+        max_turns,
+        tool_whitelist,
+        deliverable,
+        task: task.to_string(),
+    };
+    let provider_config = state.provider_config.lock_guard().clone();
+    let _ = emitter.emit_token(&format!("  Subagent running task: {}…\n", task));
+
+    // Fork parent context and run the subagent loop
+    let parent_id = state.session_id().unwrap_or_else(|| "unknown".to_string());
+    let parent_session = parent_id.clone();
+
+    let result = spawn_subagent(
+        config,
+        &messages,
+        &parent_id,
+        &parent_session,
+        state,
+        provider,
+        &provider_config,
+        tools.to_vec(),
+        emitter,
+    )
+    .await?;
+
+    // Build the two-part summary: prose + structured line
+    let line = result.structured_line();
+    let summary = result.summary.unwrap_or_default();
+    let output = if summary.is_empty() {
+        line.clone()
+    } else {
+        format!("{}\n\n{}", summary, line)
+    };
+
+    Ok(output)
 }
 
 async fn handle_tool_calls<E: ChatEmitter>(
@@ -240,6 +210,8 @@ async fn handle_tool_calls<E: ChatEmitter>(
     permission_mode: &str,
     emitter: &E,
     cancel: Option<&Arc<AtomicBool>>,
+    provider: &dyn providers::LlmProvider,
+    tools: &[providers::ToolDefinition],
 ) -> Result<(), String> {
     messages.push(providers::ChatMessage {
         role: "assistant".into(),
@@ -311,6 +283,41 @@ async fn handle_tool_calls<E: ChatEmitter>(
             Permission::Abort => return Err("Message aborted by user".into()),
         }
 
+        // isolated subagent loop. Other tools go through the normal pipeline.
+        if tc.function.name == "spawn_subagent" {
+            let result = handle_spawn_subagent(
+                state,
+                &tc.function.arguments,
+                messages,
+                provider,
+                tools,
+                emitter,
+            )
+            .await;
+            match result {
+                Ok(output) => {
+                    emitter.emit_tool_result(&tc.function.name, true, &output)?;
+                    messages.push(providers::ChatMessage {
+                        role: "tool".into(),
+                        content: output,
+                        tool_calls: None,
+                        tool_call_id: Some(tc.id.clone()),
+                        name: Some(tc.function.name.clone()),
+                    });
+                }
+                Err(e) => {
+                    emitter.emit_tool_result(&tc.function.name, false, &e)?;
+                    messages.push(providers::ChatMessage {
+                        role: "tool".into(),
+                        content: format!("spawn_subagent failed: {}", e),
+                        tool_calls: None,
+                        tool_call_id: Some(tc.id.clone()),
+                        name: Some(tc.function.name.clone()),
+                    });
+                }
+            }
+            continue;
+        }
         // Read old file content for diff (permission already granted)
         let diff_path = if matches!(tc.function.name.as_str(), "write" | "edit") {
             tool_request
@@ -420,23 +427,9 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
             .system_prompt
             .unwrap_or_else(crate::commands::tools::default_system_prompt);
 
-        // P0-08: Retrieve relevant project memories and inject into system prompt
-        let memory_context = {
-            let store = state.memory_store.lock_guard();
-            let model_window = config.kind.context_window();
-            let budget = std::cmp::min(2048, (model_window / 10) as usize);
-            crate::memory_retriever::retrieve_memories(&store, &request.content, budget)
-        };
-
-        let full_prompt = if memory_context.is_empty() {
-            sys_prompt
-        } else {
-            format!("{}\n\n{}", sys_prompt, memory_context)
-        };
-
         messages.push(providers::ChatMessage {
             role: "system".into(),
-            content: full_prompt,
+            content: sys_prompt,
             tool_calls: None,
             tool_call_id: None,
             name: None,
@@ -454,24 +447,30 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
     // kill still leaves the prompt on disk.
     flush_session(state, messages);
 
-    // P0-07: compact history once per turn if over 70% of the model window.
-    // `compact` already inserts the extractive summary; do not append again.
+    // P1: assemble context — graph-ranked repo-map + JIT Hermes memory +
+    // structured compaction, budgeted per provider window. Replaces the old
+    // chars/4 `estimate_tokens` + keep-last-N `compact` block.
     let window = config.kind.context_window();
-    let threshold = (window as f64 * 0.7) as usize;
-    if estimate_tokens(messages) > threshold {
-        let before = messages.len();
-        let (compacted, summary) = compact(messages.clone(), 6, window);
-        *messages = compacted;
-        flush_session(state, messages);
-        log::info!(
-            "context compacted: {} → {} messages (window={}, threshold={}, summary_empty={})",
-            before,
-            messages.len(),
-            window,
-            threshold,
-            summary.is_empty()
+    let context_manager = crate::context_manager::ContextManager::new(
+        std::env::current_dir().unwrap_or_default(),
+        window,
+        &config.model,
+        6,
+    );
+    {
+        let store = state.memory_store.lock_guard();
+        let assembled = context_manager
+            .prepare(messages, Some(&store), &user_content)
+            .map_err(|e| format!("context preparation failed: {}", e))?;
+        log::debug!(
+            "context prepared: {} tokens, repo_map={} chars, memory={} chars, compacted={}",
+            assembled.total_tokens,
+            assembled.repo_map.len(),
+            assembled.memory.len(),
+            assembled.compacted.is_some()
         );
     }
+    flush_session(state, messages);
 
     let provider = std::sync::Arc::new(providers::create_provider(&config)?);
     let mut full_response = String::new();
@@ -646,9 +645,11 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
                     &request.permission_mode,
                     emitter,
                     cancel.as_ref(),
+                    &**provider,
+                    &tools,
                 )
                 .await?;
-                // Snapshot after each completed tool round.
+            // Snapshot after each completed tool round.
                 flush_session(state, messages);
                 // Reset text accumulator between tool rounds so final answer is clean.
                 full_response.clear();
@@ -693,7 +694,7 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
 
             emitter.emit_done(&full_response)?;
             if let Some(ref u) = last_usage {
-                record_cost(u.input_tokens, u.output_tokens);
+                cost_tracker::record_cost(u.input_tokens, u.output_tokens);
                 if emitter.allows_direct_terminal_output() {
                     eprintln!(
                         "  {}tokens: {} in / {} out{}",
@@ -743,6 +744,8 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
                     &request.permission_mode,
                     emitter,
                     cancel.as_ref(),
+                    &**provider,
+                    &tools,
                 )
                 .await?;
                 flush_session(state, messages);
@@ -766,7 +769,7 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
             flush_session(state, messages);
             emitter.emit_done(&full_response)?;
             if let Some(ref u) = response.usage {
-                record_cost(u.input_tokens, u.output_tokens);
+                cost_tracker::record_cost(u.input_tokens, u.output_tokens);
                 if emitter.allows_direct_terminal_output() {
                     eprintln!(
                         "  {}tokens: {} in / {} out{}",

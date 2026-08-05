@@ -31,6 +31,10 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use tokio_stream::Stream;
 
 /// Metrics collected by the HTTP transport
 pub struct TransportMetrics {
@@ -65,6 +69,7 @@ struct HttpTransportStateInner {
     metrics: TransportMetrics,
     #[allow(dead_code)]
     rate_limit_per_minute: u64,
+    sse_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 /// Axum router state — cloneable, cheap `Arc` bump.
@@ -89,8 +94,6 @@ pub struct HttpTransport {
     host: String,
     auth_token: Option<String>,
     rate_limit: u64,
-    /// Stored after `serve()` for graceful shutdown.
-    shutdown_tx: Option<mpsc::Sender<()>>,
 }
 
 impl HttpTransport {
@@ -101,10 +104,7 @@ impl HttpTransport {
             host: host.to_string(),
             auth_token: None,
             rate_limit: 0,
-            shutdown_tx: None,
         }
-    }
-
     /// Require clients to send `Authorization: Bearer <token>`.
     pub fn with_auth_token(mut self, token: String) -> Self {
         self.auth_token = Some(token);
@@ -124,6 +124,7 @@ impl HttpTransport {
                 server,
                 metrics: TransportMetrics::default(),
                 rate_limit_per_minute: 0,
+                sse_semaphore: Arc::new(tokio::sync::Semaphore::new(16)),
             }),
         };
 
@@ -167,16 +168,16 @@ impl HttpTransport {
 
         router
     }
-
     /// Start the HTTP server — **takes ownership of `server`** via `Arc` — and
-    /// return the spawned task join handle.
+    /// return the Axum `Serve` future with graceful shutdown support.
     ///
-    /// The returned handle resolves when the server loop exits (graceful shutdown
-    /// or transport error).
-    pub async fn serve(&mut self, server: Arc<McpServer>) -> Result<tokio::task::JoinHandle<()>, String> {
-        let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
-        self.shutdown_tx = Some(shutdown_tx);
-
+    /// The returned future resolves when the server loop exits (graceful shutdown
+    /// or transport error). The caller should `.await` it directly.
+    pub async fn serve<F: Future<Output = ()> + Send + 'static>(
+        &mut self,
+        server: Arc<McpServer>,
+        shutdown: F,
+    ) -> Result<axum::serve::WithGracefulShutdown<tokio::net::TcpListener, Router, F>, String> {
         let router = Self::build_router(server, self.auth_token.clone());
         let addr = format!("{}:{}", self.host, self.port)
             .parse::<std::net::SocketAddr>()
@@ -191,30 +192,59 @@ impl HttpTransport {
             log::info!("MCP HTTP transport auth: enabled (Bearer token)");
         }
 
-        let handle = tokio::spawn(async move {
-            axum::serve(listener, router)
-                .with_graceful_shutdown(async move {
-                    shutdown_rx.recv().await;
-                    log::info!("MCP HTTP transport shutting down");
-                })
-                .await
-                .ok();
-        });
-
-        Ok(handle)
-    }
-
-    /// Initiate graceful shutdown of the running server.
-    ///
-    /// Returns `true` if a shutdown signal was sent, `false` if no server is running.
-    pub fn shutdown(&self) -> bool {
-        if let Some(ref tx) = self.shutdown_tx {
-            tx.try_send(()).is_ok()
-        } else {
-            false
-        }
+        Ok(axum::serve(listener, router).with_graceful_shutdown(shutdown))
     }
 }
+
+/// Future that resolves when a shutdown signal (Ctrl+C or SIGTERM) is received.
+pub async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+
+    log::info!("Shutdown signal received, starting graceful shutdown");
+}
+
+/// Stream wrapper that holds an owned semaphore permit for backpressure control.
+///
+/// The permit is released when the stream (and thus this wrapper) is dropped,
+/// typically when the SSE client disconnects.
+struct PermitStream<S> {
+    inner: S,
+    _permit: tokio::sync::OwnedSemaphorePermit,
+}
+
+impl<S> Stream for PermitStream<S>
+where
+    S: Stream + Unpin,
+{
+    type Item = S::Item;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.inner).poll_next(cx)
+    }
+}
+
+impl<S> Unpin for PermitStream<S> where S: Unpin {}
+
 
 // ─── Axum Handlers ───────────────────────────────────────────────────────────
 
@@ -277,10 +307,23 @@ async fn handle_json_rpc(
     }
 }
 
-/// Handle SSE streaming connection
+/// Handle SSE streaming connection.
+///
+/// Acquires a permit from the per-server semaphore. If all 16 permits are
+/// in use, rejects with HTTP 503 to apply backpressure.
 async fn handle_sse(
-    State(_state): State<AppState>,
-) -> Sse<ReceiverStream<Result<Event, String>>> {
+    State(state): State<AppState>,
+) -> Result<Sse<PermitStream<ReceiverStream<Result<Event, String>>>>, (StatusCode, String)> {
+    let permit = match state.inner.sse_semaphore.clone().try_acquire_owned() {
+        Ok(permit) => permit,
+        Err(_) => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Too many concurrent SSE connections".into(),
+            ));
+        }
+    };
+
     let (tx, rx) = mpsc::channel::<Result<Event, String>>(16);
     let stream = ReceiverStream::new(rx);
 
@@ -292,7 +335,10 @@ async fn handle_sse(
             .ok();
     });
 
-    Sse::new(stream)
+    Ok(Sse::new(PermitStream {
+        inner: stream,
+        _permit: permit,
+    }))
 }
 
 /// Handle health check requests
@@ -378,7 +424,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 16384).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(
             !parsed["result"]["tools"].as_array().unwrap().is_empty(),
@@ -569,5 +615,39 @@ mod tests {
 
         // Notifications return 202 Accepted (no JSON-RPC response body)
         assert_eq!(response.status(), StatusCode::ACCEPTED);
+    }
+    /// When the SSE semaphore is exhausted, new connections get HTTP 503.
+    #[tokio::test]
+    async fn test_sse_backpressure_rejects_with_503() {
+        let server = Arc::new(McpServer::new());
+        let state = AppState {
+            inner: Arc::new(HttpTransportStateInner {
+                server,
+                metrics: TransportMetrics::default(),
+                rate_limit_per_minute: 0,
+                sse_semaphore: Arc::new(tokio::sync::Semaphore::new(0)), // fully exhausted
+            }),
+        };
+
+        let app = Router::new()
+            .route("/sse", get(handle_sse))
+            .with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/sse")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Should reject with 503 when semaphore is exhausted"
+        );
     }
 }

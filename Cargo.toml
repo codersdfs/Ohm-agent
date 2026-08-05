@@ -3,7 +3,6 @@ resolver = "2"
 members = [
     "src-tauri/crates/harness",
     "src-tauri/crates/entropy",
-    "src-tauri/crates/omega-table",
     "src-tauri/crates/providers",
     "src-tauri/crates/memory",
     "src-tauri/crates/mcp",
@@ -11,4 +10,5 @@ members = [
     "src-tauri/crates/tool-harness",
     "src-tauri/crates/omega-core",
     "src-tauri/crates/omega-cli",
+    "src-tauri/crates/taste",
 ]

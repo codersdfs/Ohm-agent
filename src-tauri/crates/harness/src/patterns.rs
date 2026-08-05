@@ -1,5 +1,5 @@
-use crate::Violation;
-use crate::ViolationCategory;
+use super::Violation;
+use super::ViolationCategory;
 
 #[derive(Debug, Clone)]
 pub struct NegativePattern {

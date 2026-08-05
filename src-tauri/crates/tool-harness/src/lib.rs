@@ -17,7 +17,7 @@ pub mod tools; // Tool Calling Box modules (phased)
 
 pub use budget::{ConversationBudget, ResultBudget};
 pub use context::ToolUseContext;
-pub use hooks::{HooksRegistry, PostToolUseHook, PreToolUseHook};
+pub use hooks::{HooksRegistry, Hook, HookDecision, HookContext, GateHook, GateHookMode, GateScorer};
 pub use metadata::{
     CostCategory, CostHint, DeprecationInfo, LatencyHint, ParamConstraints, ParamSummary,
     ToolCategory, ToolErrorSpec, ToolExample, ToolMetadata, ToolRef, ToolSource,

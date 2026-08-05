@@ -1,12 +1,20 @@
 pub mod commands;
-pub mod context;
+pub mod context_manager;
 pub mod error;
+pub mod events;
+pub mod gate_hook;
 pub mod learning;
+pub mod memory_injector;
 pub mod memory_retriever;
 pub mod memory_summarizer;
 pub mod pipeline;
+pub mod subagent;
 pub mod session;
 pub mod tui;
+pub mod code_search;
+
+// ui module for permission panel and related UI components
+pub mod ui;
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};

@@ -1,5 +1,5 @@
-use crate::Violation;
-use crate::ViolationCategory;
+use super::Violation;
+use super::ViolationCategory;
 use serde::Deserialize;
 use std::process::Command;
 

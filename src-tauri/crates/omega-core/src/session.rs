@@ -38,6 +38,12 @@ pub struct SessionRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub ts: String,
+    /// Parent session id (for subagent sessions).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_session: Option<String>,
+    /// Subagent id (for subagent sessions).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent_id: Option<String>,
 }
 
 impl SessionRecord {
@@ -49,6 +55,8 @@ impl SessionRecord {
             tool_call_id: msg.tool_call_id.clone(),
             name: msg.name.clone(),
             ts: Utc::now().to_rfc3339(),
+            parent_session: None,
+            subagent_id: None,
         }
     }
 
@@ -333,6 +341,8 @@ fn rotate_marker_line(path: &Path) -> Result<String, String> {
         tool_call_id: None,
         name: None,
         ts: Utc::now().to_rfc3339(),
+        parent_session: None,
+        subagent_id: None,
     };
     Ok(format!(
         "{}\n",
@@ -679,6 +689,8 @@ mod tests {
             tool_call_id: Some("call_1".into()),
             name: Some("read".into()),
             ts: Utc::now().to_rfc3339(),
+            parent_session: None,
+            subagent_id: None,
         };
         fs::write(&path, format!("{}\n", serde_json::to_string(&rec).unwrap())).unwrap();
 

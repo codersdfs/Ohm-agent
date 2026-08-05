@@ -92,7 +92,11 @@ impl ExecutionPipeline {
         let input = self.backfill_input(input)?;
 
         // Step 7: PreToolUse hooks
-        self.hooks.run_pre_hooks(tool_name, &input).await;
+        self.hooks.run_pre_tool(&crate::hooks::HookContext {
+            session_id: String::new(),
+            turn_id: None,
+            workspace: std::path::PathBuf::from("."),
+        }, tool_name, &input);
 
         // Step 8: Permission resolution — includes tool.check_permissions()
         let perm_result = self
@@ -143,7 +147,11 @@ impl ExecutionPipeline {
         let persisted_path = budget_check.persisted_path.clone();
 
         // Step 12: PostToolUse hooks
-        self.hooks.run_post_hooks(tool_name, &result).await;
+        let _ = self.hooks.run_post_tool(&crate::hooks::HookContext {
+            session_id: String::new(),
+            turn_id: None,
+            workspace: std::path::PathBuf::from("."),
+        }, tool_name, &result);
 
         // Step 13: New messages injection (stub - sub-agent transcripts)
         // This would be handled by orchestrator

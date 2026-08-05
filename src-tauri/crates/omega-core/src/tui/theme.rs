@@ -39,6 +39,13 @@ pub const USER_ATTACH_FG: Color = Color::Rgb(230, 220, 245);
 // the card background and the terminal background for a clean visual break.
 pub const USER_CARD_SEPARATOR: Color = Color::Rgb(35, 35, 38);
 
+// ── Permission panel colors ─────────────────────────────────────────────────────
+// Lighter blue accent for interactive permission elements, dark grays for surfaces
+pub const PERMISSION_BLUE: Color = Color::Rgb(130, 150, 200);
+pub const PERMISSION_BG: Color = Color::Reset; // inherit terminal background
+pub const PERMISSION_FG: Color = Color::Rgb(240, 240, 245); // slightly brighter than default FG
+pub const PERMISSION_HIGHLIGHT: Color = Color::Rgb(70, 90, 140); // darker blue for selected item
+
 // ── Layout / component colors ────────────────────────────────────────────────
 
 pub const SIDEBAR_BG: Color = Color::Rgb(28, 28, 31);
@@ -118,6 +125,24 @@ pub fn style_tool_box_ok() -> Style {
 
 pub fn style_tool_box_err() -> Style {
     Style::default().fg(ERROR).add_modifier(Modifier::BOLD)
+}
+
+// ── Permission panel styles ─────────────────────────────────────────────────────
+// Consistent styles for permission UI elements matching the color palette above
+pub fn style_permission_prompt() -> Style {
+    Style::default().fg(PERMISSION_FG)
+}
+
+pub fn style_permission_item() -> Style {
+    Style::default().fg(PERMISSION_FG)
+}
+
+pub fn style_permission_highlight() -> Style {
+    Style::default().fg(PERMISSION_HIGHLIGHT)
+}
+
+pub fn style_permission_button() -> Style {
+    Style::default().fg(PERMISSION_BLUE).add_modifier(Modifier::BOLD)
 }
 
 // ── Convenience styles ───────────────────────────────────────────────────────

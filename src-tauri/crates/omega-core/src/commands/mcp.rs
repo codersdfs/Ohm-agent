@@ -1,5 +1,6 @@
 // MCP skills integration — load .mcp.json skills, invoke via JSON-RPC
 
+use mcp::stdio::StdioTransport;
 use mcp::transport::JsonRpcTransport;
 use mcp::McpRequest;
 use mcp::Skill;
@@ -63,12 +64,14 @@ pub fn tool_definitions() -> Vec<providers::ToolDefinition> {
 
 /// Invoke an MCP skill by sending a JSON-RPC request to its endpoint.
 /// The method is the skill name; params are the tool arguments from the LLM.
+///
+/// Endpoint format detection:
+/// - `stdio://command [arg1] [arg2]` → spawns a subprocess (MCP stdio transport)
+/// - `http://...` / `https://...` → uses HTTP JSON-RPC transport
 pub async fn invoke_skill(
     skill: &Skill,
     args: &serde_json::Value,
 ) -> Result<crate::commands::tools::ToolResult, String> {
-    let transport = JsonRpcTransport::new(&skill.endpoint);
-
     let params = args.as_object().map(|obj| {
         obj.iter()
             .map(|(k, v)| (k.clone(), v.clone()))
@@ -81,7 +84,22 @@ pub async fn invoke_skill(
         id: uuid::Uuid::new_v4().to_string(),
     };
 
-    let response = transport.send(request).await?;
+    let response = if let Some(rest) = skill.endpoint.strip_prefix("stdio://") {
+        // Parse "command arg1 arg2" from the stdio:// URL
+        let parts: Vec<&str> = rest.split_whitespace().collect();
+        if parts.is_empty() {
+            return Err("stdio endpoint missing command".into());
+        }
+        let transport = StdioTransport::spawn(parts[0], &parts[1..])
+            .map_err(|e| format!("Failed to spawn MCP stdio server: {e}"))?;
+        let resp = transport.send(request).await?;
+        // Best-effort close
+        let _ = transport.close().await;
+        resp
+    } else {
+        let transport = JsonRpcTransport::new(&skill.endpoint);
+        transport.send(request).await?
+    };
 
     if let Some(err) = response.error {
         Ok(crate::commands::tools::ToolResult::err(err.message))

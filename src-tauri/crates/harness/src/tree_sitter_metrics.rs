@@ -1,4 +1,4 @@
-use crate::Language;
+use super::Language;
 use tree_sitter::{Language as TSLanguage, Node, Parser};
 
 #[derive(Debug, Clone)]
@@ -39,7 +39,7 @@ pub fn analyze_file(content: &str, lang: &Language) -> Vec<FunctionMetric> {
     metrics
 }
 
-fn get_ts_language(lang: &Language) -> Option<TSLanguage> {
+pub fn get_ts_language(lang: &Language) -> Option<TSLanguage> {
     match lang {
         Language::Rust => Some(tree_sitter_rust::language()),
         Language::TypeScript | Language::TypeScriptReact => Some(tree_sitter_typescript::language_typescript()),

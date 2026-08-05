@@ -1,6 +1,6 @@
-use crate::Language;
-use crate::Violation;
-use crate::ViolationCategory;
+use super::Language;
+use super::Violation;
+use super::ViolationCategory;
 
 pub struct TasteCheck;
 
@@ -106,31 +106,49 @@ impl TasteCheck {
             });
         }
 
-        // Check for non-null assertion
-        let re = regex::Regex::new(r"\w+!\.\w+").ok();
-        if let Some(re) = re {
-            if re.is_match(content) && path.ends_with(".ts") || path.ends_with(".tsx") {
-                violations.push(Violation {
-                    category: ViolationCategory::Taste,
-                    message: "Non-null assertion (`!`) bypasses type safety: prefer optional chaining or type guards".into(),
-                    tool_hint: Some("Replace `x!.foo` with `x?.foo` or add a proper null check".into()),
-                    line: None,
-                });
-            }
+        // Check for non-null assertion (!.)
+        // F-harness-05 fix: operator precedence — && binds tighter than ||,
+        // so the original `re.is_match(content) && path.ends_with(".ts") || path.ends_with(".tsx")`
+        // parsed as `(match && .ts) || .tsx`, firing on ANY .tsx file regardless of regex match.
+        let non_null_re = regex::Regex::new(r"\w+!\.\w+").unwrap();
+        if non_null_re.is_match(content) && (path.ends_with(".ts") || path.ends_with(".tsx")) {
+            violations.push(Violation {
+                category: ViolationCategory::Taste,
+                message: "Non-null assertion (`!`) bypasses type safety: prefer optional chaining or type guards".into(),
+                tool_hint: Some("Replace `x!.foo` with `x?.foo` or add a proper null check".into()),
+                line: None,
+            });
         }
 
         // Check for magic numbers
-        let re = regex::Regex::new(r"(?<!\w)([3-9]\d|[1-9]\d{2,})(?!\w)").ok();
-        if let Some(re) = re {
-            let numbers: Vec<_> = re.find_iter(content).collect();
-            if numbers.len() > 3 {
-                violations.push(Violation {
-                    category: ViolationCategory::Taste,
-                    message: "Magic numbers detected: extract to named constants".into(),
-                    tool_hint: Some("Replace magic numbers with `const` declarations".into()),
-                    line: None,
-                });
+        // F-harness-02 fix: `(?<!\w)` and `(?!\w)` look-around not supported by `regex` crate.
+        // Replace with numeric regex + manual word-boundary check.
+        let num_re = regex::Regex::new(r"[0-9]+").unwrap();
+        let chars: Vec<char> = content.chars().collect();
+        let mut magic_count = 0usize;
+        for m in num_re.find_iter(content) {
+            let s = m.start();
+            let e = m.end();
+            if let Ok(n) = content[s..e].parse::<u64>() {
+                // Magic number: single digit 3-9, or any number >= 10
+                let is_magic = (n >= 3 && n <= 9) || n >= 10;
+                if is_magic {
+                    // Check word boundaries: preceding char not word, following char not word
+                    let prev_ok = s == 0 || !chars[s.saturating_sub(1)].is_alphanumeric();
+                    let next_ok = e >= chars.len() || !chars[e].is_alphanumeric();
+                    if prev_ok && next_ok {
+                        magic_count += 1;
+                    }
+                }
             }
+        }
+        if magic_count > 3 {
+            violations.push(Violation {
+                category: ViolationCategory::Taste,
+                message: "Magic numbers detected: extract to named constants".into(),
+                tool_hint: Some("Replace magic numbers with `const` declarations".into()),
+                line: None,
+            });
         }
     }
 
@@ -252,6 +270,55 @@ mod tests {
         assert!(
             violations.is_empty(),
             "Should pass clean TS code: {:?}",
+            violations
+        );
+    }
+
+    #[test]
+    fn test_magic_numbers_detected() {
+        let content = "const a = 42;\nconst b = 100;\nconst c = 999;\nconst d = 7;\nconst e = 5;";
+        let violations = TasteCheck::check(content, "test.ts", &Language::TypeScript);
+        let magic_v = violations.iter().find(|v| v.message.contains("Magic numbers"));
+        assert!(
+            magic_v.is_some(),
+            "Should flag magic numbers (>3): {:?}",
+            violations
+        );
+    }
+
+    #[test]
+    fn test_no_magic_numbers_below_threshold() {
+        let content = "const a = 42;\nconst b = 100;\nconst c = 999;";
+        let violations = TasteCheck::check(content, "test.ts", &Language::TypeScript);
+        let magic_v = violations.iter().find(|v| v.message.contains("Magic numbers"));
+        assert!(
+            magic_v.is_none(),
+            "Should not flag magic numbers (<=3): {:?}",
+            violations
+        );
+    }
+
+    #[test]
+    fn test_non_null_assertion_precheck_fix() {
+        // A .tsx file without non-null assertion should NOT trigger the check
+        let content = "const x: number = 5;\nconst y = x?.foo ?? 'bar';";
+        let violations = TasteCheck::check(content, "test.tsx", &Language::TypeScriptReact);
+        let nn_v = violations.iter().find(|v| v.message.contains("Non-null assertion"));
+        assert!(
+            nn_v.is_none(),
+            "Should not flag non-null assertion when absent in .tsx: {:?}",
+            violations
+        );
+    }
+
+    #[test]
+    fn test_non_null_assertion_fires_in_tsx() {
+        let content = "const val = obj!.property;";
+        let violations = TasteCheck::check(content, "test.tsx", &Language::TypeScriptReact);
+        let nn_v = violations.iter().find(|v| v.message.contains("Non-null assertion"));
+        assert!(
+            nn_v.is_some(),
+            "Should flag non-null assertion in .tsx: {:?}",
             violations
         );
     }

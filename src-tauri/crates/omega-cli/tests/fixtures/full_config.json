@@ -1,0 +1,7 @@
+{
+  "provider": "openai",
+  "model": "gpt-4o",
+  "base_url": "https://custom.api.example.com/v1",
+  "max_tokens": 8192,
+  "temperature": 1.2
+}

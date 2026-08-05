@@ -1,6 +1,6 @@
-use crate::Language;
-use crate::Violation;
-use crate::ViolationCategory;
+use super::Language;
+use super::Violation;
+use super::ViolationCategory;
 
 const MAX_FILE_LINES: usize = 500;
 const MAX_FUNCTION_LINES: usize = 80;

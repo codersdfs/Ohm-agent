@@ -1,6 +1,6 @@
-use crate::Language;
-use crate::Violation;
-use crate::ViolationCategory;
+use super::Language;
+use super::Violation;
+use super::ViolationCategory;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -95,7 +95,7 @@ impl RulesDatabase {
     pub fn load_for_language(&self, lang: &Language) -> CategoryGroup {
         let key = lang.to_key();
         self.languages
-            .get(&key)
+            .get(&key.to_string())
             .cloned()
             .unwrap_or_else(CategoryGroup::new)
     }
@@ -109,7 +109,7 @@ impl RulesDatabase {
         severity: &str,
     ) {
         let key = lang.to_key();
-        let group = self.languages.entry(key).or_insert_with(CategoryGroup::new);
+        let group = self.languages.entry(key.to_string()).or_insert_with(CategoryGroup::new);
         if let Some(rules) = group.category_mut(category) {
             if let Some(existing) = rules.iter_mut().find(|r| r.pattern == pattern) {
                 existing.frequency += 1;
@@ -161,7 +161,7 @@ impl RulesDatabase {
     pub fn demote_stale_rules(&mut self, lang: &Language) -> usize {
         let key = lang.to_key();
         let mut demoted = 0;
-        if let Some(group) = self.languages.get_mut(&key) {
+        if let Some(group) = self.languages.get_mut(&key.to_string()) {
             for rules in [
                 &mut group.structural,
                 &mut group.taste,
