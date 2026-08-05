@@ -71,13 +71,13 @@ pub fn render_full_layout(frame: &mut Frame, area: Rect, chrome: &mut LayoutChro
     // ── Layout: vertical stack ───────────────────────────────────────────
     let top_bar_h = 1u16;
     let metrics_h = 3u16;
-    // Editor height: base of 3, grow with content, max 6
+    // Editor height: content lines + 2 borders, capped at 8 (6 content + 2 borders)
     let editor_h: u16 = if chrome.is_command_mode {
         7
     } else {
         let content_width = area.width.saturating_sub(2) as usize;
-        let lines = chrome.editor.visual_line_count(content_width);
-        (lines as u16).min(6).max(3)
+        let content_lines = chrome.editor.visual_line_count(content_width);
+        (content_lines as u16 + 2).min(8).max(3)
     };
 
     let vert = Layout::default()
@@ -477,12 +477,10 @@ fn render_command_panel(
                 );
         }
 
-        // Bottom rule
+        // Bottom rule — right after last content line
+        let bottom_y = area.y + 1 + display_lines.len() as u16;
         Paragraph::new(Line::from(Span::styled(&rule, out_style)))
-            .render(
-                Rect::new(area.x, area.y + area.height.saturating_sub(1), area.width, 1),
-                frame.buffer_mut(),
-            );
+            .render(Rect::new(area.x, bottom_y, area.width, 1), frame.buffer_mut());
     }
 
     // ── Command palette (top rule with centered label, no side borders) ──
