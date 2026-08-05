@@ -6,15 +6,15 @@ pub struct JsonRpcTransport {
 }
 
 impl JsonRpcTransport {
-    pub fn new(endpoint: &str) -> Self {
+    pub fn new(endpoint: &str) -> Result<Self, String> {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
-            .unwrap_or_default();
-        Self {
+            .map_err(|e| format!("Failed to build MCP HTTP client: {e}"))?;
+        Ok(Self {
             endpoint: endpoint.to_string(),
             client,
-        }
+        })
     }
 
     pub async fn send(&self, request: McpRequest) -> Result<McpResponse, String> {

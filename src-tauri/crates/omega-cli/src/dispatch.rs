@@ -18,8 +18,10 @@ pub fn run_chat(
     base_url: Option<String>,
     session: Option<String>,
     new_session: bool,
+    max_tokens: Option<u32>,
+    temperature: Option<f32>,
 ) -> Result<()> {
-    let config = load_provider_config(provider, model, base_url);
+    let config = load_provider_config(provider, model, base_url, max_tokens, temperature);
 
     let model = config.model.clone();
     let kind = config.kind.to_string();

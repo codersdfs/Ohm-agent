@@ -107,11 +107,9 @@ pub struct StdioTransport {
     stdin: Mutex<tokio::process::ChildStdin>,
     reader: Mutex<BufReader<tokio::process::ChildStdout>>,
     child: Mutex<Option<Child>>,
+    stderr_task: Option<tokio::task::JoinHandle<()>>,
 }
 
-impl StdioTransport {
-    /// Spawn a subprocess that speaks MCP over stdio.
-    /// `program` is the executable path; `args` are the arguments.
     pub fn spawn(program: &str, args: &[&str]) -> Result<Self, String> {
         let mut child = Command::new(program)
             .args(args)
@@ -129,11 +127,32 @@ impl StdioTransport {
             .stdout
             .take()
             .ok_or_else(|| "Subprocess did not provide stdout".to_string())?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| "Subprocess did not provide stderr".to_string())?;
+
+        let stderr_task = tokio::spawn(async move {
+            let mut reader = BufReader::new(stderr);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line).await {
+                    Ok(0) => break,
+                    Ok(_) => log::warn!("[mcp-stdio] {}", line.trim_end()),
+                    Err(e) => {
+                        log::warn!("[mcp-stdio] stderr read error: {e}");
+                        break;
+                    }
+                }
+            }
+        });
 
         Ok(Self {
             stdin: Mutex::new(stdin),
             reader: Mutex::new(BufReader::new(stdout)),
             child: Mutex::new(Some(child)),
+            stderr_task: Some(stderr_task),
         })
     }
 
@@ -217,6 +236,9 @@ impl StdioTransport {
                     return Err("Timed out waiting for MCP subprocess to exit".into());
                 }
             }
+        }
+        if let Some(task) = self.stderr_task.as_ref() {
+            task.abort();
         }
         Ok(())
     }

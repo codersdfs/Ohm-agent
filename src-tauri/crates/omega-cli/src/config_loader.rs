@@ -2,11 +2,13 @@
 
 use providers::ProviderConfig;
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct CliConfig {
     pub provider: Option<String>,
     pub model: Option<String>,
     pub base_url: Option<String>,
+    pub max_tokens: Option<u32>,
+    pub temperature: Option<f32>,
 }
 
 pub fn config_dir() -> std::path::PathBuf {
@@ -25,6 +27,8 @@ pub fn load_config() -> CliConfig {
             provider: None,
             model: None,
             base_url: None,
+            max_tokens: None,
+            temperature: None,
         })
 }
 
@@ -33,6 +37,8 @@ pub fn save_config(config: &providers::ProviderConfig) {
         provider: Some(config.kind.to_string()),
         model: Some(config.model.clone()),
         base_url: config.base_url.clone(),
+        max_tokens: Some(config.max_tokens),
+        temperature: Some(config.temperature),
     };
     let path = config_dir().join("config.json");
     if let Ok(json) = serde_json::to_string_pretty(&cli) {
@@ -59,6 +65,8 @@ pub fn load_provider_config(
     override_provider: Option<String>,
     override_model: Option<String>,
     override_base_url: Option<String>,
+    override_max_tokens: Option<u32>,
+    override_temperature: Option<f32>,
 ) -> ProviderConfig {
     let mut cli_cfg = load_config();
 
@@ -106,6 +114,25 @@ pub fn load_provider_config(
     let base_url = cli_cfg
         .base_url
         .or_else(|| std::env::var("OMEGA_BASE_URL").ok());
+    // Resolve max_tokens: CLI flag → config file → env var → hardcoded default
+    let max_tokens = override_max_tokens
+        .or(cli_cfg.max_tokens)
+        .or_else(|| {
+            std::env::var("OMEGA_MAX_TOKENS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+        })
+        .unwrap_or(4096);
+
+    // Resolve temperature: CLI flag → config file → env var → hardcoded default
+    let temperature = override_temperature
+        .or(cli_cfg.temperature)
+        .or_else(|| {
+            std::env::var("OMEGA_TEMPERATURE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+        })
+        .unwrap_or(0.7);
 
     // Resolve API key
     let api_key = std::env::var("OMEGA_API_KEY").ok().or_else(|| {
@@ -120,7 +147,22 @@ pub fn load_provider_config(
         api_key,
         base_url,
         model,
-        max_tokens: 4096,
-        temperature: 0.7,
+        max_tokens,
+        temperature,
     }
+}
+
+/// Read `config.json` from a specific directory (for testability).
+fn load_config_from_dir(cfg_dir: &std::path::Path) -> CliConfig {
+    let path = cfg_dir.join("config.json");
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or(CliConfig {
+            provider: None,
+            model: None,
+            base_url: None,
+            max_tokens: None,
+            temperature: None,
+        })
 }

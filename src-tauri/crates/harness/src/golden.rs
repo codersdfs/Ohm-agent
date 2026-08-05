@@ -115,22 +115,35 @@ impl GoldenRules {
     }
 
     fn check_javascript(content: &str, violations: &mut Vec<Violation>) {
-        if content.contains("==") && !content.contains("===") {
+        // Detect `==` without `===` using finditer + manual boundary checks.
+        // Replaces the broken regex `(?<![!<>=])==(?!=)` which the `regex` crate
+        // does not support (look-around assertions are not supported).
+        let eq_re = regex::Regex::new(r"==").unwrap();
+        let chars: Vec<char> = content.chars().collect();
+        let mut matched = false;
+        for m in eq_re.find_iter(content) {
+            let start = m.start();
+            let end = m.end();
+            // Check preceding char is not in `! < > =`
+            let prev_ok = start == 0
+                || !['!', '<', '>', '='].contains(&chars[start.saturating_sub(1)]);
+            // Check following char is not `=`
+            let next_ok = end >= chars.len() || chars[end] != '=';
+            if prev_ok && next_ok {
+                matched = true;
+                break;
+            }
+        }
+        // If we found a loose `==`, but the content also contains `===` somewhere,
+        // this could be a false positive from a legitimate `== ===` pattern.
+        // Only fire if no `===` exists in the content (preserving original intent).
+        if matched && !content.contains("===") {
             violations.push(Violation {
                 category: ViolationCategory::Golden,
                 message: "Using `==` instead of `===`: use strict equality".into(),
                 tool_hint: Some("Replace `==` with `===`".into()),
                 line: None,
             });
-        } else if let Ok(re) = regex::Regex::new(r"(?<![!<>=])==(?!=)") {
-            if re.is_match(content) {
-                violations.push(Violation {
-                    category: ViolationCategory::Golden,
-                    message: "Using `==` instead of `===`: use strict equality".into(),
-                    tool_hint: Some("Replace `==` with `===`".into()),
-                    line: None,
-                });
-            }
         }
     }
 

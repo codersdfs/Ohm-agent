@@ -1741,7 +1741,6 @@ dependencies = [
  "log",
  "mcp",
  "memory",
- "omega-table",
  "providers",
  "pulldown-cmark",
  "ratatui",
@@ -1757,17 +1756,6 @@ dependencies = [
  "tool-harness",
  "uuid",
  "walkdir",
-]
-
-[[package]]
-name = "omega-table"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "log",
- "rusqlite",
- "serde",
- "serde_json",
 ]
 
 [[package]]

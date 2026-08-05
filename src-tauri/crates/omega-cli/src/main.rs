@@ -26,7 +26,9 @@ fn main() -> Result<()> {
             base_url,
             session,
             new_session,
-        } => dispatch::run_chat(provider, model, base_url, session, new_session),
+            max_tokens,
+            temperature,
+        } => dispatch::run_chat(provider, model, base_url, session, new_session, max_tokens, temperature),
         CliAction::ServeMcp {
             port,
             host,

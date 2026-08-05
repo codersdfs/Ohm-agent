@@ -161,9 +161,6 @@ const SUPPORTED_EXTS: &[(&str, &str)] = &[
     ("js", "javascript"),
     ("jsx", "javascript"),
     ("py", "python"),
-    ("go", "go"),
-    ("cs", "csharp"),
-    ("java", "java"),
 ];
 
 /// Repo-wide symbol index.

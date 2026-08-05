@@ -58,9 +58,10 @@ impl GateResult {
         Self { score, passed: true, violations: vec![] }
     }
 
-    /// Create a failed result with violations
-    pub fn fail(score: u32, violations: Vec<Violation>) -> Self {
-        Self { score, passed: violations.is_empty() || score >= 80, violations }
+    /// Create a gate result with a score and violations.
+    /// The `passed` flag is determined by the score threshold (≥80 passes).
+    pub fn evaluate(score: u32, violations: Vec<Violation>) -> Self {
+        Self { score, passed: score >= 80, violations }
     }
 
     /// Check if this result represents a pass

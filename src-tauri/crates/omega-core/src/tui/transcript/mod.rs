@@ -60,8 +60,8 @@ impl TranscriptEntry {
             } => {
                 let mut all = Vec::new();
 
-                // Show activity directly, without a separate assistant marker.
-                if *is_streaming {
+                // Show activity text only when content is empty (right after tool call)
+                if *is_streaming && content.is_empty() {
                     let activity = activity_text(activity_tick);
                     all.push(Line::from(vec![Span::styled(
                         activity.trim_start().to_owned(),

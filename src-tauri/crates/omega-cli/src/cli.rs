@@ -34,6 +34,14 @@ pub enum CliAction {
             help = "Start a new session instead of resuming the last one"
         )]
         new_session: bool,
+
+        /// Maximum tokens to generate in the response (default: 4096)
+        #[arg(long = "max-tokens", value_name = "N", help = "Max tokens to generate")]
+        max_tokens: Option<u32>,
+
+        /// Sampling temperature 0.0–2.0 (default: 0.7)
+        #[arg(long = "temperature", value_name = "T", help = "Sampling temperature")]
+        temperature: Option<f32>,
     },
 
     /// Start the MCP server to expose agent tools via Model Context Protocol
@@ -60,6 +68,8 @@ impl Default for CliAction {
             base_url: None,
             session: None,
             new_session: false,
+            max_tokens: None,
+            temperature: None,
         }
     }
 }

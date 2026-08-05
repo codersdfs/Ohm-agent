@@ -22,5 +22,5 @@ pub fn calculate_score(violations: &[Violation]) -> GateResult {
         };
     }
 
-    GateResult::fail(score, violations.to_vec())
+    GateResult::evaluate(score, violations.to_vec())
 }

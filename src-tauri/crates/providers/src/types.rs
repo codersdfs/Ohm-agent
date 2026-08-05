@@ -64,25 +64,25 @@ impl std::fmt::Display for ProviderKind {
 }
 
 impl ProviderKind {
-    pub fn from_str(s: &str) -> Self {
+    pub fn from_name(s: &str) -> Result<Self, String> {
         match s.to_lowercase().as_str() {
-            "anthropic" => Self::Anthropic,
-            "openai" => Self::OpenAI,
-            "google" => Self::Google,
-            "mistral" => Self::Mistral,
-            "xai" => Self::XAI,
-            "cerebras" => Self::Cerebras,
-            "azure" => Self::Azure,
-            "bedrock" => Self::Bedrock,
-            "huggingface" => Self::HuggingFace,
-            "groq" => Self::Groq,
-            "kimi" => Self::Kimi,
-            "minimax" => Self::MiniMax,
-            "openrouter" => Self::OpenRouter,
-            "local" => Self::Local,
-            "ollama" => Self::Local,
-            "custom" | "other" | "openai-compatible" => Self::Custom,
-            _ => Self::OpenAI,
+            "anthropic" => Ok(Self::Anthropic),
+            "openai" => Ok(Self::OpenAI),
+            "google" => Ok(Self::Google),
+            "mistral" => Ok(Self::Mistral),
+            "xai" => Ok(Self::XAI),
+            "cerebras" => Ok(Self::Cerebras),
+            "azure" => Ok(Self::Azure),
+            "bedrock" => Ok(Self::Bedrock),
+            "huggingface" => Ok(Self::HuggingFace),
+            "groq" => Ok(Self::Groq),
+            "kimi" => Ok(Self::Kimi),
+            "minimax" => Ok(Self::MiniMax),
+            "openrouter" => Ok(Self::OpenRouter),
+            "local" => Ok(Self::Local),
+            "ollama" => Ok(Self::Local),
+            "custom" | "other" | "openai-compatible" => Ok(Self::Custom),
+            _ => Err(format!("unknown provider kind: {}", s)),
         }
     }
 

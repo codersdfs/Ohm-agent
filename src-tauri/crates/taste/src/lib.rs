@@ -1,3 +1,6 @@
+//! This crate is a stub. The `taste-system` feature is off by default. All `TasteAgent`
+//! methods are no-ops returning empty results. This is scaffolding for future RL-based
+//! code-taste learning.
 #![allow(dead_code)]
 
 

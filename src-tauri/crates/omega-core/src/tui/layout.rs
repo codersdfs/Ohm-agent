@@ -451,7 +451,7 @@ fn render_command_panel(
 
         // List rows
         let list_y = top_y + 2;
-        let list_h = area.height.saturating_sub(2).min(5);
+        let list_h = area.height.saturating_sub(3);
         if list_h > 0 {
             command_palette::render_panel(
                 Rect::new(area.x + 2, list_y, area.width.saturating_sub(4), list_h),
@@ -459,6 +459,14 @@ fn render_command_panel(
                 palette,
                 list_h,
             );
+        }
+
+        // Bottom rule
+        let bottom_y = area.y + area.height - 1;
+        for x in area.x..area.x + area.width {
+            frame.buffer_mut().get_mut(x, bottom_y)
+                .set_symbol("─")
+                .set_style(line_style);
         }
     }
 }
