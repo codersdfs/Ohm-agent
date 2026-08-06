@@ -2,14 +2,18 @@ use crate::metadata::{ToolCategory, ToolMetadata, LatencyHint};
 use crate::{Tool, ToolError, ToolInput, ToolResult, ToolUseContext, PermissionResult};
 use async_trait::async_trait;
 
-pub struct SpawnSubagentTool;
+#[allow(dead_code)]
+#[deprecated(note = "subagent spawning is handled via the chat.rs interception path — see F-t-harness-02")]
+pub(crate) struct SpawnSubagentTool;
 
+#[allow(dead_code)]
 impl SpawnSubagentTool {
     pub fn new() -> Self {
         Self
     }
 }
 
+#[allow(dead_code)]
 impl Default for SpawnSubagentTool {
     fn default() -> Self {
         Self::new()
@@ -17,6 +21,7 @@ impl Default for SpawnSubagentTool {
 }
 
 #[async_trait]
+#[allow(dead_code)]
 impl Tool for SpawnSubagentTool {
     fn name(&self) -> &str {
         "spawn_subagent"

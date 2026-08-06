@@ -110,6 +110,7 @@ pub struct StdioTransport {
     stderr_task: Option<tokio::task::JoinHandle<()>>,
 }
 impl StdioTransport {
+
     pub fn spawn(program: &str, args: &[&str]) -> Result<Self, String> {
         let mut child = Command::new(program)
             .args(args)

@@ -209,6 +209,7 @@ impl OpenAIProvider {
 
 #[async_trait::async_trait]
 impl LlmProvider for OpenAIProvider {
+    fn as_any(&self) -> &dyn std::any::Any { self }
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, String> {
         let client = reqwest::Client::new();
         let body = self.build_request(&request);

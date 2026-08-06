@@ -97,8 +97,8 @@ pub async fn invoke_skill(
         let _ = transport.close().await;
         resp
     } else {
-        let transport = JsonRpcTransport::new(&skill.endpoint);
-        transport?.send(request).await?
+        let transport = JsonRpcTransport::new(&skill.endpoint).map_err(|e| format!("Failed to build MCP HTTP client: {e}"))?;
+        transport.send(request).await?
     };
 
     if let Some(err) = response.error {

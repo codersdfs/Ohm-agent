@@ -32,6 +32,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use std::future::Future;
+use std::future::IntoFuture;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio_stream::Stream;
@@ -178,7 +179,7 @@ impl HttpTransport {
         &mut self,
         server: Arc<McpServer>,
         shutdown: F,
-    ) -> Result<axum::serve::WithGracefulShutdown<Router, Router, F>, String> {
+    ) -> Result<Pin<Box<dyn Future<Output = Result<(), std::io::Error>> + Send>>, String> {
         let router = Self::build_router(server, self.auth_token.clone());
         let addr = format!("{}:{}", self.host, self.port)
             .parse::<std::net::SocketAddr>()
@@ -193,7 +194,10 @@ impl HttpTransport {
             log::info!("MCP HTTP transport auth: enabled (Bearer token)");
         }
 
-        Ok(axum::serve(listener, router).with_graceful_shutdown(shutdown))
+        let serve = axum::serve(listener, router.into_make_service())
+            .with_graceful_shutdown(shutdown)
+            .into_future();
+        Ok(Box::pin(serve))
     }
 }
 

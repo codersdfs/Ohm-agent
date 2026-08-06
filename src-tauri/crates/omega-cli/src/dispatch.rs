@@ -141,6 +141,7 @@ mod tests {
 
     #[test]
     fn run_chat_config_defaults_when_no_overrides() {
+        let _guard = crate::testutil::lock_env();
         // Clean env to ensure defaults
         std::env::remove_var("OMEGA_API_KEY");
         std::env::remove_var("OMEGA_MODEL");
