@@ -66,7 +66,14 @@ impl RemoteMcpClient {
                 let url = self.config.url.as_ref().ok_or("No URL configured for HTTP transport")?;
                 log::info!("Connecting to remote MCP server at {url}");
 
-                let transport = JsonRpcTransport::new(url);
+                let transport = match JsonRpcTransport::new(url) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        *self.status.write().await =
+                            ConnectionStatus::Failed(format!("Client build error: {e}"));
+                        return Err(format!("Failed to build MCP HTTP client: {e}"));
+                    }
+                };
                 *self.transport.write().await = Some(transport);
 
                 // Do initialize handshake

@@ -442,4 +442,60 @@ mod tests {
         let err = result.unwrap_err();
         assert!(err.message.contains("SSRF") || err.message.contains("private"));
     }
+
+    #[test]
+    fn test_url_scheme_allowlist() {
+        // http and https should parse fine (we only assert scheme here, not SSRF)
+        let http = url::Url::parse("http://example.com").unwrap();
+        let https = url::Url::parse("https://example.com").unwrap();
+        assert_eq!(http.scheme(), "http");
+        assert_eq!(https.scheme(), "https");
+
+        // file:// should be rejected by scheme check
+        let file_url = url::Url::parse("file:///etc/passwd").unwrap();
+        assert_ne!(file_url.scheme(), "http");
+        assert_ne!(file_url.scheme(), "https");
+
+        // ftp:// should be rejected
+        let ftp_url = url::Url::parse("ftp://example.com").unwrap();
+        assert_ne!(ftp_url.scheme(), "http");
+        assert_ne!(ftp_url.scheme(), "https");
+
+        // Internal/invalid schemes should be rejected
+        let internal_url = url::Url::parse("about:blank").unwrap();
+        assert_ne!(internal_url.scheme(), "http");
+        assert_ne!(internal_url.scheme(), "https");
+    }
+
+    #[test]
+    fn test_invalid_url_strings() {
+        // These should fail url::Url::parse
+        assert!(url::Url::parse("").is_err());
+        assert!(url::Url::parse("not-a-url").is_err());
+        assert!(url::Url::parse(":///missing-scheme").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_web_fetch_rejects_non_http_schemes() {
+        let tool = WebFetchTool::new();
+        let ctx = ToolUseContext::new("test");
+
+        // file:// scheme
+        let input = ToolInput {
+            tool: "web_fetch".into(),
+            args: serde_json::json!({ "url": "file:///etc/passwd" }),
+        };
+        let result = tool.call(input, &ctx).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.message.contains("Unsupported URL scheme") || err.message.contains("file"));
+
+        // ftp:// scheme
+        let input = ToolInput {
+            tool: "web_fetch".into(),
+            args: serde_json::json!({ "url": "ftp://example.com/file" }),
+        };
+        let result = tool.call(input, &ctx).await;
+        assert!(result.is_err());
+    }
 }

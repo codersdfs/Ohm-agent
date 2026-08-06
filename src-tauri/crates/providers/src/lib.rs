@@ -20,6 +20,7 @@ pub use types::*;
 
 #[async_trait::async_trait]
 pub trait LlmProvider: Send + Sync {
+    fn as_any(&self) -> &dyn std::any::Any;
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, String>;
     async fn chat_stream(
         &self,
@@ -75,5 +76,118 @@ pub fn create_provider(config: &ProviderConfig) -> Result<Box<dyn LlmProvider>, 
             }
             Ok(Box::new(local::LocalProvider::new(url)))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config_for(kind: ProviderKind) -> ProviderConfig {
+        ProviderConfig {
+            kind,
+            api_key: Some("test-key".into()),
+            base_url: None,
+            model: "test-model".into(),
+            max_tokens: 1024,
+            temperature: 0.5,
+        }
+    }
+
+    // ---- create_provider routing ----
+
+    #[test]
+    fn create_provider_openai_routes_to_openai() {
+        let p = create_provider(&config_for(ProviderKind::OpenAI)).unwrap();
+        assert!(p.as_any().downcast_ref::<openai::OpenAIProvider>().is_some());
+    }
+
+    #[test]
+    fn create_provider_anthropic_routes_to_anthropic() {
+        let p = create_provider(&config_for(ProviderKind::Anthropic)).unwrap();
+        assert!(p.as_any().downcast_ref::<anthropic::AnthropicProvider>().is_some());
+    }
+
+    #[test]
+    fn create_provider_local_routes_to_local() {
+        let p = create_provider(&config_for(ProviderKind::Local)).unwrap();
+        assert!(p.as_any().downcast_ref::<local::LocalProvider>().is_some());
+    }
+
+    #[test]
+    fn create_provider_bedrock_routes_to_bedrock() {
+        let p = create_provider(&config_for(ProviderKind::Bedrock)).unwrap();
+        assert!(p.as_any().downcast_ref::<bedrock::BedrockProvider>().is_some());
+    }
+
+    #[test]
+    fn create_provider_google_routes_to_openai_compatible() {
+        // Google should route through OpenAIProvider (not a separate GoogleProvider)
+        let p = create_provider(&config_for(ProviderKind::Google)).unwrap();
+        assert!(p.as_any().downcast_ref::<openai::OpenAIProvider>().is_some());
+    }
+
+    #[test]
+    fn create_provider_bedrock_not_openai() {
+        // Bedrock must NOT route through OpenAIProvider
+        let p = create_provider(&config_for(ProviderKind::Bedrock)).unwrap();
+        assert!(p.as_any().downcast_ref::<openai::OpenAIProvider>().is_none());
+    }
+
+    // ---- from_name ----
+
+    #[test]
+    fn from_name_all_variants() {
+        for kind in ProviderKind::all() {
+            let name = format!("{}", kind);
+            let parsed = ProviderKind::from_name(&name).unwrap();
+            assert_eq!(format!("{}", parsed), name, "round-trip failed for {}", name);
+        }
+    }
+
+    #[test]
+    fn from_name_aliases() {
+        assert_eq!(ProviderKind::from_name("ollama").unwrap(), ProviderKind::Local);
+        assert_eq!(ProviderKind::from_name("openai-compatible").unwrap(), ProviderKind::Custom);
+        assert_eq!(ProviderKind::from_name("other").unwrap(), ProviderKind::Custom);
+    }
+
+    #[test]
+    fn from_name_unknown_returns_err() {
+        assert!(ProviderKind::from_name("bogus").is_err());
+        assert!(ProviderKind::from_name("nonexistent").is_err());
+        assert!(ProviderKind::from_name("").is_err());
+    }
+
+    #[test]
+    fn from_str_trait_uses_from_name() {
+        // std::str::FromStr delegates to from_name
+        assert_eq!("openai".parse::<ProviderKind>().unwrap(), ProviderKind::OpenAI);
+        assert!("bogus".parse::<ProviderKind>().is_err());
+    }
+
+    // ---- context_window ----
+
+    #[test]
+    fn context_window_google_is_200k() {
+        assert_eq!(ProviderKind::Google.context_window(), 200_000);
+    }
+
+    #[test]
+    fn context_window_bedrock() {
+        assert_eq!(ProviderKind::Bedrock.context_window(), 128_000);
+    }
+
+    // ---- is_openai_compatible ----
+
+    #[test]
+    fn bedrock_not_openai_compatible() {
+        assert!(!ProviderKind::Bedrock.is_openai_compatible());
+    }
+
+    #[test]
+    fn google_not_openai_compatible() {
+        // Google routes through OpenAIProvider but isn't listed in is_openai_compatible
+        assert!(!ProviderKind::Google.is_openai_compatible());
     }
 }

@@ -68,7 +68,26 @@ pub fn load_provider_config(
     override_max_tokens: Option<u32>,
     override_temperature: Option<f32>,
 ) -> ProviderConfig {
-    let mut cli_cfg = load_config();
+    load_provider_config_inner(
+        override_provider,
+        override_model,
+        override_base_url,
+        override_max_tokens,
+        override_temperature,
+        &config_dir(),
+    )
+}
+
+/// Inner implementation parameterised by `config_dir` for testability.
+fn load_provider_config_inner(
+    override_provider: Option<String>,
+    override_model: Option<String>,
+    override_base_url: Option<String>,
+    override_max_tokens: Option<u32>,
+    override_temperature: Option<f32>,
+    cfg_dir: &std::path::Path,
+) -> ProviderConfig {
+    let mut cli_cfg = load_config_from_dir(cfg_dir);
 
     // Apply CLI overrides on top of config file
     if let Some(p) = override_provider {
@@ -85,11 +104,11 @@ pub fn load_provider_config(
     let kind = cli_cfg
         .provider
         .as_deref()
-        .and_then(|s| providers::ProviderKind::from_str(s).ok())
+        .and_then(|s| providers::ProviderKind::from_name(s).ok())
         .unwrap_or_else(|| {
             // Auto-detect: if API key is set, use OpenAI; otherwise Local (Ollama)
             let has_api_key =
-                std::env::var("OMEGA_API_KEY").is_ok() || config_dir().join(".env").exists();
+                std::env::var("OMEGA_API_KEY").is_ok() || cfg_dir.join(".env").exists();
             if has_api_key {
                 providers::ProviderKind::OpenAI
             } else {
@@ -114,6 +133,7 @@ pub fn load_provider_config(
     let base_url = cli_cfg
         .base_url
         .or_else(|| std::env::var("OMEGA_BASE_URL").ok());
+
     // Resolve max_tokens: CLI flag → config file → env var → hardcoded default
     let max_tokens = override_max_tokens
         .or(cli_cfg.max_tokens)
@@ -136,7 +156,7 @@ pub fn load_provider_config(
 
     // Resolve API key
     let api_key = std::env::var("OMEGA_API_KEY").ok().or_else(|| {
-        let p = config_dir().join(".env");
+        let p = cfg_dir.join(".env");
         std::fs::read_to_string(&p)
             .ok()
             .map(|s| s.trim().to_string())
@@ -170,6 +190,7 @@ fn load_config_from_dir(cfg_dir: &std::path::Path) -> CliConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::lock_env;
     use std::fs;
 
     /// Helper: write a config.json to a temp dir and return the dir.
@@ -178,6 +199,8 @@ mod tests {
         fs::write(dir.path().join("config.json"), json).unwrap();
         dir
     }
+
+
 
     // ── CliConfig serde ──────────────────────────────────────────────
 
@@ -221,12 +244,9 @@ mod tests {
 
     #[test]
     fn load_config_from_dir_reads_fixture() {
-        let fixture = fs::read_to_string("../../tests/fixtures/full_config.json")
-            .unwrap_or_else(|_| {
-                // Fallback: read from crate root
-                let crate_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-                fs::read_to_string(crate_dir.join("tests/fixtures/full_config.json")).unwrap()
-            });
+        let crate_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let fixture = fs::read_to_string(crate_dir.join("tests/fixtures/full_config.json"))
+            .expect("tests/fixtures/full_config.json should exist");
         let dir = setup_config_dir(&fixture);
         let cfg = load_config_from_dir(dir.path());
         assert_eq!(cfg.provider, Some("openai".into()));
@@ -266,6 +286,7 @@ mod tests {
 
     #[test]
     fn provider_override_cli_overrides_config() {
+        let _guard = lock_env();
         let dir = setup_config_dir(r#"{"provider":"local"}"#);
         let cfg = load_provider_config_inner(
             Some("anthropic".into()), // CLI override
@@ -277,6 +298,7 @@ mod tests {
 
     #[test]
     fn provider_auto_detects_openai_when_env_key_set() {
+        let _guard = lock_env();
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("OMEGA_API_KEY", "sk-test");
         let cfg = load_provider_config_inner(None, None, None, None, None, dir.path());
@@ -286,6 +308,7 @@ mod tests {
 
     #[test]
     fn provider_falls_back_to_local_when_no_key() {
+        let _guard = lock_env();
         let dir = tempfile::tempdir().unwrap();
         std::env::remove_var("OMEGA_API_KEY");
         let cfg = load_provider_config_inner(None, None, None, None, None, dir.path());
@@ -296,6 +319,7 @@ mod tests {
 
     #[test]
     fn model_cli_overrides_config_and_env() {
+        let _guard = lock_env();
         let dir = setup_config_dir(r#"{"model":"from-config"}"#);
         std::env::set_var("OMEGA_MODEL", "from-env");
         let cfg = load_provider_config_inner(
@@ -307,6 +331,7 @@ mod tests {
 
     #[test]
     fn model_config_overrides_env() {
+        let _guard = lock_env();
         let dir = setup_config_dir(r#"{"model":"from-config"}"#);
         std::env::set_var("OMEGA_MODEL", "from-env");
         let cfg = load_provider_config_inner(None, None, None, None, None, dir.path());
@@ -316,6 +341,7 @@ mod tests {
 
     #[test]
     fn model_env_fallback() {
+        let _guard = lock_env();
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("OMEGA_MODEL", "from-env");
         let cfg = load_provider_config_inner(None, None, None, None, None, dir.path());
@@ -325,6 +351,7 @@ mod tests {
 
     #[test]
     fn model_default_per_provider() {
+        let _guard = lock_env();
         let dir = tempfile::tempdir().unwrap();
         std::env::remove_var("OMEGA_MODEL");
         let cfg = load_provider_config_inner(
@@ -337,6 +364,7 @@ mod tests {
 
     #[test]
     fn max_tokens_cli_overrides_all() {
+        let _guard = lock_env();
         let dir = setup_config_dir(r#"{"max_tokens":2048}"#);
         std::env::set_var("OMEGA_MAX_TOKENS", "1024");
         let cfg = load_provider_config_inner(
@@ -348,6 +376,7 @@ mod tests {
 
     #[test]
     fn max_tokens_config_overrides_env() {
+        let _guard = lock_env();
         let dir = setup_config_dir(r#"{"max_tokens":8192}"#);
         std::env::set_var("OMEGA_MAX_TOKENS", "1024");
         let cfg = load_provider_config_inner(None, None, None, None, None, dir.path());
@@ -357,6 +386,7 @@ mod tests {
 
     #[test]
     fn max_tokens_env_fallback() {
+        let _guard = lock_env();
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("OMEGA_MAX_TOKENS", "512");
         let cfg = load_provider_config_inner(None, None, None, None, None, dir.path());
@@ -366,6 +396,7 @@ mod tests {
 
     #[test]
     fn max_tokens_default_when_unset() {
+        let _guard = lock_env();
         let dir = tempfile::tempdir().unwrap();
         std::env::remove_var("OMEGA_MAX_TOKENS");
         let cfg = load_provider_config_inner(None, None, None, None, None, dir.path());
@@ -376,6 +407,7 @@ mod tests {
 
     #[test]
     fn temperature_cli_overrides_all() {
+        let _guard = lock_env();
         let dir = setup_config_dir(r#"{"temperature":0.3}"#);
         std::env::set_var("OMEGA_TEMPERATURE", "0.5");
         let cfg = load_provider_config_inner(
@@ -387,6 +419,7 @@ mod tests {
 
     #[test]
     fn temperature_config_overrides_env() {
+        let _guard = lock_env();
         let dir = setup_config_dir(r#"{"temperature":0.9}"#);
         std::env::set_var("OMEGA_TEMPERATURE", "0.5");
         let cfg = load_provider_config_inner(None, None, None, None, None, dir.path());
@@ -396,6 +429,7 @@ mod tests {
 
     #[test]
     fn temperature_env_fallback() {
+        let _guard = lock_env();
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("OMEGA_TEMPERATURE", "1.8");
         let cfg = load_provider_config_inner(None, None, None, None, None, dir.path());
@@ -405,6 +439,7 @@ mod tests {
 
     #[test]
     fn temperature_default_when_unset() {
+        let _guard = lock_env();
         let dir = tempfile::tempdir().unwrap();
         std::env::remove_var("OMEGA_TEMPERATURE");
         let cfg = load_provider_config_inner(None, None, None, None, None, dir.path());
@@ -415,6 +450,7 @@ mod tests {
 
     #[test]
     fn api_key_from_env() {
+        let _guard = lock_env();
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("OMEGA_API_KEY", "sk-env-key");
         let cfg = load_provider_config_inner(None, None, None, None, None, dir.path());
@@ -424,6 +460,7 @@ mod tests {
 
     #[test]
     fn api_key_from_dotenv_file() {
+        let _guard = lock_env();
         let dir = tempfile::tempdir().unwrap();
         std::env::remove_var("OMEGA_API_KEY");
         fs::write(dir.path().join(".env"), "sk-file-key\n").unwrap();
@@ -433,6 +470,7 @@ mod tests {
 
     #[test]
     fn api_key_env_overrides_dotenv() {
+        let _guard = lock_env();
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("OMEGA_API_KEY", "sk-env-key");
         fs::write(dir.path().join(".env"), "sk-file-key\n").unwrap();
@@ -443,6 +481,7 @@ mod tests {
 
     #[test]
     fn api_key_none_when_nothing_set() {
+        let _guard = lock_env();
         let dir = tempfile::tempdir().unwrap();
         std::env::remove_var("OMEGA_API_KEY");
         let cfg = load_provider_config_inner(None, None, None, None, None, dir.path());
@@ -453,6 +492,7 @@ mod tests {
 
     #[test]
     fn full_override_chain() {
+        let _guard = lock_env();
         let dir = setup_config_dir(
             r#"{"provider":"google","model":"gemini-pro","max_tokens":2048,"temperature":0.4}"#,
         );
@@ -482,6 +522,7 @@ mod tests {
 
     #[test]
     fn config_used_when_no_cli_overrides() {
+        let _guard = lock_env();
         let dir = setup_config_dir(
             r#"{"provider":"groq","model":"llama3-70b","max_tokens":4096,"temperature":0.8}"#,
         );

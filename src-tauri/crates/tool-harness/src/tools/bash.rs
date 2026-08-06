@@ -117,9 +117,27 @@ For long-running commands, consider using timeout mechanisms.".into()),
             .get("command")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        // Basic read-only detection
-        let read_only_patterns = ["ls", "cat", "echo", "pwd", "whoami", "date"];
-        read_only_patterns.iter().any(|p| cmd.starts_with(p))
+
+        let tokens = shlex::split(cmd).unwrap_or_default();
+        if tokens.is_empty() {
+            return false;
+        }
+
+        // First token must be in the allowlist
+        match tokens[0].as_str() {
+            "ls" | "cat" | "echo" | "pwd" | "whoami" | "date" => {}
+            _ => return false,
+        }
+
+        // Forbid shell-chaining tokens in the rest
+        let chain_tokens = ["&&", "||", ";", "|", "<", ">", "`", "$("];
+        for tok in &tokens[1..] {
+            if chain_tokens.contains(&tok.as_str()) {
+                return false;
+            }
+        }
+
+        true
     }
 
     async fn call(&self, input: ToolInput, _ctx: &ToolUseContext) -> Result<ToolResult, ToolError> {
@@ -194,9 +212,18 @@ mod tests {
             tool: "bash".into(),
             args: serde_json::json!({ "command": "cat file.txt" }),
         }));
+        // New cases: shell chaining should be rejected
         assert!(!tool.is_read_only(&ToolInput {
             tool: "bash".into(),
-            args: serde_json::json!({ "command": "rm file.txt" }),
+            args: serde_json::json!({ "command": "cat x && rm -rf /" }),
+        }));
+        assert!(tool.is_read_only(&ToolInput {
+            tool: "bash".into(),
+            args: serde_json::json!({ "command": "echo hi" }),
+        }));
+        assert!(!tool.is_read_only(&ToolInput {
+            tool: "bash".into(),
+            args: serde_json::json!({ "command": "pwd && date" }),
         }));
     }
 }

@@ -122,8 +122,11 @@ mod tests {
 
     #[test]
     fn no_subcommand_defaults_to_chat() {
+        // Bare invocation (no subcommand) parses to `None`; the Chat default
+        // is applied at dispatch time via `CliAction::default()` in main.rs.
         let cli = Cli::parse_from(["omega"]);
-        match cli.action.unwrap() {
+        assert!(cli.action.is_none());
+        match cli.action.unwrap_or_default() {
             CliAction::Chat { provider, .. } => {
                 assert_eq!(provider, None);
             }

@@ -5,6 +5,8 @@ mod app;
 mod cli;
 mod config_loader;
 mod dispatch;
+#[cfg(test)]
+mod testutil;
 
 use anyhow::Result;
 use clap::Parser;

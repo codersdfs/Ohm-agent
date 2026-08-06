@@ -19,7 +19,7 @@ impl ModelInfo {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "provider")]
 pub enum ProviderKind {
     Anthropic,
