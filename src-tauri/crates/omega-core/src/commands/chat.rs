@@ -876,6 +876,48 @@ mod tests {
         .into_bytes()
     }
 
+    /// Fully drain an HTTP/1.1 request (headers + body) off `stream` so the
+    /// server can respond without racing reqwest, which keeps sending the body.
+    async fn drain_http_request(stream: &mut (impl AsyncReadExt + AsyncWriteExt + Unpin)) {
+        let mut buf = Vec::new();
+        let mut tmp = [0u8; 4096];
+        loop {
+            match stream.read(&mut tmp).await {
+                Ok(0) => break,
+                Ok(n) => {
+                    buf.extend_from_slice(&tmp[..n]);
+                    if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        let Some(cl) = find_header(&buf, "content-length") else { return };
+        let Some(len) = cl.parse::<usize>().ok() else { return };
+        let headers_len = buf
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .map(|p| p + 4)
+            .unwrap_or(buf.len());
+        let body_remaining = len.saturating_sub(buf.len().saturating_sub(headers_len));
+        let mut leftover = vec![0u8; body_remaining];
+        let _ = stream.read_exact(&mut leftover).await;
+    }
+
+    fn find_header(buf: &[u8], name: &str) -> Option<String> {
+        let text = std::str::from_utf8(buf).ok()?;
+        let lower = text.to_ascii_lowercase();
+        let key = name.to_lowercase();
+        lower
+            .split("\r\n")
+            .find_map(|line| {
+                line.strip_prefix(&format!("{key}: "))
+                    .or_else(|| line.strip_prefix(&format!("{key}:")))
+            })
+            .map(|v| v.trim().to_string())
+    }
+
     fn tool_call_sse() -> Vec<u8> {
         build_sse_response(&[
             serde_json::json!({"choices":[{"index":0,"delta":{"content":""},"finish_reason":null}]}),
@@ -896,7 +938,6 @@ mod tests {
     // Skipped while the chat loop infrastructure is refactored.
     // Re-enable with #[test] when the mock tool executor is wired.
     #[tokio::test]
-    #[ignore]
     async fn test_stream_message_tool_calls_execute_and_push_results() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -911,8 +952,7 @@ mod tests {
                     result = listener.accept() => {
                         match result {
                             Ok((mut stream, _)) => {
-                                let mut buf = [0u8; 4096];
-                                let _ = stream.read(&mut buf).await;
+                                drain_http_request(&mut stream).await;
                                 let idx = counter.fetch_add(1, Ordering::SeqCst);
                                 let resp = if idx == 0 { tool_call_sse() } else { text_sse() };
                                 let _ = stream.write_all(&resp).await;
@@ -988,7 +1028,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_stream_message_preserves_history_across_calls() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -1003,8 +1042,7 @@ mod tests {
                     result = listener.accept() => {
                         match result {
                             Ok((mut stream, _)) => {
-                                let mut buf = [0u8; 4096];
-                                let _ = stream.read(&mut buf).await;
+                                drain_http_request(&mut stream).await;
                                 let idx = counter.fetch_add(1, Ordering::SeqCst);
                                 let resp = if idx == 0 { tool_call_sse() } else { text_sse() };
                                 let _ = stream.write_all(&resp).await;
@@ -1076,7 +1114,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_stream_message_handles_parse_error_tool_call() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -1091,8 +1128,7 @@ mod tests {
                     result = listener.accept() => {
                         match result {
                             Ok((mut stream, _)) => {
-                                let mut buf = [0u8; 4096];
-                                let _ = stream.read(&mut buf).await;
+                                drain_http_request(&mut stream).await;
                                 let idx = counter.fetch_add(1, Ordering::SeqCst);
                                 let resp = if idx <= 2 {
                                     // Tool call with invalid JSON arguments

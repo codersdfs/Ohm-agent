@@ -1,11 +1,13 @@
-// Tool orchestrator — canonical agent loop.
+// Tool orchestrator — generic, embeddable agent loop.
 //
-// This is the single source of truth for the agent loop. CLI/TUI paths
-// (chat.rs) delegate here rather than duplicating the loop. Library-style
-// embedding and tests also use this directly.
+// Intended for library-style embedding and standalone harness use. omega-core's
+// CLI/TUI `chat.rs` keeps its own loop because it layers omega-specific behavior
+// the orchestrator does not model: cancellation, context-manager compaction,
+// session persistence, cost tracking, permission checks, diff display, and
+// subagent interception. (chat.rs does NOT delegate here.)
 //
-// When adding new features (hooks, context management, subagent support),
-// extend THIS struct — do not create parallel loops.
+// When extending the canonical loop with new generic hooks, extend THIS struct.
+// For omega-specific additions, extend `chat.rs` instead.
 
 use crate::{ExecutionPipeline, ToolRegistry, ToolRequest, ToolUseContext};
 use providers::{ChatMessage, ChatRequest, LlmProvider, ProviderConfig, ToolCall};
