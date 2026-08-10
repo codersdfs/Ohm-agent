@@ -7,7 +7,6 @@ use crate::taste::TasteCheck;
 use crate::GateResult;
 use super::Language;
 use super::Violation;
-use super::ViolationCategory;
 
 /// Unified Gate engine that runs all check types and returns aggregated results.
 pub struct GateEngine {

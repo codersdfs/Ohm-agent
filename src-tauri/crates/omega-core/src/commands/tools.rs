@@ -365,6 +365,11 @@ fn format_tool_help(def: &providers::ToolDefinition) -> String {
 }
 
 /// Load optional project instructions (AGENTS.md / .omega/instructions.md), capped.
+///
+/// Cached by file mtime: the snippet is re-read from disk only when a
+/// candidate instruction file actually changes on disk, so repeated
+/// `default_system_prompt()`/`send_message` calls don't do redundant I/O or
+/// re-embed an unchanged (potentially ~2k-token) instructions block.
 fn project_instructions_snippet() -> Option<String> {
     const CAP: usize = 8_000;
     let candidates = ["AGENTS.md", ".omega/instructions.md", "CLAUDE.md"];
@@ -389,7 +394,41 @@ fn project_instructions_snippet() -> Option<String> {
     None
 }
 
+static CACHED_SYSTEM_PROMPT: std::sync::Mutex<Option<(Option<(String, u64)>, String)>> =
+    std::sync::Mutex::new(None);
+
 pub fn default_system_prompt() -> String {
+    // Fingerprint of the project-instructions sources (mtime of any candidate
+    // that exists). `None` sentinel = no instructions loaded.
+    fn instructions_mtime() -> Option<(String, u64)> {
+        for path in ["AGENTS.md", ".omega/instructions.md", "CLAUDE.md"] {
+            if let Ok(meta) = std::fs::metadata(path) {
+                if let Ok(modified) = meta.modified() {
+                    if let Ok(since_epoch) = modified.duration_since(std::time::UNIX_EPOCH) {
+                        return Some((path.to_string(), since_epoch.as_millis() as u64));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    let sig = instructions_mtime();
+    if let Ok(mut guard) = CACHED_SYSTEM_PROMPT.lock() {
+        if let Some((cached_sig, cached_prompt)) = guard.as_ref() {
+            if *cached_sig == sig {
+                return cached_prompt.clone();
+            }
+        }
+        let prompt = build_system_prompt();
+        *guard = Some((sig, prompt.clone()));
+        return prompt;
+    }
+
+    build_system_prompt()
+}
+
+fn build_system_prompt() -> String {
     let mut prompt = CHAT_SYSTEM_PROMPT.to_string();
     let tools = tool_definitions();
     if !tools.is_empty() {

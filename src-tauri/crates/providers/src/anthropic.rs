@@ -14,13 +14,15 @@ struct AnthropicToolDef {
     name: String,
     description: String,
     input_schema: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cache_control: Option<serde_json::Value>,
 }
 
 #[derive(Serialize)]
 struct AnthropicRequest {
     model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    system: Option<String>,
+    system: Option<serde_json::Value>,
     messages: Vec<AnthropicMessage>,
     max_tokens: u32,
     temperature: f32,
@@ -171,15 +173,31 @@ impl AnthropicProvider {
     }
 
     fn convert_tools(tools: &[crate::ToolDefinition]) -> Vec<AnthropicToolDef> {
+        let cache = if caching_enabled() {
+            Some(serde_json::json!({ "type": "ephemeral" }))
+        } else {
+            None
+        };
         tools
             .iter()
             .map(|t| AnthropicToolDef {
                 name: t.function.name.clone(),
                 description: t.function.description.clone(),
                 input_schema: t.function.parameters.clone(),
+                cache_control: cache.clone(),
             })
             .collect()
     }
+}
+
+/// Anthropic prompt caching (beta→GA). Caches the static system prefix so
+/// repeated tool-loop turns and follow-ups pay ~1 token instead of the full
+/// system + tool schemas. Only *reduces* tokens — never affects output — so it
+/// is on by default; disable with `OMEGA_PROMPT_CACHING=0`.
+fn caching_enabled() -> bool {
+    std::env::var("OMEGA_PROMPT_CACHING")
+        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+        .unwrap_or(true)
 }
 
 #[async_trait::async_trait]
@@ -195,7 +213,21 @@ impl LlmProvider for AnthropicProvider {
             .iter()
             .find(|m| m.role == "system")
             .map(|m| m.content.clone())
-            .filter(|s| !s.is_empty());
+            .filter(|s| !s.is_empty())
+            .map(|s| {
+                if caching_enabled() {
+                    // Array of text blocks with a cache breakpoint on the last,
+                    // so the static system prefix is cached across turns.
+                    let block = serde_json::json!({
+                        "type": "text",
+                        "text": s,
+                        "cache_control": { "type": "ephemeral" },
+                    });
+                    serde_json::Value::Array(vec![block])
+                } else {
+                    serde_json::Value::String(s)
+                }
+            });
 
         let body = AnthropicRequest {
             model: request.config.model.clone(),
@@ -282,7 +314,21 @@ impl LlmProvider for AnthropicProvider {
             .iter()
             .find(|m| m.role == "system")
             .map(|m| m.content.clone())
-            .filter(|s| !s.is_empty());
+            .filter(|s| !s.is_empty())
+            .map(|s| {
+                if caching_enabled() {
+                    // Array of text blocks with a cache breakpoint on the last,
+                    // so the static system prefix is cached across turns.
+                    let block = serde_json::json!({
+                        "type": "text",
+                        "text": s,
+                        "cache_control": { "type": "ephemeral" },
+                    });
+                    serde_json::Value::Array(vec![block])
+                } else {
+                    serde_json::Value::String(s)
+                }
+            });
 
         let body = AnthropicRequest {
             model: request.config.model.clone(),

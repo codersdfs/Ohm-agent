@@ -53,7 +53,19 @@ pub fn save_api_key(api_key: Option<&str>) {
     let _ = std::fs::create_dir_all(config_dir());
     match api_key.map(str::trim).filter(|s| !s.is_empty()) {
         Some(key) => {
-            let _ = std::fs::write(&path, format!("{key}\n"));
+            // Restrict to owner-only on Unix; default umask can leave an API key
+            // world-readable. On Windows the ACL is inherited from the user profile.
+            let mut opts = std::fs::OpenOptions::new();
+            opts.write(true).create(true).truncate(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.mode(0o600);
+            }
+            if let Ok(mut f) = opts.open(&path) {
+                use std::io::Write;
+                let _ = f.write_all(format!("{key}\n").as_bytes());
+            }
         }
         None => {
             let _ = std::fs::remove_file(&path);

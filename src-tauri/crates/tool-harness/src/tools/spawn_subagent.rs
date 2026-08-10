@@ -6,14 +6,14 @@ use async_trait::async_trait;
 #[deprecated(note = "subagent spawning is handled via the chat.rs interception path — see F-t-harness-02")]
 pub(crate) struct SpawnSubagentTool;
 
-#[allow(dead_code)]
+#[allow(dead_code, deprecated)]
 impl SpawnSubagentTool {
     pub fn new() -> Self {
         Self
     }
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, deprecated)]
 impl Default for SpawnSubagentTool {
     fn default() -> Self {
         Self::new()
@@ -21,7 +21,7 @@ impl Default for SpawnSubagentTool {
 }
 
 #[async_trait]
-#[allow(dead_code)]
+#[allow(dead_code, deprecated)]
 impl Tool for SpawnSubagentTool {
     fn name(&self) -> &str {
         "spawn_subagent"

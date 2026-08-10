@@ -1,10 +1,8 @@
 //! Transcript tests (P5 split).
 
-use super::*;
-use super::state::{parse_args_kv, ToolCallState, ToolCallStatus};
+use super::state::{parse_args_kv, ToolCallState};
 use super::toolbox::{MAX_RETAINED_SOURCE_LINES, MAX_SOURCE_COLUMNS};
-use ratatui::style::Color;
-use ratatui::text::Line;
+use super::*;
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
