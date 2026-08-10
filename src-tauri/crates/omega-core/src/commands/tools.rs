@@ -336,7 +336,7 @@ pub const CHAT_SYSTEM_PROMPT: &str = r#"You are Omega Agent — a tool-using cod
 Tools are provided via the native function-calling API. Call them through the API — do not invent a custom JSON protocol in plain text.
 "#;
 
-fn format_tool_help(def: &providers::ToolDefinition) -> String {
+pub fn format_tool_help(def: &providers::ToolDefinition) -> String {
     let params: Vec<String> = def
         .function
         .parameters
@@ -370,7 +370,7 @@ fn format_tool_help(def: &providers::ToolDefinition) -> String {
 /// candidate instruction file actually changes on disk, so repeated
 /// `default_system_prompt()`/`send_message` calls don't do redundant I/O or
 /// re-embed an unchanged (potentially ~2k-token) instructions block.
-fn project_instructions_snippet() -> Option<String> {
+pub fn project_instructions_snippet() -> Option<String> {
     const CAP: usize = 8_000;
     let candidates = ["AGENTS.md", ".omega/instructions.md", "CLAUDE.md"];
     for path in candidates {
@@ -428,20 +428,45 @@ pub fn default_system_prompt() -> String {
     build_system_prompt()
 }
 
-fn build_system_prompt() -> String {
-    let mut prompt = CHAT_SYSTEM_PROMPT.to_string();
+/// Static base agent instructions. Never changes at runtime.
+pub fn build_base_prompt() -> String {
+    CHAT_SYSTEM_PROMPT.to_string()
+}
+
+/// Formats the available tools section of the system prompt. Cached at the
+/// `tool_definitions()` level (OnceLock); recomputed only when the process
+/// restarts. Returns `None` when no tools are registered.
+pub fn build_tools_section() -> Option<String> {
     let tools = tool_definitions();
-    if !tools.is_empty() {
-        prompt.push_str("\n\n=== AVAILABLE TOOLS ===\n");
-        for t in &tools {
-            prompt.push_str(&format_tool_help(t));
-            prompt.push('\n');
-        }
-        prompt.push_str(
-            "\nUse the provider's native tool/function calling. Do not print raw tool JSON as your only response unless the model has no tool API.\n",
-        );
+    if tools.is_empty() {
+        return None;
     }
-    if let Some(project) = project_instructions_snippet() {
+    let mut section = String::from("\n\n=== AVAILABLE TOOLS ===\n");
+    for t in &tools {
+        section.push_str(&format_tool_help(t));
+        section.push('\n');
+    }
+    section.push_str(
+        "\nUse the provider's native tool/function calling. Do not print raw tool JSON as your only response unless the model has no tool API.\n",
+    );
+    Some(section)
+}
+
+/// Reads and formats the project-instructions snippet (AGENTS.md /
+/// .omega/instructions.md / CLAUDE.md). Returns `None` when no candidate
+/// file exists. Disk I/O on every call — callers are expected to cache by
+/// mtime (see `default_system_prompt`).
+pub fn build_project_instructions() -> Option<String> {
+    project_instructions_snippet()
+}
+
+/// Assembles the full system prompt from its independent parts.
+fn build_system_prompt() -> String {
+    let mut prompt = build_base_prompt();
+    if let Some(tools) = build_tools_section() {
+        prompt.push_str(&tools);
+    }
+    if let Some(project) = build_project_instructions() {
         prompt.push_str(&project);
     }
     prompt

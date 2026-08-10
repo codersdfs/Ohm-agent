@@ -9,6 +9,7 @@
 
 use crate::{ExecutionPipeline, ToolRegistry, ToolRequest, ToolUseContext};
 use providers::{ChatMessage, ChatRequest, LlmProvider, ProviderConfig, ToolCall};
+use std::collections::HashSet;
 
 /// Canonical agent loop. `chat.rs` delegates to this for CLI/TUI paths.
 pub struct ToolOrchestrator {
@@ -159,64 +160,50 @@ impl ToolOrchestrator {
                 .await
                 .map_err(OrchestratorError::ProviderError)?;
 
-            let mut tool_call_deltas: Vec<(usize, String, String, String)> = vec![];
-            let mut streaming_text = false;
+            // Build tool calls by index — O(n) vs O(n²) with position() search.
+            // Each index gets its own buffer so concurrent tool calls are tracked independently.
+            let mut tool_call_buffers: Vec<(String, String, String)> = vec![]; // (id, name, args)
+            let mut seen_tool_call_indices = HashSet::new();
 
             while let Some(chunk) = rx.recv().await {
+                // Flush thinking content
                 if !chunk.thinking.is_empty() {
                     emitter
                         .emit_thinking(&chunk.thinking)
                         .map_err(OrchestratorError::ProviderError)?;
                 }
 
+                // Flush text content as it arrives
                 if !chunk.content.is_empty() {
-                    if !streaming_text {
-                        streaming_text = true;
-                        emitter
-                            .emit_token(&chunk.content)
-                            .map_err(OrchestratorError::ProviderError)?;
-                    }
+                    emitter
+                        .emit_token(&chunk.content)
+                        .map_err(OrchestratorError::ProviderError)?;
                     full_response.push_str(&chunk.content);
                 }
 
+                // Accumulate tool-call deltas by index
                 if let Some(ref deltas) = chunk.delta_tool_calls {
                     for d in deltas {
-                        let pos = tool_call_deltas
-                            .iter()
-                            .position(|(idx, _, _, _)| *idx == d.index);
-                        if let Some(p) = pos {
-                            let entry = &mut tool_call_deltas[p];
-                            if let Some(ref id_val) = d.id {
-                                if entry.1.is_empty() {
-                                    entry.1.push_str(id_val);
-                                }
+                        let idx = d.index;
+                        if !seen_tool_call_indices.insert(idx) {
+                            // First chunk for this index — allocate a buffer
+                            tool_call_buffers.resize_with(idx + 1, || (String::new(), String::new(), String::new()));
+                        }
+                        let buf = &mut tool_call_buffers[idx];
+                        if let Some(ref id_val) = d.id {
+                            if buf.0.is_empty() {
+                                buf.0.push_str(id_val);
                             }
-                            if let Some(ref name) =
-                                d.function.as_ref().and_then(|f| f.name.as_ref())
-                            {
-                                entry.2.push_str(name);
-                            }
-                            if let Some(ref args) =
-                                d.function.as_ref().and_then(|f| f.arguments.as_ref())
-                            {
-                                entry.3.push_str(args);
-                            }
-                        } else {
-                            let mut id_buf = String::new();
-                            let mut name_buf = String::new();
-                            let mut args_buf = String::new();
-                            if let Some(ref id_val) = d.id {
-                                id_buf.push_str(id_val);
-                            }
-                            if let Some(ref n) = d.function.as_ref().and_then(|f| f.name.as_ref()) {
-                                name_buf.push_str(n);
-                            }
-                            if let Some(ref a) =
-                                d.function.as_ref().and_then(|f| f.arguments.as_ref())
-                            {
-                                args_buf.push_str(a);
-                            }
-                            tool_call_deltas.push((d.index, id_buf, name_buf, args_buf));
+                        }
+                        if let Some(ref name) = d.function.as_ref().and_then(|f| f.name.as_ref()) {
+                            buf.1.push_str(name);
+                        }
+                        if let Some(ref args) = d.function.as_ref().and_then(|f| f.arguments.as_ref()) {
+                            buf.2.push_str(args);
+                        }
+                        // Emit the tool-call name as soon as we know it
+                        if !buf.1.is_empty() && buf.2.is_empty() {
+                            let _ = emitter.emit_tool_call(&buf.1, &buf.2);
                         }
                     }
                 }
@@ -226,12 +213,13 @@ impl ToolOrchestrator {
                 }
             }
 
-            if !tool_call_deltas.is_empty() {
-                let tool_calls: Vec<ToolCall> = tool_call_deltas
+            if !tool_call_buffers.is_empty() {
+                let tool_calls: Vec<ToolCall> = tool_call_buffers
                     .iter()
-                    .map(|(_idx, id, name, args)| ToolCall {
+                    .map(|(id, name, args)| ToolCall {
                         id: if id.is_empty() {
-                            format!("call_{}", _idx)
+                            // Fallback: unlikely since we set id on first chunk, but safety net
+                            format!("call_{}", full_response.len())
                         } else {
                             id.clone()
                         },
@@ -252,19 +240,24 @@ impl ToolOrchestrator {
                 });
 
                 for tc in &tool_calls {
+                    // Emit tool call event now that we have the full args
+                    let _ = emitter.emit_tool_call(&tc.function.name, &tc.function.arguments);
+
                     let tool_request = match ToolRequest::from_call(tc.clone()) {
                         Ok(r) => r,
                         Err(e) => {
+                            let err_msg = format!(
+                                "Error parsing arguments for `{}`: {}.\nArguments received: {}",
+                                tc.function.name, e, tc.function.arguments
+                            );
                             messages.push(ChatMessage {
                                 role: "tool".into(),
-                                content: format!(
-                                    "Error parsing arguments for `{}`: {}.\nArguments received: {}",
-                                    tc.function.name, e, tc.function.arguments
-                                ),
+                                content: err_msg.clone(),
                                 tool_calls: None,
                                 tool_call_id: Some(tc.id.clone()),
                                 name: Some(tc.function.name.clone()),
                             });
+                            let _ = emitter.emit_tool_result(&tc.function.name, false, &err_msg);
                             continue;
                         }
                     };
@@ -277,21 +270,26 @@ impl ToolOrchestrator {
                         .await
                         .map_err(|e| OrchestratorError::ToolError(e.message.clone()))?;
 
+                    let tool_output = if result.success {
+                        result.output.clone()
+                    } else {
+                        result.error.unwrap_or_default()
+                    };
+
                     messages.push(ChatMessage {
                         role: "tool".into(),
-                        content: if result.success {
-                            result.output
-                        } else {
-                            result.error.unwrap_or_default()
-                        },
+                        content: tool_output,
                         tool_calls: None,
                         tool_call_id: Some(tc.id.clone()),
                         name: Some(tc.function.name.clone()),
                     });
+
+                    let _ = emitter.emit_tool_result(&tc.function.name, result.success, &result.output);
                 }
                 continue;
             }
 
+            // No tool calls — signal completion
             emitter
                 .emit_done(&full_response)
                 .map_err(OrchestratorError::ProviderError)?;

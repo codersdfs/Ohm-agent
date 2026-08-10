@@ -3,7 +3,7 @@
 //! Retrieves relevant project memories from the SQLite memory store and
 //! formats them into a system-prompt snippet with a dynamic token budget.
 
-use crate::context_manager::token_counter::{Chars4Counter, TokenCounter};
+use crate::context_manager::token_counter::TokenCounter;
 use memory::{MemoryEntry, MemoryStore};
 
 /// Maximum characters per memory entry in the formatted output.
@@ -102,7 +102,7 @@ pub fn retrieve_memories(store: &MemoryStore, query: &str, budget_tokens: usize)
             entry.value.clone()
         };
         let line = format!("- {}: {}\n", entry.key, value);
-        let counter = Chars4Counter;
+        let counter = TokenCounter::chars4();
         let line_tokens = counter.count_messages(&[providers::ChatMessage {
             role: "system".into(),
             content: line.clone(),
@@ -198,7 +198,7 @@ mod tests {
             ).unwrap();
         }
         let result = retrieve_memories(&store, "value", 50);
-        let counter = Chars4Counter;
+        let counter = TokenCounter::chars4();
         let token_count = counter.count_messages(&[providers::ChatMessage {
             role: "system".into(),
             content: result.clone(),

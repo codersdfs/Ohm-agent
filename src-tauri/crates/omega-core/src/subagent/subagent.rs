@@ -12,6 +12,7 @@ use crate::MutexExt;
 
 use super::config::SubagentConfig;
 use super::result::{RunOutcome, SubagentResult};
+use crate::context_manager::context_delta::{ContextDelta, ContextSnapshot};
 
 use providers::{ChatMessage, ChatRequest, LlmProvider, ProviderConfig, ToolCall, ToolDefinition};
 
@@ -35,21 +36,33 @@ impl Subagent {
         }
     }
 
-    /// Fork parent context according to the fork mode.
+    /// Fork parent context according to the fork mode, returning an incremental
+    /// view (`ContextDelta`) rather than an owned clone.
     ///
-    /// Per ticket 01's resolution: Full fork copies the entire parent context
-    /// (all messages up to the delegation point). The system prompt is swapped
-    /// later in `run()`.
-    pub fn fork_from_parent(parent_messages: &[ChatMessage]) -> Vec<ChatMessage> {
+    /// Per ticket 01's resolution: Full fork borrows the entire parent
+    /// context (all messages up to the delegation point). The system prompt
+    /// is swapped later in `run()`.
+    ///
+    /// The `token_count` snapshot is derived from the parent's token
+    /// counter if available; callers may pass 0 when it is unknown.
+    pub fn fork_from_parent(
+        parent_messages: &[ChatMessage],
+        parent_token_count: u32,
+        parent_generation: u64,
+    ) -> ContextDelta<'_> {
+        let snapshot = ContextSnapshot {
+            fork_point_len: parent_messages.len(),
+            token_count: parent_token_count,
+            generation: parent_generation,
+        };
         match &parent_messages[..] {
-            [] => vec![],
+            [] => ContextDelta::new(&[], snapshot),
             [system, rest @ ..] if system.role == "system" => {
                 // Keep the original system prompt — it's replaced in run()
-                let mut forked = vec![system.clone()];
-                forked.extend(rest.iter().cloned());
-                forked
+                // Borrow the full window: [system, rest...]
+                ContextDelta::new(parent_messages, snapshot)
             }
-            _ => parent_messages.to_vec(),
+            _ => ContextDelta::new(parent_messages, snapshot),
         }
     }
 
@@ -77,7 +90,7 @@ impl Subagent {
     /// Run the subagent loop and return a structured result.
     ///
     /// # Arguments
-    /// - `messages`: the parent's current message list (forked in)
+    /// - `context`: the forked parent context as an incremental `ContextDelta`
     /// - `state`: the shared AppState (for tool execution, memory, rules)
     /// - `provider`: the LLM provider to use for the subagent
     /// - `provider_config`: provider config (model, max_tokens, temperature)
@@ -85,15 +98,15 @@ impl Subagent {
     /// - `emitter`: chat emitter for progress/logging (can be NoopEmitter for headless)
     pub async fn run<E: ChatEmitter + ?Sized>(
         &self,
-        parent_messages: &[ChatMessage],
+        context: ContextDelta<'_>,
         state: &AppState,
         provider: &dyn LlmProvider,
         provider_config: &ProviderConfig,
         tools: Vec<ToolDefinition>,
         _emitter: &E,
     ) -> Result<SubagentResult, String> {
-        // Fork context
-        let mut messages = Self::fork_from_parent(parent_messages);
+        // Materialise the forked context from the delta.
+        let mut messages = context.to_messages();
 
         // Swap the system prompt: remove parent's system prompt, insert subagent's.
         // Per ticket 01 resolution: Full fork + swapped system.
@@ -296,11 +309,16 @@ impl Subagent {
 
 /// Spawn a subagent from parent context.
 ///
-/// The subagent forks the parent's context, runs an isolated loop using the
-/// provided provider and tool definitions, and returns a structured summary.
+/// The subagent forks the parent's context (via [`ContextDelta`/ContextDelta]),
+/// runs an isolated loop using the provided provider and tool definitions,
+/// and returns a structured summary.
+///
+/// [`ContextDelta`]: crate::context_manager::context_delta::ContextDelta
 pub async fn spawn_subagent<E: ChatEmitter + ?Sized>(
     config: SubagentConfig,
     parent_messages: &[ChatMessage],
+    parent_token_count: u32,
+    parent_generation: u64,
     parent_id: &str,
     parent_session: &str,
     state: &AppState,
@@ -309,8 +327,9 @@ pub async fn spawn_subagent<E: ChatEmitter + ?Sized>(
     tools: Vec<ToolDefinition>,
     emitter: &E,
 ) -> Result<SubagentResult, String> {
+    let delta = Subagent::fork_from_parent(parent_messages, parent_token_count, parent_generation);
     let subagent = Subagent::new(config, parent_id, parent_session);
     subagent
-        .run(parent_messages, state, provider, provider_config, tools, emitter)
+        .run(delta, state, provider, provider_config, tools, emitter)
         .await
 }

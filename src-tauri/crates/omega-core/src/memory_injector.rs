@@ -8,7 +8,6 @@ use memory::MemoryStore;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
-use crate::context_manager::token_counter::Chars4Counter;
 use crate::context_manager::token_counter::TokenCounter;
 use crate::MutexExt;
 
@@ -81,7 +80,7 @@ impl MemoryInjector {
                     entry.value.clone()
                 };
                 let line = format!("- {}: {}", entry.key, value);
-                let counter = Chars4Counter;
+                let counter = TokenCounter::chars4();
                 let line_tokens = counter.count_messages(&[providers::ChatMessage {
                     role: "system".into(),
                     content: line.clone(),

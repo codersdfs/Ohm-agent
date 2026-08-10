@@ -181,6 +181,8 @@ async fn handle_spawn_subagent<E: ChatEmitter>(
     let result = spawn_subagent(
         config,
         &messages,
+        0, // parent_token_count: defer precise count to ContextManager
+        0, // parent_generation: not yet instrumented, pass 0
         &parent_id,
         &parent_session,
         state,

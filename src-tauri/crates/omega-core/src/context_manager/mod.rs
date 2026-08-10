@@ -7,6 +7,7 @@
 
 pub mod budget;
 pub mod compaction;
+pub mod context_delta;
 pub mod jit_retrieval;
 pub mod token_counter;
 
@@ -35,7 +36,7 @@ pub struct AssembledContext {
 /// runs before each provider call.
 pub struct ContextManager {
     /// Token counter for the active provider.
-    pub token_counter: Box<dyn TokenCounter>,
+    pub token_counter: TokenCounter,
     /// Per-section budget for the active provider's window.
     pub budget: TokenBudget,
     /// Repo-map over the workspace root.
