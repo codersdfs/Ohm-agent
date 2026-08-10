@@ -91,7 +91,7 @@ pub fn load_provider_config(
 }
 
 /// Inner implementation parameterised by `config_dir` for testability.
-fn load_provider_config_inner(
+pub(crate) fn load_provider_config_inner(
     override_provider: Option<String>,
     override_model: Option<String>,
     override_base_url: Option<String>,
@@ -181,6 +181,7 @@ fn load_provider_config_inner(
         model,
         max_tokens,
         temperature,
+        max_concurrent_tools: 3,
     }
 }
 

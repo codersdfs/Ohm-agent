@@ -29,6 +29,7 @@ pub enum SpinnerState {
 }
 
 /// Shared activity spinner for the TUI.
+#[derive(Clone)]
 pub struct OmegaSpinner {
     /// Current state of the spinner
     pub state: SpinnerState,

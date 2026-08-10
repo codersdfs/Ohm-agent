@@ -121,6 +121,7 @@ fn build_provider_config(provider_str: &str, model: &str) -> ProviderConfig {
         model,
         max_tokens: 4096,
         temperature: 0.7,
+        max_concurrent_tools: 3,
     }
 }
 

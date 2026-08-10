@@ -91,6 +91,7 @@ mod tests {
             model: "test-model".into(),
             max_tokens: 1024,
             temperature: 0.5,
+            max_concurrent_tools: 3,
         }
     }
 

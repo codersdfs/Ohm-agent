@@ -126,6 +126,7 @@ impl ProviderPanelState {
             },
             max_tokens: self.max_tokens,
             temperature: self.temperature,
+            max_concurrent_tools: 3,
         }
     }
 

@@ -4,7 +4,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
-use super::spinner::{OmegaSpinner, SpinnerState};
+use super::spinner::{CompactOmega, OmegaSpinner, SpinnerState};
 use super::theme;
 
 /// Status line state — what to show in the single-line footer.
@@ -88,14 +88,16 @@ impl Widget for &StatusState {
 
         let mut spans: Vec<Span<'static>> = Vec::new();
 
-        // Left: copyright + mode
+        // Left: spinner + activity phrase (if any)
+        let compact = CompactOmega::new(self.spinner.clone());
+        let (spinner_text, spinner_style) = compact.render_inline();
         let left = vec![
             Span::styled(" © OMEGA_ORCH ", theme::style_dim()),
-            Span::styled("MODE: INTERACTIVE_REPL ", theme::style_dim()),
+            Span::styled(spinner_text, spinner_style),
         ];
         let left_w: u16 = left.iter().map(|s| s.width() as u16).sum();
 
-        // Right: real input/output token counts (no fake latency / estimates)
+        // Right: real input/output token counts
         let tok_str = StatusState::format_token_usage(self.tokens_in, self.tokens_out);
 
         let right_spans = vec![Span::styled(
@@ -117,7 +119,6 @@ impl Widget for &StatusState {
         para.render(area, buf);
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

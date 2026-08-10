@@ -224,6 +224,7 @@ impl App {
                 model: self.config.model.clone(),
                 max_tokens: self.config.max_tokens,
                 temperature: self.config.temperature,
+                max_concurrent_tools: self.config.max_concurrent_tools,
             };
 
             let (tx, rx) = tokio::sync::oneshot::channel();

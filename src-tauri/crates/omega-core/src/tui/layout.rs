@@ -72,6 +72,7 @@ pub fn render_full_layout(frame: &mut Frame, area: Rect, chrome: &mut LayoutChro
     let top_bar_h = 1u16;
     let metrics_h = 3u16;
     let editor_h: u16 = if chrome.is_command_mode { 7 } else { 3 };
+    let status_h = 1u16;
 
     let vert = Layout::default()
         .direction(Direction::Vertical)
@@ -80,6 +81,7 @@ pub fn render_full_layout(frame: &mut Frame, area: Rect, chrome: &mut LayoutChro
             Constraint::Length(metrics_h),
             Constraint::Min(4),
             Constraint::Length(editor_h),
+            Constraint::Length(status_h),
         ])
         .split(area);
 
@@ -101,6 +103,14 @@ pub fn render_full_layout(frame: &mut Frame, area: Rect, chrome: &mut LayoutChro
         chrome.is_command_mode,
         chrome.is_streaming,
     );
+    // ── Status bar ─────────────────────────────────────────────────────
+    if chrome.is_streaming {
+        chrome.status.set_spinner_state(super::spinner::SpinnerState::Streaming);
+    } else {
+        chrome.status.set_spinner_state(super::spinner::SpinnerState::Idle);
+    }
+    chrome.status.tick_spinner();
+    Widget::render(&*chrome.status, vert[4], frame.buffer_mut());
 
 
 

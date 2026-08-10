@@ -119,6 +119,7 @@ fn list_tool_count() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config_loader::load_provider_config_inner;
 
     /// Verify that run_chat's argument wiring produces the expected config.
     /// We test the config-building path without launching the TUI.
@@ -145,8 +146,12 @@ mod tests {
         std::env::remove_var("OMEGA_MODEL");
         std::env::remove_var("OMEGA_MAX_TOKENS");
         std::env::remove_var("OMEGA_TEMPERATURE");
+        std::env::remove_var("OMEGA_PROVIDER");
 
-        let config = load_provider_config(None, None, None, None, None);
+        // Use a temp dir to avoid system config with existing .env
+        let dir = tempfile::tempdir().unwrap();
+        let config = load_provider_config_inner(None, None, None, None, None, dir.path());
+        
         // No API key → Local provider
         assert!(matches!(config.kind, providers::ProviderKind::Local));
         assert_eq!(config.max_tokens, 4096);

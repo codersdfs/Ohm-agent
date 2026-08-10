@@ -477,6 +477,7 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
     let provider = std::sync::Arc::new(providers::create_provider(&config)?);
     let mut full_response = String::new();
     let mut max_loops = max_tool_loops;
+    const MAX_RATE_LIMIT_RETRIES: u32 = 3;
 
     loop {
         if cancelled(cancel.as_ref()) {
@@ -507,10 +508,10 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
             };
 
             let p = provider.clone();
-            tokio::spawn(async move {
-                let _ = p.chat_stream(chat_request, tx).await;
+            let mut rate_limit_retries = 0u32;
+            let stream_handle = tokio::spawn(async move {
+                p.chat_stream(chat_request, tx).await
             });
-
             let spinner = if request.show_progress {
                 let s = indicatif::ProgressBar::new_spinner();
                 s.set_style(
@@ -608,6 +609,28 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
                     last_usage = chunk.usage;
                     break;
                 }
+            }
+
+            // The stream task finished (channel closed). Surface its result;
+            // retry on rate-limit errors with exponential backoff.
+            match stream_handle.await {
+                Ok(Err(e)) if e.contains("429") || e.to_lowercase().contains("rate limit") => {
+                    if rate_limit_retries >= MAX_RATE_LIMIT_RETRIES {
+                        return Err(format!("Rate limited after {} retries: {}", MAX_RATE_LIMIT_RETRIES, e));
+                    }
+                    rate_limit_retries += 1;
+                    let backoff_ms = 1000u64 * (1u64 << rate_limit_retries);
+                    log::warn!("Rate limited (attempt {}/{}), retrying in {}ms", rate_limit_retries, MAX_RATE_LIMIT_RETRIES, backoff_ms);
+                    tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                    continue;
+                }
+                Ok(Err(e)) => {
+                    return Err(format!("Stream error: {}", e));
+                }
+                Err(e) => {
+                    return Err(format!("Stream task failed: {}", e));
+                }
+                Ok(Ok(())) => {}
             }
 
             if let Some(ref s) = spinner {
@@ -728,7 +751,22 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
                 tools: Some(tools.clone()),
             };
 
-            let response = provider.chat(chat_request).await?;
+            let mut rate_limit_retries = 0u32;
+            let response = loop {
+                match provider.chat(chat_request.clone()).await {
+                    Ok(resp) => break resp,
+                    Err(e) if e.contains("429") || e.to_lowercase().contains("rate limit") => {
+                        if rate_limit_retries >= MAX_RATE_LIMIT_RETRIES {
+                            return Err(format!("Rate limited after {} retries: {}", MAX_RATE_LIMIT_RETRIES, e));
+                        }
+                        rate_limit_retries += 1;
+                        let backoff_ms = 1000u64 * (1u64 << rate_limit_retries);
+                        log::warn!("Rate limited (attempt {}/{}), retrying in {}ms", rate_limit_retries, MAX_RATE_LIMIT_RETRIES, backoff_ms);
+                        tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                    }
+                    Err(e) => return Err(e),
+                }
+            };
             if let Some(ref s) = spinner {
                 s.finish_and_clear();
             }
@@ -934,6 +972,7 @@ mod tests {
             base_url: Some(format!("http://127.0.0.1:{}", port)),
             model: "mock".into(),
             max_tokens: 1024,
+            max_concurrent_tools: 3,
             temperature: 0.0,
         };
         let state = AppState::new_with_provider_config(":memory:", cfg.clone());
@@ -1026,6 +1065,7 @@ mod tests {
             base_url: Some(format!("http://127.0.0.1:{}", port)),
             model: "mock".into(),
             max_tokens: 1024,
+            max_concurrent_tools: 3,
             temperature: 0.0,
         };
         let state = AppState::new_with_provider_config(":memory:", cfg.clone());
@@ -1124,6 +1164,7 @@ mod tests {
             base_url: Some(format!("http://127.0.0.1:{}", port)),
             model: "mock".into(),
             max_tokens: 1024,
+            max_concurrent_tools: 3,
             temperature: 0.0,
         };
         let state = AppState::new_with_provider_config(":memory:", cfg.clone());
@@ -1172,6 +1213,7 @@ mod tests {
             base_url: Some("http://127.0.0.1:1".into()), // will not be hit
             model: "mock".into(),
             max_tokens: 64,
+            max_concurrent_tools: 3,
             temperature: 0.0,
         };
         let state = AppState::new_with_provider_config(":memory:", cfg.clone());

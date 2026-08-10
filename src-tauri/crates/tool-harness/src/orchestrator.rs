@@ -10,11 +10,12 @@
 use crate::{ExecutionPipeline, ToolRegistry, ToolRequest, ToolUseContext};
 use providers::{ChatMessage, ChatRequest, LlmProvider, ProviderConfig, ToolCall};
 use std::collections::HashSet;
+use std::sync::Arc;
 
 /// Canonical agent loop. `chat.rs` delegates to this for CLI/TUI paths.
 pub struct ToolOrchestrator {
     registry: ToolRegistry,
-    pipeline: ExecutionPipeline,
+    pipeline: Arc<ExecutionPipeline>,
     max_loops: u32,
 }
 
@@ -22,7 +23,7 @@ impl ToolOrchestrator {
     pub fn new() -> Self {
         Self {
             registry: ToolRegistry::new(),
-            pipeline: ExecutionPipeline::new(),
+            pipeline: Arc::new(ExecutionPipeline::new()),
             max_loops: 20,
         }
     }
@@ -33,7 +34,7 @@ impl ToolOrchestrator {
     }
 
     pub fn with_pipeline(mut self, pipeline: ExecutionPipeline) -> Self {
-        self.pipeline = pipeline;
+        self.pipeline = Arc::new(pipeline);
         self
     }
 
@@ -52,6 +53,7 @@ impl ToolOrchestrator {
         let tools = self.registry.tool_definitions();
         let mut full_response = String::new();
         let mut loops = self.max_loops;
+
 
         loop {
             if loops == 0 {
@@ -81,41 +83,78 @@ impl ToolOrchestrator {
                     name: None,
                 });
 
-                // Execute each tool call
-                for tc in &tool_calls {
-                    let tool_request = match ToolRequest::from_call(tc.clone()) {
-                        Ok(r) => r,
-                        Err(e) => {
-                            messages.push(ChatMessage {
-                                role: "tool".into(),
-                                content: format!("Error parsing tool arguments: {}", e),
-                                tool_calls: None,
-                                tool_call_id: Some(tc.id.clone()),
-                                name: Some(tc.function.name.clone()),
+                // Execute tool calls in parallel batches
+                let batch_size = config.max_concurrent_tools.max(1);
+                let batches: Vec<Vec<_>> = tool_calls
+                    .chunks(batch_size)
+                    .map(|chunk| chunk.to_vec())
+                    .collect();
+
+                for batch in batches {
+                    let pipeline = self.pipeline.clone();
+                    
+                    // Execute batch in parallel
+                    let results: Vec<(usize, Result<(String, String), String>)> = {
+                        let mut handles = Vec::new();
+                        for (i, tc) in batch.iter().enumerate() {
+                            let pipeline = pipeline.clone();
+                            let tc = tc.clone();
+                            let handle = tokio::spawn(async move {
+                                let tool_request = match ToolRequest::from_call(tc.clone()) {
+                                    Ok(r) => r,
+                                    Err(e) => return (i, Err(format!("Error parsing tool arguments: {}", e))),
+                                };
+                                let input = tool_request.into_input();
+                                let ctx = ToolUseContext::new("orchestrator");
+                                match pipeline.execute(&tc.function.name, input, &ctx).await {
+                                    Ok((result, _budget_check)) => {
+                                        let output = if result.success {
+                                            result.output
+                                        } else {
+                                            result.error.unwrap_or_default()
+                                        };
+                                        (i, Ok((tc.function.name.clone(), output)))
+                                    }
+                                    Err(e) => (i, Err(e.message)),
+                                }
                             });
-                            continue;
+                            handles.push(handle);
                         }
+                        
+                        let mut results = Vec::new();
+                        for handle in handles {
+                            match handle.await {
+                                Ok(result) => results.push(result),
+                                Err(e) => results.push((usize::MAX, Err(format!("Tool call panicked: {}", e)))),
+                            }
+                        }
+                        results.sort_by_key(|(i, _)| *i);
+                        results
                     };
 
-                    let ctx = ToolUseContext::new("orchestrator");
-                    let input = tool_request.clone().into_input();
-                    let (result, _budget_check) = self
-                        .pipeline
-                        .execute(&tc.function.name, input, &ctx)
-                        .await
-                        .map_err(|e| OrchestratorError::ToolError(e.message.clone()))?;
-
-                    messages.push(ChatMessage {
-                        role: "tool".into(),
-                        content: if result.success {
-                            result.output
-                        } else {
-                            result.error.unwrap_or_default()
-                        },
-                        tool_calls: None,
-                        tool_call_id: Some(tc.id.clone()),
-                        name: Some(tc.function.name.clone()),
-                    });
+                    // Collect results and push tool messages
+                    for (_idx, result) in results {
+                        match result {
+                            Ok((tool_name, output)) => {
+                                messages.push(ChatMessage {
+                                    role: "tool".into(),
+                                    content: output,
+                                    tool_calls: None,
+                                    tool_call_id: None,
+                                    name: Some(tool_name),
+                                });
+                            }
+                            Err(e) => {
+                                messages.push(ChatMessage {
+                                    role: "tool".into(),
+                                    content: e,
+                                    tool_calls: None,
+                                    tool_call_id: None,
+                                    name: None,
+                                });
+                            }
+                        }
+                    }
                 }
                 continue;
             }
@@ -239,54 +278,90 @@ impl ToolOrchestrator {
                     name: None,
                 });
 
-                for tc in &tool_calls {
-                    // Emit tool call event now that we have the full args
-                    let _ = emitter.emit_tool_call(&tc.function.name, &tc.function.arguments);
+                let batch_size = config.max_concurrent_tools.max(1);
+                let batches: Vec<Vec<_>> = tool_calls
+                    .chunks(batch_size)
+                    .map(|chunk| chunk.to_vec())
+                    .collect();
 
-                    let tool_request = match ToolRequest::from_call(tc.clone()) {
-                        Ok(r) => r,
-                        Err(e) => {
-                            let err_msg = format!(
-                                "Error parsing arguments for `{}`: {}.\nArguments received: {}",
-                                tc.function.name, e, tc.function.arguments
-                            );
-                            messages.push(ChatMessage {
-                                role: "tool".into(),
-                                content: err_msg.clone(),
-                                tool_calls: None,
-                                tool_call_id: Some(tc.id.clone()),
-                                name: Some(tc.function.name.clone()),
+                for batch in batches {
+                    let pipeline = self.pipeline.clone();
+                    
+                    // Execute batch in parallel
+                    let results: Vec<(usize, Result<(String, String, String), String>)> = {
+                        let mut handles = Vec::new();
+                        for (i, tc) in batch.iter().enumerate() {
+                            let pipeline = pipeline.clone();
+                            let tc = tc.clone();
+                            let handle = tokio::spawn(async move {
+                                let tool_request = match ToolRequest::from_call(tc.clone()) {
+                                    Ok(r) => r,
+                                    Err(e) => {
+                                        let err_msg = format!(
+                                            "Error parsing arguments for `{}`: {}.\nArguments received: {}",
+                                            tc.function.name, e, tc.function.arguments
+                                        );
+                                        return (i, Err(err_msg));
+                                    }
+                                };
+                                let input = tool_request.into_input();
+                                let ctx = ToolUseContext::new("orchestrator");
+                                match pipeline.execute(&tc.function.name, input, &ctx).await {
+                                    Ok((result, _budget_check)) => {
+                                        let output = if result.success {
+                                            result.output.clone()
+                                        } else {
+                                            result.error.unwrap_or_default()
+                                        };
+                                        (i, Ok((tc.function.name.clone(), output, result.output)))
+                                    }
+                                    Err(e) => (i, Err(e.message)),
+                                }
                             });
-                            let _ = emitter.emit_tool_result(&tc.function.name, false, &err_msg);
-                            continue;
+                            handles.push(handle);
                         }
+                        
+                        let mut results = Vec::new();
+                        for handle in handles {
+                            match handle.await {
+                                Ok(result) => results.push(result),
+                                Err(e) => results.push((usize::MAX, Err(format!("Tool call panicked: {}", e)))),
+                            }
+                        }
+                        results.sort_by_key(|(i, _)| *i);
+                        results
                     };
 
-                    let ctx = ToolUseContext::new("orchestrator");
-                    let input = tool_request.into_input();
-                    let (result, _budget_check) = self
-                        .pipeline
-                        .execute(&tc.function.name, input, &ctx)
-                        .await
-                        .map_err(|e| OrchestratorError::ToolError(e.message.clone()))?;
-
-                    let tool_output = if result.success {
-                        result.output.clone()
-                    } else {
-                        result.error.unwrap_or_default()
-                    };
-
-                    messages.push(ChatMessage {
-                        role: "tool".into(),
-                        content: tool_output,
-                        tool_calls: None,
-                        tool_call_id: Some(tc.id.clone()),
-                        name: Some(tc.function.name.clone()),
-                    });
-
-                    let _ = emitter.emit_tool_result(&tc.function.name, result.success, &result.output);
+                    // Collect results and push tool messages
+                    for (_idx, result) in results {
+                        match result {
+                            Ok((tool_name, output, raw_output)) => {
+                                messages.push(ChatMessage {
+                                    role: "tool".into(),
+                                    content: output,
+                                    tool_calls: None,
+                                    tool_call_id: None,
+                                    name: Some(tool_name.clone()),
+                                });
+                                let _ = emitter.emit_tool_result(&tool_name, true, &raw_output);
+                            }
+                            Err(e) => {
+                                messages.push(ChatMessage {
+                                    role: "tool".into(),
+                                    content: e.clone(),
+                                    tool_calls: None,
+                                    tool_call_id: None,
+                                    name: None,
+                                });
+                                // Try to extract tool name from error if possible
+                                let tool_name = e.split(':').next()
+                                    .and_then(|s| s.split('`').nth(1))
+                                    .unwrap_or("unknown");
+                                let _ = emitter.emit_tool_result(tool_name, false, &e);
+                            }
+                        }
+                    }
                 }
-                continue;
             }
 
             // No tool calls — signal completion
