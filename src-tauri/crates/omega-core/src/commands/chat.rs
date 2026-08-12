@@ -520,7 +520,7 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
                         .template("{spinner} {msg}")
                         .unwrap(),
                 );
-                s.set_message("Cooking…");
+                s.set_message("Thinking…");
                 s.enable_steady_tick(std::time::Duration::from_millis(80));
                 Some(s)
             } else {
@@ -737,7 +737,7 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
                         .template("{spinner} {msg}")
                         .unwrap(),
                 );
-                s.set_message("Cooking…");
+                s.set_message("Thinking…");
                 s.enable_steady_tick(std::time::Duration::from_millis(80));
                 Some(s)
             } else {

@@ -136,8 +136,8 @@ impl Widget for &EditorState {
 
         let label = match self.state {
             EditorMode::Idle => " type a message… ",
-            EditorMode::Thinking => " Cooking… ",
-            EditorMode::Streaming => " Writing… ",
+            EditorMode::Thinking => " thinking… ",
+            EditorMode::Streaming => " writing… ",
             EditorMode::Error => " error ",
             EditorMode::Confirm => " confirm? ",
         };

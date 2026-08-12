@@ -88,15 +88,10 @@ impl Widget for &StatusState {
 
         let mut spans: Vec<Span<'static>> = Vec::new();
 
-        // Left: spinner + activity phrase (if any)
-        let compact = CompactOmega::new(self.spinner.clone());
-        let (spinner_text, spinner_style) = compact.render_inline();
-        let left = vec![
-            Span::styled(" © OMEGA_ORCH ", theme::style_dim()),
-            Span::styled(spinner_text, spinner_style),
-        ];
+        // Left: spinner glyph
+        let spinner_text = self.spinner.current_glyph().to_string();
+        let left = vec![Span::styled(spinner_text, self.spinner.glyph_style())];
         let left_w: u16 = left.iter().map(|s| s.width() as u16).sum();
-
         // Right: real input/output token counts
         let tok_str = StatusState::format_token_usage(self.tokens_in, self.tokens_out);
 

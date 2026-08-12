@@ -66,7 +66,7 @@ mod tests {
     }
 
     #[test]
-    fn streaming_assistant_uses_activity_spinner_not_thinking_label() {
+    fn streaming_assistant_no_spinner() {
         let mut entry = TranscriptEntry::Assistant {
             content: String::new(),
             rendered: None,
@@ -74,10 +74,8 @@ mod tests {
             thinking: String::new(),
         };
         let first = text_to_string(&entry.get_rendered(60, 0));
-        let second = text_to_string(&entry.get_rendered(60, 1));
-        assert!(first.contains("⠋ Cooking…"));
-        assert!(second.contains("⠙ Cooking…"));
-        assert!(!first.contains('◆'));
+        assert!(!first.contains("⠋"));
+        assert!(!first.contains("Cooking…"));
         assert!(!first.to_lowercase().contains("thinking"));
     }
 
