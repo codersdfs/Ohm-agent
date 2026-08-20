@@ -116,6 +116,15 @@ impl EditorState {
         self.cursor += 1;
     }
 
+
+    /// Paste text at the cursor; leaves the cursor at the end of the inserted
+    /// text so subsequent typing appends after the block.
+    pub fn paste_text(&mut self, s: &str) {
+        if !s.is_empty() && self.cursor <= self.buffer.len() {
+            self.buffer.insert_str(self.cursor, s);
+            self.cursor += s.len();
+        }
+    }
     /// Take the current buffer for sending.
     pub fn take_buffer(&mut self) -> String {
         let content = self.buffer.clone();
@@ -280,5 +289,50 @@ impl EditorState {
             }
             _ => Action::Noop,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    fn key(code: KeyCode, shift: bool) -> crossterm::event::KeyEvent {
+        let mut modifiers = KeyModifiers::empty();
+        if shift {
+            modifiers.insert(KeyModifiers::SHIFT);
+        }
+        crossterm::event::KeyEvent::new(code, modifiers)
+    }
+
+    #[test]
+    fn paste_text_keeps_full_multiline_buffer_and_nevers_sends() {
+        let mut ed = EditorState::new();
+        ed.paste_text("line one\nline two\nline three");
+        // Full payload stays in the buffer, nothing sent, cursor pasted past end.
+        assert_eq!(ed.buffer, "line one\nline two\nline three");
+        assert_eq!(ed.cursor, ed.buffer.len());
+        // paste_text returns no action; a subsequent plain Enter is what submits.
+    }
+
+    #[test]
+    fn plain_enter_submits_but_shift_enter_only_inserts_newline() {
+        let mut ed = EditorState::new();
+        ed.insert_char('h');
+
+        // A genuine Enter (no SHIFT) is the only path that submits.
+        assert_eq!(ed.handle_key(key(KeyCode::Enter, false)), Action::SendMessage);
+
+        // Shift+Enter keeps editing: inserts a newline, no send.
+        assert_eq!(ed.handle_key(key(KeyCode::Enter, true)), Action::Noop);
+        assert_eq!(ed.buffer, "h\n");
+        assert_eq!(ed.take_buffer(), "h\n");
+    }
+
+    #[test]
+    fn char_press_never_submits() {
+        let mut ed = EditorState::new();
+        assert_eq!(ed.handle_key(key(KeyCode::Char('x'), false)), Action::Noop);
+        assert_eq!(ed.buffer, "x");
     }
 }

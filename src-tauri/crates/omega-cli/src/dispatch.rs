@@ -45,11 +45,15 @@ pub fn run_chat(
             Command::Batch(vec![
                 Command::EnableRawMode,
                 Command::crossterm(crossterm::terminal::EnterAlternateScreen),
+                // Fold multi-character paste into a single event so pasted
+                // newlines don't arrive as Enter presses (which would send).
+                Command::crossterm(crossterm::event::EnableBracketedPaste),
             ])
         })
         .on_shutdown(|| {
             Command::Batch(vec![
                 Command::crossterm(crossterm::terminal::LeaveAlternateScreen),
+                Command::crossterm(crossterm::event::DisableBracketedPaste),
                 Command::DisableRawMode,
             ])
         })

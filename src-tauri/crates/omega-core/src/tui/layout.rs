@@ -71,7 +71,19 @@ pub fn render_full_layout(frame: &mut Frame, area: Rect, chrome: &mut LayoutChro
     // ── Layout: vertical stack ───────────────────────────────────────────
     let top_bar_h = 1u16;
     let metrics_h = 3u16;
-    let editor_h: u16 = if chrome.is_command_mode { 7 } else { 3 };
+    // Auto-grow the chat editor as input wraps; command mode keeps a taller
+    // fixed panel. Overlong input collapses to a `[pasted N lines]` marker so
+    // the panel never grows unboundedly or floods the transcript above.
+    let editor_h: u16 = {
+        let inner_w = area.width.saturating_sub(2).max(1);
+        if chrome.is_command_mode {
+            7
+        } else {
+            let cap = (area.height / 3).clamp(4, 12);
+            let rows = editor_display(&chrome.editor.buffer, inner_w, cap.saturating_sub(2));
+            (rows.len() as u16 + 2).max(3)
+        }
+    };
     let status_h = 1u16;
 
     let vert = Layout::default()
@@ -388,6 +400,42 @@ fn render_process_panel(
 
 // ── Command panel (replaces the simple editor input) ──────────────────────
 
+/// Wrap a multi-line buffer into display rows of at most `inner_w` columns,
+/// breaking purely by column width (a word longer than the column takes its
+/// own overflow row rather than being truncated).
+fn editor_wrap(text: &str, inner_w: u16) -> Vec<String> {
+    let inner = inner_w.max(1) as usize;
+    let mut rows = Vec::new();
+    for logical in text.split('\n') {
+        let mut cur = String::new();
+        let mut len = 0usize; // chars already on the current row
+        for c in logical.chars() {
+            if len >= inner {
+                rows.push(std::mem::take(&mut cur));
+                len = 0;
+            }
+            cur.push(c);
+            len += 1;
+        }
+        rows.push(cur);
+    }
+    if rows.is_empty() {
+        rows.push(String::new());
+    }
+    rows
+}
+
+/// Choose the display representation for the editor: the real wrapped text, or
+/// a single `[pasted N lines]` marker when it cannot fit within `max_rows`.
+fn editor_display(text: &str, inner_w: u16, max_rows: u16) -> Vec<String> {
+    let rows = editor_wrap(text, inner_w);
+    if rows.len() as u16 <= max_rows.max(1) {
+        rows
+    } else {
+        vec![format!("[pasted {} lines]", text.lines().count())]
+    }
+}
+
 /// Render the bottom command panel — a glass-chrome block that replaces the old
 /// simple editor input. In chat mode it shows the text buffer. In command mode
 /// it also shows the filtered slash-command list inside the block.
@@ -397,7 +445,7 @@ fn render_command_panel(
     editor: &EditorState,
     palette: &command_palette::CommandPaletteState,
     is_command_mode: bool,
-    is_streaming: bool,
+    _is_streaming: bool,
 ) {
     if area.height < 3 || area.width < 10 {
         return;
@@ -407,27 +455,49 @@ fn render_command_panel(
 
     if !showing_palette {
         let out_style = Style::default().fg(theme::OUTLINE);
+        let input_style = Style::default().fg(theme::FG);
         let rule = "─".repeat(area.width as usize);
-        // Fix panel to exactly 3 lines to avoid excess bottom padding
-        let panel_area = Rect::new(area.x, area.y, area.width, 3);
+
+        // Content is inset one column on each side; wrap to the inner width so
+        // overlong lines gain rows instead of being truncated.
+        let left_pad = 1u16;
+        let inner_w = area.width.saturating_sub(2).max(1);
+        // Rows available inside the allocated panel (top rule + content + bottom rule).
+        let avail_rows = area.height.saturating_sub(2).max(1);
+        // Overlong input collapses to a `[pasted N lines]` marker that fits.
+        let rows = editor_display(&editor.buffer, inner_w, avail_rows);
+        let shown_rows = rows.len() as u16;
 
         // Top rule
         Paragraph::new(Line::from(Span::styled(&rule, out_style)))
-            .render(Rect::new(panel_area.x, panel_area.y, panel_area.width, 1), frame.buffer_mut());
+            .render(Rect::new(area.x, area.y, area.width, 1), frame.buffer_mut());
 
-        let input_text = if is_streaming || editor.buffer.lines().last().map(|l| l.is_empty()).unwrap_or(true) {
-            "█".to_string()
-        } else {
-            let display = editor.buffer.lines().last().unwrap_or("");
-            let available = (panel_area.width.saturating_sub(2)) as usize;
-            format!("{}{}", display.chars().take(available).collect::<String>(), '█')
-        };
-        Paragraph::new(Line::from(Span::styled(input_text, Style::default().fg(theme::FG))))
-            .render(Rect::new(panel_area.x, panel_area.y + 1, panel_area.width.saturating_sub(2), 1), frame.buffer_mut());
+        // Wrapped content rows
+        let content_y = area.y + 1;
+        for r in 0..shown_rows {
+            let row = &rows[r as usize];
+            let y = content_y + r;
+            for (col, ch) in row.chars().take(inner_w as usize).enumerate() {
+                let cell = frame.buffer_mut().get_mut(area.x + left_pad + col as u16, y);
+                cell.set_char(ch);
+                cell.set_style(input_style);
+            }
+        }
+
+        // Cursor block at the end of the last shown row.
+        let last_idx = shown_rows.saturating_sub(1);
+        let last_row_cols = rows.get(last_idx as usize).map(|r| r.chars().count()).unwrap_or(0);
+        let cursor_x = area.x + left_pad + (last_row_cols as u16).min(inner_w);
+        let cursor_y = content_y + last_idx;
+        if cursor_x < area.x + area.width && cursor_y < area.y + area.height {
+            let cell = frame.buffer_mut().get_mut(cursor_x, cursor_y);
+            cell.set_char('█');
+            cell.set_style(input_style);
+        }
 
         // Bottom rule
         Paragraph::new(Line::from(Span::styled(&rule, out_style)))
-            .render(Rect::new(panel_area.x, panel_area.y + 2, panel_area.width, 1), frame.buffer_mut());
+            .render(Rect::new(area.x, area.y + shown_rows + 1, area.width, 1), frame.buffer_mut());
     }
 
     // ── Command palette (top rule with centered label, no side borders) ──

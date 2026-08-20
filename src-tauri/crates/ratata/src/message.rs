@@ -39,3 +39,30 @@ impl From<Event> for Message {
         }
     }
 }
+
+#[cfg(feature = "paste")]
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paste_event_becomes_paste_message_with_full_payload() {
+        let payload = "line one\nline two\nline three\n";
+        let message = Message::from(Event::Paste(payload.to_string()));
+        match message {
+            Message::Paste(text) => assert_eq!(text, payload),
+            _ => panic!("expected Message::Paste"),
+        }
+    }
+
+    #[test]
+    fn paste_newlines_are_not_enter_keys() {
+        // Pasted newlines route through Event::Paste, so they never reach the
+        // key/Enter path that maps to send.
+        let payload = "a\nb\n";
+        match Message::from(Event::Paste(payload.to_string())) {
+            Message::Paste(text) => assert_eq!(text, payload),
+            _ => panic!("expected Message::Paste"),
+        }
+    }
+}

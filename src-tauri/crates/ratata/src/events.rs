@@ -36,8 +36,15 @@ pub fn listen(timeout: Duration) -> (JoinHandle, Receiver<Event>, Arc<AtomicBool
 
         let event = event::read()?;
 
-        // Filter out the KeyEventKind::Release and KeyEventKind::Repeat presses.
-        if !matches!(event, Event::Key(key) if key.kind == KeyEventKind::Press) {
+        // Forward key presses and bracketed-paste payloads; drop key
+        // releases/repeats and mouse/resize noise.
+        let keep = match &event {
+            Event::Key(key) => key.kind == KeyEventKind::Press,
+            #[cfg(feature = "paste")]
+            Event::Paste(_) => true,
+            _ => false,
+        };
+        if !keep {
             continue;
         }
 

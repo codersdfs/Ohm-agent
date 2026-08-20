@@ -280,6 +280,12 @@ impl ratata::screen::Screen for App {
                 None
             }
             Message::Resize(_, _) => None,
+            Message::Paste(text) => {
+                if !self.is_streaming {
+                    self.editor.paste_text(&text);
+                }
+                None
+            }
             _ => None,
         }
     }
