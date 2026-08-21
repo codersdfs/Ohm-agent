@@ -128,6 +128,16 @@ pub struct PermissionEvent {
     pub step_description: String,
 }
 
+// ─── Context-manager cache ────────────────────────────────────────────────────
+
+/// A context manager cached across turns so the workspace repo-map is parsed
+/// (tree-sitter) once per session rather than on every user message.
+pub struct CachedContextManager {
+    pub model: String,
+    pub window: u64,
+    pub manager: crate::context_manager::ContextManager,
+}
+
 // ─── AppState ─────────────────────────────────────────────────────────────────
 
 pub struct AppState {
@@ -142,6 +152,9 @@ pub struct AppState {
     pub permission_results: Mutex<HashMap<String, bool>>,
     pub session_log: Mutex<Vec<pipeline::build::BuildSessionEntry>>,
     pub memory_store: Mutex<memory::MemoryStore>,
+    /// Cached context manager keyed by (model, window). Reused across turns so
+    /// the repo-map index is built once per session, not per user message.
+    pub context_cache: Mutex<Option<CachedContextManager>>,
     /// Broadcast channel for permission requests (Tauri forwards to frontend).
     pub permission_tx: tokio::sync::broadcast::Sender<PermissionEvent>,
 
@@ -181,6 +194,7 @@ impl AppState {
             tool_pipeline: OnceLock::new(),
             session_log: Mutex::new(vec![]),
             memory_store: Mutex::new(memory_store),
+            context_cache: Mutex::new(None),
             permission_tx,
             session_store: Mutex::new(None),
         }
@@ -217,6 +231,48 @@ impl AppState {
             .as_ref()
             .map(|s| s.id.clone())
     }
+
+    /// Build (or reuse) a context manager for `model`/`window` and prepare
+    /// `messages` for a provider call — injecting the repo-map and JIT Hermes
+    /// memory. The manager is cached across turns so the repo-map is indexed
+    /// once per session (mirroring the per-run construction in subagent.rs).
+    ///
+    /// `window`/`model` must be stable within a session for the cache to hit.
+    pub fn assemble_context(
+        &self,
+        workspace_root: impl std::convert::AsRef<std::path::Path>,
+        window: u64,
+        model: &str,
+        messages: &mut Vec<providers::ChatMessage>,
+        user_message: &str,
+    ) -> Result<crate::context_manager::AssembledContext, String> {
+        const KEEP_LAST_TURNS: usize = 6;
+        let store = self.memory_store.lock_guard();
+        let mut guard = self.context_cache.lock_guard();
+
+        match guard.as_ref() {
+            // Reuse the cached manager (repo-map already indexed).
+            Some(cached) if cached.window == window && cached.model == model => {
+                cached.manager.prepare(messages, Some(&store), user_message)
+            }
+            // New provider/model/window: build a fresh manager and cache it.
+            _ => {
+                let manager = crate::context_manager::ContextManager::new(
+                    workspace_root,
+                    window,
+                    model,
+                    KEEP_LAST_TURNS,
+                );
+                let assembled = manager.prepare(messages, Some(&store), user_message)?;
+                *guard = Some(CachedContextManager {
+                    model: model.to_string(),
+                    window,
+                    manager,
+                });
+                Ok(assembled)
+            }
+        }
+    }
 }
 
 pub fn default_db_path() -> String {
@@ -230,5 +286,45 @@ pub fn default_db_path() -> String {
     } else {
         let path = std::path::PathBuf::from(".").join("memory.db");
         path.to_string_lossy().to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_assemble_context_caches_and_reuses_manager() {
+        let state = AppState::new(":memory:");
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("a.rs"), "pub fn alpha() {}\n").unwrap();
+        let root = temp.path();
+
+        let mut msgs: Vec<providers::ChatMessage> = vec![];
+        let _ = state.assemble_context(root, 128_000, "gpt-4o", &mut msgs, "hi").unwrap();
+
+        // First call populates the cache.
+        {
+            let _guard = state.context_cache.lock_guard();
+            let cached = _guard.as_ref();
+            assert!(cached.is_some(), "cache should populate after first assemble");
+            assert_eq!(cached.map(|c| c.window), Some(128_000));
+        }
+
+        // Same model+window reuses the cached manager (no error, cache kept).
+        let _ = state.assemble_context(root, 128_000, "gpt-4o", &mut msgs, "again").unwrap();
+        {
+            let _guard = state.context_cache.lock_guard();
+            let cached_after = _guard.as_ref();
+            assert_eq!(cached_after.map(|c| c.window), Some(128_000));
+        }
+
+        // A different window forces a rebuild and updates the cache.
+        let _ = state.assemble_context(root, 32_000, "gpt-4o", &mut msgs, "again2").unwrap();
+        {
+            let _guard = state.context_cache.lock_guard();
+            let cached_after_change = _guard.as_ref();
+            assert_eq!(cached_after_change.map(|c| c.window), Some(32_000));
+        }
     }
 }

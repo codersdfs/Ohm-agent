@@ -453,16 +453,15 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
     // structured compaction, budgeted per provider window. Replaces the old
     // chars/4 `estimate_tokens` + keep-last-N `compact` block.
     let window = config.kind.context_window();
-    let context_manager = crate::context_manager::ContextManager::new(
-        std::env::current_dir().unwrap_or_default(),
-        window,
-        &config.model,
-        6,
-    );
     {
-        let store = state.memory_store.lock_guard();
-        let assembled = context_manager
-            .prepare(messages, Some(&store), &user_content)
+        let assembled = state
+            .assemble_context(
+                std::env::current_dir().unwrap_or_default(),
+                window,
+                &config.model,
+                messages,
+                &user_content,
+            )
             .map_err(|e| format!("context preparation failed: {}", e))?;
         log::debug!(
             "context prepared: {} tokens, repo_map={} chars, memory={} chars, compacted={}",
