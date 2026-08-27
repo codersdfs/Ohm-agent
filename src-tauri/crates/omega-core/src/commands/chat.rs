@@ -227,7 +227,7 @@ async fn handle_spawn_subagent<E: ChatEmitter>(
 }
 
 async fn handle_tool_calls<E: ChatEmitter>(
-    state: &AppState,
+    state: Arc<AppState>,
     tool_calls: &[providers::ToolCall],
     messages: &mut Vec<providers::ChatMessage>,
     permission_mode: &str,
@@ -236,6 +236,7 @@ async fn handle_tool_calls<E: ChatEmitter>(
     provider: &dyn providers::LlmProvider,
     tools: &[providers::ToolDefinition],
 ) -> Result<(), String> {
+    // Push the assistant message with all tool calls upfront.
     messages.push(providers::ChatMessage {
         role: "assistant".into(),
         content: String::new(),
@@ -244,20 +245,121 @@ async fn handle_tool_calls<E: ChatEmitter>(
         name: None,
     });
 
-    for tc in tool_calls {
+    if tool_calls.is_empty() {
+        return Ok(());
+    }
+
+    // ── Pre-flight: cancel check + permission check for all tools ──────
+    // Permission prompts are sequential even when tools execute in parallel.
+    // We check upfront so parallel dispatch doesn't race on the emitter.
+    let mut allowed: Vec<usize> = Vec::with_capacity(tool_calls.len());
+    for (i, tc) in tool_calls.iter().enumerate() {
         if cancelled(cancel) {
-            let msg = "Cancelled by user before tool execution".to_string();
-            emitter.emit_tool_result(&tc.function.name, false, &msg)?;
+            break;
+        }
+        match check_permission(permission_mode, &tc.function.name, &tc.function.arguments, emitter).await {
+            Permission::Allow => allowed.push(i),
+            Permission::Deny => {
+                emitter.emit_tool_result(&tc.function.name, false, "denied")?;
+                messages.push(providers::ChatMessage {
+                    role: "tool".into(),
+                    content: format!("Tool `{}` was denied by permission mode", tc.function.name),
+                    tool_calls: None,
+                    tool_call_id: Some(tc.id.clone()),
+                    name: Some(tc.function.name.clone()),
+                });
+            }
+            Permission::Abort => return Err("Message aborted by user".into()),
+        }
+    }
+
+    if allowed.is_empty() {
+        return Ok(());
+    }
+
+    // ── Split: concurrency-safe tools run in parallel, others serially ─
+    let is_concurrency_safe = |name: &str| -> bool {
+        matches!(
+            name,
+            "read" | "grep" | "glob" | "git_status" | "git_diff" | "git_log" | "web_fetch"
+        )
+    };
+
+    let safe_indices: Vec<usize> = allowed.iter().copied().filter(|&i| is_concurrency_safe(&tool_calls[i].function.name)).collect();
+    let serial_indices: Vec<usize> = allowed.iter().copied().filter(|&i| !is_concurrency_safe(&tool_calls[i].function.name)).collect();
+
+    // ── Phase 1: parallel execution for concurrency-safe tools ─────────
+    // Each tool runs in a tokio task. Results are collected and sorted
+    // by original index to preserve message ordering.
+    if !safe_indices.is_empty() {
+        let mut join_set: tokio::task::JoinSet<(usize, String, bool, String)> = tokio::task::JoinSet::new();
+
+        for &idx in &safe_indices {
+            let tc = &tool_calls[idx];
+            let tool_name = tc.function.name.clone();
+            let args_json = tc.function.arguments.clone();
+            let tc_id = tc.id.clone();
+            let state_arc = state.clone();
+            let emitter_arc = std::sync::Arc::new(emitter);
+
+            join_set.spawn(async move {
+                emitter_arc.emit_tool_call(&tool_name, &args_json).ok();
+                let args = match serde_json::from_str::<serde_json::Value>(&args_json) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        let err_msg = format!(
+                            "Error parsing arguments for `{}`: {}.\nArguments received: {}",
+                            tool_name, e, args_json
+                        );
+                        return (idx, tc_id, false, err_msg);
+                    }
+                };
+                let tool_request = crate::commands::tools::ToolRequest {
+                    tool: tool_name.clone(),
+                    args,
+                };
+                let result = match crate::commands::tools::execute_tool_inner(&*state_arc, tool_request).await {
+                    Ok(r) => r,
+                    Err(e) => crate::commands::tools::ToolResult::err(e),
+                };
+                let output = if result.success {
+                    result.output.clone()
+                } else {
+                    result.error.unwrap_or_default()
+                };
+                (idx, tc_id, result.success, output)
+            });
+        }
+
+        // Collect parallel results, sorted by original index.
+        let mut parallel_results: Vec<(usize, String, bool, String)> = Vec::with_capacity(safe_indices.len());
+        while let Some(join_result) = join_set.join_next().await {
+            if let Ok(result) = join_result {
+                parallel_results.push(result);
+            }
+        }
+        parallel_results.sort_by_key(|r| r.0);
+
+        // Emit results and push to messages in original order.
+        for (idx, tc_id, success, output) in &parallel_results {
+            let tc = &tool_calls[*idx];
+            emitter.emit_tool_result(&tc.function.name, *success, output)?;
             messages.push(providers::ChatMessage {
                 role: "tool".into(),
-                content: msg,
+                content: output.clone(),
                 tool_calls: None,
-                tool_call_id: Some(tc.id.clone()),
+                tool_call_id: Some(tc_id.clone()),
                 name: Some(tc.function.name.clone()),
             });
-            // Mark remaining tools as skipped so the message list stays consistent.
-            continue;
         }
+    }
+
+    // ── Phase 2: serial execution for mutating tools ───────────────────
+    for idx in serial_indices {
+        if cancelled(cancel) {
+            break;
+        }
+        let tc = &tool_calls[idx];
 
         emitter.emit_tool_call(&tc.function.name, &tc.function.arguments)?;
         let args = match serde_json::from_str(&tc.function.arguments) {
@@ -282,31 +384,8 @@ async fn handle_tool_calls<E: ChatEmitter>(
             tool: tc.function.name.clone(),
             args,
         };
-        // Check permission FIRST — before any file I/O
-        match check_permission(
-            permission_mode,
-            &tc.function.name,
-            &tc.function.arguments,
-            emitter,
-        )
-        .await
-        {
-            Permission::Allow => {}
-            Permission::Deny => {
-                emitter.emit_tool_result(&tc.function.name, false, "denied")?;
-                messages.push(providers::ChatMessage {
-                    role: "tool".into(),
-                    content: format!("Tool `{}` was denied by permission mode", tc.function.name),
-                    tool_calls: None,
-                    tool_call_id: Some(tc.id.clone()),
-                    name: Some(tc.function.name.clone()),
-                });
-                continue;
-            }
-            Permission::Abort => return Err("Message aborted by user".into()),
-        }
 
-        // isolated subagent loop. Other tools go through the normal pipeline.
+        // spawn_subagent runs its own isolated loop — intercept before pipeline.
         if tc.function.name == "spawn_subagent" {
             mark_tool_running(state, &tc.function.name);
             let result = handle_spawn_subagent(
@@ -343,6 +422,7 @@ async fn handle_tool_calls<E: ChatEmitter>(
             }
             continue;
         }
+
         // Read old file content for diff (permission already granted)
         let diff_path = if matches!(tc.function.name.as_str(), "write" | "edit") {
             tool_request
@@ -365,8 +445,6 @@ async fn handle_tool_calls<E: ChatEmitter>(
         };
         mark_tool_finished(state, &tc.function.name);
 
-        // Show diff after execution (terminal CLI only; TUI shows the bounded
-        // diff preview inside ToolExecutionComponent).
         if let Some(ref path) = diff_path {
             let new = std::fs::read_to_string(path).unwrap_or_default();
             show_diff(path, &old, &new, emitter);

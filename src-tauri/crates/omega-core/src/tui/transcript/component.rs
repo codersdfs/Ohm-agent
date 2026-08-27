@@ -69,6 +69,21 @@ impl Transcript {
             .push(TranscriptEntry::Notice { text, is_error });
     }
 
+    /// Whether any real conversation content exists (user message, assistant
+    /// reply, or tool execution). Startup notices do not count — the splash
+    /// banner stays up until actual interaction begins.
+    pub fn has_conversation(&self) -> bool {
+        self.entries.iter().any(|e| {
+            matches!(
+                e,
+                TranscriptEntry::User { .. }
+                    | TranscriptEntry::Assistant { .. }
+                    | TranscriptEntry::ToolCallBox { .. }
+                    | TranscriptEntry::ToolCall { .. }
+            )
+        })
+    }
+
     /// Add a user message entry to the transcript.
     pub fn add_user_message(&mut self, content: String) {
         self.entries.push(TranscriptEntry::User { content });

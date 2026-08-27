@@ -302,15 +302,24 @@ fn render_process_panel(
     // No frame around the transcript — just the content on the terminal canvas.
     fill_area(frame, area, theme::BG);
 
-    // ── Startup splash: empty conversation → OMEGA AGENT banner ─────────
-    // Clears itself once the first message arrives (or streaming begins);
-    // the banner module no-ops on terminals too small for the art.
-    if transcript.entries.is_empty() && !is_streaming {
+    // ── Startup splash: OMEGA AGENT banner until real conversation starts ──
+    // Startup notices don't block the splash; the latest error notice (e.g.
+    // missing API key) is folded into the splash block so warnings stay
+    // visible. Clears itself on the first message/stream.
+    let error_notice = transcript.entries.iter().rev().find_map(|e| match e {
+        crate::tui::transcript::TranscriptEntry::Notice {
+            text,
+            is_error: true,
+        } => Some(text.as_str()),
+        _ => None,
+    });
+    if !transcript.has_conversation() && !is_streaming {
         banner::render_splash(
             area,
             frame.buffer_mut(),
             splash_subtitle,
             "type a message to begin · ^K commands",
+            error_notice,
         );
         return;
     }
