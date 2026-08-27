@@ -123,6 +123,8 @@ pub struct App {
 
     // Should quit
     pub should_quit: bool,
+    /// Names of tools currently executing, for live header chips.
+    pub running_tools: Vec<String>,
 }
 
 impl App {
@@ -177,41 +179,56 @@ impl App {
             ),
 
             should_quit: false,
+            running_tools: Vec::new(),
         };
 
         // Welcome notice
-        app.transcript.add_notice(format!(
+        app.transcript.add_notice(
+            format!(
                 "Ω v{} — {} ({}). Type a message to start.",
                 env!("CARGO_PKG_VERSION"),
                 app.config.model,
                 app.config.kind
-            ), false);
+            ),
+            false,
+        );
 
         // Session resume / new notice
         if resumed {
-            app.transcript.add_notice(format!(
+            app.transcript.add_notice(
+                format!(
                     "Resumed session {} ({} messages)",
                     &session_id[..session_id.len().min(8)],
                     msg_count
-                ), false);
+                ),
+                false,
+            );
             app.transcript.load_from_session(load.messages);
         } else {
-            app.transcript.add_notice(format!("New session {}", &session_id[..session_id.len().min(8)]), false);
+            app.transcript.add_notice(
+                format!("New session {}", &session_id[..session_id.len().min(8)]),
+                false,
+            );
         }
         for w in warnings {
-            app.transcript.add_notice(format!("Session load: {w}"), true);
+            app.transcript
+                .add_notice(format!("Session load: {w}"), true);
         }
 
         // Show setup hint when API key is needed for cloud providers
         let is_local = matches!(app.config.kind, providers::ProviderKind::Local);
         if app.config.api_key.is_none() && !is_local {
-            app.transcript.add_notice("No API key found. Set OMEGA_API_KEY or run: omega -p local".into(), true);
+            app.transcript.add_notice(
+                "No API key found. Set OMEGA_API_KEY or run: omega -p local".into(),
+                true,
+            );
         }
 
         // Load MCP skills
         let (mcp_loaded, mcp_errors) = commands::mcp::load_skills();
         if mcp_loaded > 0 {
-            app.transcript.add_notice(format!("MCP: {} skills loaded", mcp_loaded), false);
+            app.transcript
+                .add_notice(format!("MCP: {} skills loaded", mcp_loaded), false);
         }
         for err in &mcp_errors {
             app.transcript.add_notice(format!("MCP: {}", err), true);
@@ -238,8 +255,8 @@ impl App {
             provider_panel_state: &mut self.provider_panel_state,
             is_streaming: self.is_streaming,
             is_command_mode,
-            session_messages: self.session_messages,
             anim_tick: self.anim_tick,
+            running_tools: self.running_tools.clone(),
         };
 
         render_full_layout(frame, area, &mut chrome);

@@ -80,7 +80,10 @@ impl PipelineExecutor {
                         let retry_count = state.retry_count;
                         state.status = PipelineStatus::Retrying(retry_count, self.max_retries);
                         drop(state);
-                        let retry_msg = format!("Retrying (attempt {}/{})...\n", retry_count, self.max_retries);
+                        let retry_msg = format!(
+                            "Retrying (attempt {}/{})...\n",
+                            retry_count, self.max_retries
+                        );
                         let _ = emitter.emit_token(&retry_msg);
                         continue;
                     }
@@ -92,10 +95,7 @@ impl PipelineExecutor {
     }
 
     /// Dispatch to the current phase based on PipelineStatus.
-    async fn run_phase<E: ChatEmitter + ?Sized>(
-        &self,
-        emitter: &E,
-    ) -> Result<PhaseResult, String> {
+    async fn run_phase<E: ChatEmitter + ?Sized>(&self, emitter: &E) -> Result<PhaseResult, String> {
         let status = {
             let state = self.state.lock().await;
             state.status.clone()
@@ -173,14 +173,17 @@ impl PipelineExecutor {
         // Record tool call history from the build session
         {
             let mut state = self.state.lock().await;
-            state.build_output = Some(format!("Build completed with {} tool calls", session_entries.len()));
+            state.build_output = Some(format!(
+                "Build completed with {} tool calls",
+                session_entries.len()
+            ));
             state.current_step_index = session_entries.len().saturating_sub(1);
 
             // Compute a simple gate score from the session: 100 if all steps
             // succeeded with no gate violations, lower otherwise.
-            let all_passed: bool = session_entries.iter().all(|e| {
-                e.success && e.gate_passed.unwrap_or(true)
-            });
+            let all_passed: bool = session_entries
+                .iter()
+                .all(|e| e.success && e.gate_passed.unwrap_or(true));
             let gate_score: u32 = if all_passed { 100 } else { 50 };
             state.current_score = gate_score;
 

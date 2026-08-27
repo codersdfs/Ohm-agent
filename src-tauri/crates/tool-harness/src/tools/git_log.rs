@@ -59,12 +59,20 @@ impl Tool for GitLogTool {
             name: "git_log".into(),
             label: "Git Log".into(),
             description: "Show commit history".into(),
-            doc: Some("Runs `git log` and returns the commit history.
+            doc: Some(
+                "Runs `git log` and returns the commit history.
 - limit: max number of commits (default 10)
-- oneline: compact one-line-per-commit format".into()),
+- oneline: compact one-line-per-commit format"
+                    .into(),
+            ),
             category: ToolCategory::System,
             subcategory: Some("git".into()),
-            tags: vec!["git".into(), "log".into(), "history".into(), "commits".into()],
+            tags: vec![
+                "git".into(),
+                "log".into(),
+                "history".into(),
+                "commits".into(),
+            ],
             parameters: schema.clone(),
             param_summaries: ToolMetadata::extract_param_summaries(&schema),
             read_only: true,
@@ -77,7 +85,9 @@ impl Tool for GitLogTool {
                     kind: "not_a_repo".into(),
                     description: "The specified path is not a git repository".into(),
                     recoverable: true,
-                    retry_advice: Some("Run in a git repository or provide a valid repoPath".into()),
+                    retry_advice: Some(
+                        "Run in a git repository or provide a valid repoPath".into(),
+                    ),
                 },
                 ToolErrorSpec {
                     kind: "git_not_found".into(),
@@ -100,7 +110,10 @@ impl Tool for GitLogTool {
                     expected_result: None,
                 },
             ],
-            cost_hint: Some(CostHint { tokens_per_call: 50, category: CostCategory::Free }),
+            cost_hint: Some(CostHint {
+                tokens_per_call: 50,
+                category: CostCategory::Free,
+            }),
             version: "1.0.0".into(),
             deprecation: None,
             source: ToolSource::Builtin,
@@ -146,10 +159,7 @@ impl Tool for GitLogTool {
             }
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            Err(ToolError::new(format!(
-                "git log failed: {}",
-                stderr.trim()
-            )))
+            Err(ToolError::new(format!("git log failed: {}", stderr.trim())))
         }
     }
 }

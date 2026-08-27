@@ -1,3 +1,4 @@
+pub mod code_search;
 pub mod commands;
 pub mod context_manager;
 pub mod error;
@@ -8,16 +9,16 @@ pub mod memory_injector;
 pub mod memory_retriever;
 pub mod memory_summarizer;
 pub mod pipeline;
-pub mod subagent;
 pub mod session;
+pub mod subagent;
 pub mod tui;
-pub mod code_search;
 
 // ui module for permission panel and related UI components
 pub mod ui;
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 // ─── Poison-safe Mutex extension ─────────────────────────────────────────────
@@ -164,6 +165,15 @@ pub struct AppState {
     /// Optional conversation session store (CLI / TUI sets this at startup).
     /// Headless/API paths leave it empty so persistence is a no-op.
     pub session_store: Mutex<Option<session::SessionStore>>,
+
+    /// Tools currently executing (chat loop), for live header chips.
+    /// Pushed before execution, removed after; cleared at turn boundaries.
+    pub running_tools: Mutex<Vec<String>>,
+
+    /// Canonical workspace root. The Gate hook, HookContext, and context
+    /// assembly must all score/index against this single root — deriving it
+    /// independently per call site risks the Gate watching the wrong tree.
+    pub workspace_root: PathBuf,
 }
 
 impl AppState {
@@ -197,6 +207,8 @@ impl AppState {
             context_cache: Mutex::new(None),
             permission_tx,
             session_store: Mutex::new(None),
+            running_tools: Mutex::new(Vec::new()),
+            workspace_root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         }
     }
 
@@ -301,18 +313,25 @@ mod tests {
         let root = temp.path();
 
         let mut msgs: Vec<providers::ChatMessage> = vec![];
-        let _ = state.assemble_context(root, 128_000, "gpt-4o", &mut msgs, "hi").unwrap();
+        let _ = state
+            .assemble_context(root, 128_000, "gpt-4o", &mut msgs, "hi")
+            .unwrap();
 
         // First call populates the cache.
         {
             let _guard = state.context_cache.lock_guard();
             let cached = _guard.as_ref();
-            assert!(cached.is_some(), "cache should populate after first assemble");
+            assert!(
+                cached.is_some(),
+                "cache should populate after first assemble"
+            );
             assert_eq!(cached.map(|c| c.window), Some(128_000));
         }
 
         // Same model+window reuses the cached manager (no error, cache kept).
-        let _ = state.assemble_context(root, 128_000, "gpt-4o", &mut msgs, "again").unwrap();
+        let _ = state
+            .assemble_context(root, 128_000, "gpt-4o", &mut msgs, "again")
+            .unwrap();
         {
             let _guard = state.context_cache.lock_guard();
             let cached_after = _guard.as_ref();
@@ -320,7 +339,9 @@ mod tests {
         }
 
         // A different window forces a rebuild and updates the cache.
-        let _ = state.assemble_context(root, 32_000, "gpt-4o", &mut msgs, "again2").unwrap();
+        let _ = state
+            .assemble_context(root, 32_000, "gpt-4o", &mut msgs, "again2")
+            .unwrap();
         {
             let _guard = state.context_cache.lock_guard();
             let cached_after_change = _guard.as_ref();

@@ -213,8 +213,6 @@ mod tests {
         dir
     }
 
-
-
     // ── CliConfig serde ──────────────────────────────────────────────
 
     #[test]
@@ -264,7 +262,10 @@ mod tests {
         let cfg = load_config_from_dir(dir.path());
         assert_eq!(cfg.provider, Some("openai".into()));
         assert_eq!(cfg.model, Some("gpt-4o".into()));
-        assert_eq!(cfg.base_url, Some("https://custom.api.example.com/v1".into()));
+        assert_eq!(
+            cfg.base_url,
+            Some("https://custom.api.example.com/v1".into())
+        );
         assert_eq!(cfg.max_tokens, Some(8192));
         assert_eq!(cfg.temperature, Some(1.2));
     }
@@ -303,7 +304,10 @@ mod tests {
         let dir = setup_config_dir(r#"{"provider":"local"}"#);
         let cfg = load_provider_config_inner(
             Some("anthropic".into()), // CLI override
-            None, None, None, None,
+            None,
+            None,
+            None,
+            None,
             dir.path(),
         );
         assert!(matches!(cfg.kind, providers::ProviderKind::Anthropic));
@@ -335,9 +339,8 @@ mod tests {
         let _guard = lock_env();
         let dir = setup_config_dir(r#"{"model":"from-config"}"#);
         std::env::set_var("OMEGA_MODEL", "from-env");
-        let cfg = load_provider_config_inner(
-            None, Some("from-cli".into()), None, None, None, dir.path(),
-        );
+        let cfg =
+            load_provider_config_inner(None, Some("from-cli".into()), None, None, None, dir.path());
         assert_eq!(cfg.model, "from-cli");
         std::env::remove_var("OMEGA_MODEL");
     }
@@ -368,7 +371,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::env::remove_var("OMEGA_MODEL");
         let cfg = load_provider_config_inner(
-            Some("anthropic".into()), None, None, None, None, dir.path(),
+            Some("anthropic".into()),
+            None,
+            None,
+            None,
+            None,
+            dir.path(),
         );
         assert_eq!(cfg.model, "claude-sonnet-4-20250514");
     }
@@ -380,9 +388,7 @@ mod tests {
         let _guard = lock_env();
         let dir = setup_config_dir(r#"{"max_tokens":2048}"#);
         std::env::set_var("OMEGA_MAX_TOKENS", "1024");
-        let cfg = load_provider_config_inner(
-            None, None, None, Some(16384), None, dir.path(),
-        );
+        let cfg = load_provider_config_inner(None, None, None, Some(16384), None, dir.path());
         assert_eq!(cfg.max_tokens, 16384);
         std::env::remove_var("OMEGA_MAX_TOKENS");
     }
@@ -423,9 +429,7 @@ mod tests {
         let _guard = lock_env();
         let dir = setup_config_dir(r#"{"temperature":0.3}"#);
         std::env::set_var("OMEGA_TEMPERATURE", "0.5");
-        let cfg = load_provider_config_inner(
-            None, None, None, None, Some(1.5), dir.path(),
-        );
+        let cfg = load_provider_config_inner(None, None, None, None, Some(1.5), dir.path());
         assert_eq!(cfg.temperature, 1.5);
         std::env::remove_var("OMEGA_TEMPERATURE");
     }

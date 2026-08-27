@@ -28,7 +28,12 @@ pub enum ArtifactType {
 
 /// Data collector interface
 pub trait DataCollector {
-    fn extract_features(&self, path: &str, content: &str, lang: Language) -> Result<FeatureVector, Box<dyn std::error::Error>>;
+    fn extract_features(
+        &self,
+        path: &str,
+        content: &str,
+        lang: Language,
+    ) -> Result<FeatureVector, Box<dyn std::error::Error>>;
     fn collect_artifacts(&self, repo_path: &str) -> Vec<RawArtifact>;
 }
 
@@ -89,7 +94,16 @@ impl DataCollector for DefaultDataCollector {
             }
         }
 
-        let raw_features = vec![clone_rate, unwrap_rate, any_rate, magic_rate, max_depth, 0.0, 0.0, 0.0];
+        let raw_features = vec![
+            clone_rate,
+            unwrap_rate,
+            any_rate,
+            magic_rate,
+            max_depth,
+            0.0,
+            0.0,
+            0.0,
+        ];
 
         Ok(FeatureVector {
             id: format!("feat_{}_{}", path.replace("\\", "_"), lang.to_index()),

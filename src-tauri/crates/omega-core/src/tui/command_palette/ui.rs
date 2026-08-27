@@ -94,24 +94,18 @@ pub fn render(area: Rect, buf: &mut Buffer, state: &CommandPaletteState) {
     let title_w = title.chars().count() as u16;
     let left_dash = (area.width.saturating_sub(title_w)) / 2;
     for x in area.x..area.x + area.width {
-        buf.get_mut(x, top_y)
-            .set_char('─')
-            .set_style(line_style);
+        buf.get_mut(x, top_y).set_char('─').set_style(line_style);
     }
     for (i, ch) in title.chars().enumerate() {
         let cx = area.x + left_dash + i as u16;
         if cx < area.x + area.width {
-            buf.get_mut(cx, top_y)
-                .set_char(ch)
-                .set_fg(theme::DIM);
+            buf.get_mut(cx, top_y).set_char(ch).set_fg(theme::DIM);
         }
     }
 
     // Bottom rule
     for x in area.x..area.x + area.width {
-        buf.get_mut(x, bottom_y)
-            .set_char('─')
-            .set_style(line_style);
+        buf.get_mut(x, bottom_y).set_char('─').set_style(line_style);
     }
 
     // Search line: "> query█"
@@ -121,8 +115,10 @@ pub fn render(area: Rect, buf: &mut Buffer, state: &CommandPaletteState) {
         search_display,
         Style::default().fg(theme::PRIMARY_CONTAINER),
     ));
-    Paragraph::new(search_text)
-        .render(Rect::new(area.x + 1, search_y, area.width.saturating_sub(2), 1), buf);
+    Paragraph::new(search_text).render(
+        Rect::new(area.x + 1, search_y, area.width.saturating_sub(2), 1),
+        buf,
+    );
 
     // Compact: list fills remaining rows; selected id + description shown when possible.
     let body_y = area.y + 2;
@@ -145,13 +141,7 @@ pub fn render(area: Rect, buf: &mut Buffer, state: &CommandPaletteState) {
         } else {
             0
         };
-        for (row_i, &cmd_i) in state
-            .filtered
-            .iter()
-            .enumerate()
-            .skip(start)
-            .take(max_rows)
-        {
+        for (row_i, &cmd_i) in state.filtered.iter().enumerate().skip(start).take(max_rows) {
             let entry = &COMMANDS[cmd_i];
             let is_sel = row_i == sel;
             let style = if is_sel {
@@ -176,7 +166,10 @@ pub fn render(area: Rect, buf: &mut Buffer, state: &CommandPaletteState) {
     Paragraph::new(Text::from(lines))
         .alignment(Alignment::Left)
         .wrap(Wrap { trim: false })
-        .render(Rect::new(area.x + 1, body_y, area.width.saturating_sub(2), body_h), buf);
+        .render(
+            Rect::new(area.x + 1, body_y, area.width.saturating_sub(2), body_h),
+            buf,
+        );
 }
 
 fn inner_width(area: Rect) -> usize {
@@ -203,7 +196,12 @@ fn truncate_to_width(s: &str, width: usize) -> String {
 /// Render command palette rows into a bounded area (used by layout.rs).
 /// Only renders the list rows, not the search line or borders.
 pub fn render_panel(area: Rect, buf: &mut Buffer, state: &CommandPaletteState, max_rows: u16) {
-    if !state.visible || state.filtered.is_empty() || max_rows == 0 || area.height < 1 || area.width < 10 {
+    if !state.visible
+        || state.filtered.is_empty()
+        || max_rows == 0
+        || area.height < 1
+        || area.width < 10
+    {
         return;
     }
 
@@ -229,11 +227,10 @@ pub fn render_panel(area: Rect, buf: &mut Buffer, state: &CommandPaletteState, m
         let text = format!("{} {}  {}", marker, entry.id, entry.label);
         let display = truncate_to_width(&text, area.width as usize);
 
-        Paragraph::new(Line::from(Span::styled(display, style)))
-            .render(
-                Rect::new(area.x, area.y + row_idx as u16, area.width, 1),
-                buf,
-            );
+        Paragraph::new(Line::from(Span::styled(display, style))).render(
+            Rect::new(area.x, area.y + row_idx as u16, area.width, 1),
+            buf,
+        );
     }
 }
 

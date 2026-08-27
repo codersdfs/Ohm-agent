@@ -86,6 +86,13 @@ impl GateCheckResult {
     }
 }
 
+/// Rules-database-only check used AFTER execution for bookkeeping: it feeds
+/// `ToolResult.gate_result` and drives negative-knowledge promotion.
+///
+/// Enforcement is NOT here — the live GateHook runs the full
+/// `harness::GateEngine` (structural, taste, golden, external included) before
+/// write/edit/apply_patch executes (see `gate_hook_from_state`). This helper
+/// remains because promotion needs per-violation records against the rules DB.
 async fn run_gate(state: &AppState, content: &str) -> GateCheckResult {
     let db = state.rules_db.lock_guard();
     let lang = state.detected_language.lock_guard().clone();
@@ -117,9 +124,25 @@ pub async fn execute_tool_inner(
 
     let tool_input = request.clone().into_input();
 
+    // Shared pipeline: registry + live Gate enforcement hook + real hook
+    // context, all built once. The GateHook scores write/edit/apply_patch
+    // through the FULL harness GateEngine (structural, taste, golden, rules,
+    // repeated, external) BEFORE the tool runs, so a sub-threshold write never
+    // touches disk (mode from OMEGA_GATE_MODE, default warn).
     let pipeline = state.tool_pipeline.get_or_init(|| {
         let registry = tool_harness::tools::default_tool_registry();
-        tool_harness::ExecutionPipeline::new().with_registry(registry)
+        let mut hooks = tool_harness::HooksRegistry::new();
+        hooks.register(Box::new(crate::gate_hook::gate_hook_from_state(state)));
+        let session_id = state.session_id().unwrap_or_default();
+        let hook_ctx = tool_harness::HookContext {
+            session_id,
+            turn_id: None,
+            workspace: state.workspace_root.clone(),
+        };
+        tool_harness::ExecutionPipeline::new()
+            .with_registry(registry)
+            .with_hooks(hooks)
+            .with_hook_context(hook_ctx)
     });
 
     let ctx = tool_harness::ToolUseContext::new("omega-core");

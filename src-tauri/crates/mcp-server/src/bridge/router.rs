@@ -115,7 +115,10 @@ impl ToolRouter {
                     all_remote_tools.extend(tools);
                 }
                 Err(e) => {
-                    log::warn!("Failed to discover tools from '{}': {e}", client.config().name);
+                    log::warn!(
+                        "Failed to discover tools from '{}': {e}",
+                        client.config().name
+                    );
                 }
             }
         }
@@ -150,7 +153,11 @@ impl ToolRouter {
     }
 
     /// Call a tool by name. Routes to the correct backend.
-    pub async fn call_tool(&self, name: &str, arguments: serde_json::Value) -> Result<CallToolResult, String> {
+    pub async fn call_tool(
+        &self,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<CallToolResult, String> {
         let entry = {
             let index = self.index.read().unwrap();
             index.tools.get(name).cloned()
@@ -192,7 +199,10 @@ impl ToolRouter {
 
         for client in &clients {
             if let Err(e) = client.discover_tools().await {
-                log::warn!("Failed to refresh tools from '{}': {e}", client.config().name);
+                log::warn!(
+                    "Failed to refresh tools from '{}': {e}",
+                    client.config().name
+                );
             }
         }
         Ok(())
@@ -224,13 +234,11 @@ mod tests {
     #[tokio::test]
     async fn test_register_native_tools() {
         let router = ToolRouter::new();
-        let defs = vec![
-            McpToolDefinition {
-                name: "read".into(),
-                description: "Read a file".into(),
-                input_schema: serde_json::json!({"type":"object"}),
-            },
-        ];
+        let defs = vec![McpToolDefinition {
+            name: "read".into(),
+            description: "Read a file".into(),
+            input_schema: serde_json::json!({"type":"object"}),
+        }];
         router.register_native_tools(defs).await;
         assert_eq!(router.list_tools().await.len(), 1);
     }

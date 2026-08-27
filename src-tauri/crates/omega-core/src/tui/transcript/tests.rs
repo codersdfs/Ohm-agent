@@ -25,43 +25,58 @@ mod tests {
 
     #[test]
     fn test_has_attachments_url() {
-        let entry = TranscriptEntry::User { content: "check https://example.com".into() };
+        let entry = TranscriptEntry::User {
+            content: "check https://example.com".into(),
+        };
         assert!(entry.has_attachments());
     }
 
     #[test]
     fn test_has_attachments_http() {
-        let entry = TranscriptEntry::User { content: "see http://localhost:8080".into() };
+        let entry = TranscriptEntry::User {
+            content: "see http://localhost:8080".into(),
+        };
         assert!(entry.has_attachments());
     }
 
     #[test]
     fn test_no_attachments_plain_text() {
-        let entry = TranscriptEntry::User { content: "hello world".into() };
+        let entry = TranscriptEntry::User {
+            content: "hello world".into(),
+        };
         assert!(!entry.has_attachments());
     }
 
     #[test]
     fn test_has_attachments_file_path() {
-        let entry = TranscriptEntry::User { content: "read /etc/config.toml".into() };
+        let entry = TranscriptEntry::User {
+            content: "read /etc/config.toml".into(),
+        };
         assert!(entry.has_attachments());
     }
 
     #[test]
     fn test_has_attachments_file_extension() {
-        let entry = TranscriptEntry::User { content: "look at Cargo.toml".into() };
+        let entry = TranscriptEntry::User {
+            content: "look at Cargo.toml".into(),
+        };
         assert!(entry.has_attachments());
     }
 
     #[test]
     fn test_no_attachments_bare_domain() {
-        let entry = TranscriptEntry::User { content: "visit example.com".into() };
+        let entry = TranscriptEntry::User {
+            content: "visit example.com".into(),
+        };
         assert!(!entry.has_attachments());
     }
 
     #[test]
     fn test_has_attachments_non_user_entry() {
-        let entry = TranscriptEntry::Notice { text: "hello".into(), is_error: false };
+        let entry = TranscriptEntry::Notice {
+            text: "hello".into(),
+            is_error: false,
+        };
         assert!(!entry.has_attachments());
     }
 
@@ -315,9 +330,6 @@ mod tests {
             );
         }
 
-        println!(
-            "Tool accent bar OK — {} lines",
-            lines.len(),
-        );
+        println!("Tool accent bar OK — {} lines", lines.len(),);
     }
 }

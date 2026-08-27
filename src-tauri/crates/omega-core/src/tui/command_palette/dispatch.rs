@@ -125,7 +125,10 @@ mod tests {
             .into_iter()
             .map(|i| COMMANDS[i].id)
             .collect();
-        assert!(ids.contains(&"/fetch"), "fetch command should appear when searching 'fetch'");
+        assert!(
+            ids.contains(&"/fetch"),
+            "fetch command should appear when searching 'fetch'"
+        );
     }
 
     #[test]
@@ -134,7 +137,10 @@ mod tests {
             .into_iter()
             .map(|i| COMMANDS[i].id)
             .collect();
-        assert!(ids.contains(&"/status"), "status command should appear when searching 'status'");
+        assert!(
+            ids.contains(&"/status"),
+            "status command should appear when searching 'status'"
+        );
     }
 
     #[test]
@@ -143,7 +149,10 @@ mod tests {
             .into_iter()
             .map(|i| COMMANDS[i].id)
             .collect();
-        assert!(ids.contains(&"/search"), "search command should appear when searching 'search web'");
+        assert!(
+            ids.contains(&"/search"),
+            "search command should appear when searching 'search web'"
+        );
     }
 
     #[test]
@@ -152,7 +161,10 @@ mod tests {
             .into_iter()
             .map(|i| COMMANDS[i].id)
             .collect();
-        assert!(ids.contains(&"/gate"), "/gate should appear when searching 'gate'");
+        assert!(
+            ids.contains(&"/gate"),
+            "/gate should appear when searching 'gate'"
+        );
     }
 
     #[test]
@@ -161,7 +173,10 @@ mod tests {
             .into_iter()
             .map(|i| COMMANDS[i].id)
             .collect();
-        assert!(ids.contains(&"/rules"), "/rules should appear when searching 'rules'");
+        assert!(
+            ids.contains(&"/rules"),
+            "/rules should appear when searching 'rules'"
+        );
     }
 
     #[test]
@@ -170,7 +185,10 @@ mod tests {
             .into_iter()
             .map(|i| COMMANDS[i].id)
             .collect();
-        assert!(ids.contains(&"/score"), "/score should appear when searching 'score'");
+        assert!(
+            ids.contains(&"/score"),
+            "/score should appear when searching 'score'"
+        );
     }
 
     #[test]
@@ -179,6 +197,9 @@ mod tests {
             .into_iter()
             .map(|i| COMMANDS[i].id)
             .collect();
-        assert!(ids.contains(&"/memory"), "/memory should appear when searching 'memory'");
+        assert!(
+            ids.contains(&"/memory"),
+            "/memory should appear when searching 'memory'"
+        );
     }
 }

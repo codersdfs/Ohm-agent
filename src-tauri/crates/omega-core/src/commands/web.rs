@@ -117,13 +117,21 @@ pub async fn check_status() -> Result<serde_json::Value, String> {
         ("google", "https://generativelanguage.googleapis.com"),
     ];
     for (name, url) in &checks {
-        let ok = match client.get(*url).timeout(std::time::Duration::from_secs(5)).send().await {
+        let ok = match client
+            .get(*url)
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await
+        {
             Ok(resp) => !resp.status().is_server_error(), // 4xx is fine (auth needed)
             Err(_) => false,
         };
         endpoints.insert(name.to_string(), serde_json::json!(ok));
     }
-    results.insert("provider_endpoints".into(), serde_json::Value::Object(endpoints));
+    results.insert(
+        "provider_endpoints".into(),
+        serde_json::Value::Object(endpoints),
+    );
 
     Ok(serde_json::Value::Object(results))
 }

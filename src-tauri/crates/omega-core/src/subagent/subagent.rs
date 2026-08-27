@@ -120,13 +120,16 @@ impl Subagent {
                     name: None,
                 };
             } else {
-                messages.insert(0, ChatMessage {
-                    role: "system".to_string(),
-                    content: Self::system_prompt(&self.config),
-                    tool_calls: None,
-                    tool_call_id: None,
-                    name: None,
-                });
+                messages.insert(
+                    0,
+                    ChatMessage {
+                        role: "system".to_string(),
+                        content: Self::system_prompt(&self.config),
+                        tool_calls: None,
+                        tool_call_id: None,
+                        name: None,
+                    },
+                );
             }
         }
 
@@ -157,13 +160,18 @@ impl Subagent {
             let state = state;
             let tc = tc.clone();
             async move {
-                let args = serde_json::from_str(&tc.function.arguments)
-                    .map_err(|e| format!("Failed to parse arguments for `{}`: {}", tc.function.name, e))?;
+                let args = serde_json::from_str(&tc.function.arguments).map_err(|e| {
+                    format!(
+                        "Failed to parse arguments for `{}`: {}",
+                        tc.function.name, e
+                    )
+                })?;
                 let tool_request = crate::commands::tools::ToolRequest {
                     tool: tc.function.name.clone(),
                     args,
                 };
-                let result = crate::commands::tools::execute_tool_inner(state, tool_request).await?;
+                let result =
+                    crate::commands::tools::execute_tool_inner(state, tool_request).await?;
                 Ok::<String, String>(result.output)
             }
         };
@@ -198,7 +206,8 @@ impl Subagent {
             {
                 let store = state.memory_store.lock_guard();
                 let user_msg = self.config.task.clone();
-                let _assembled = context_manager.prepare(&mut assembled_messages, Some(&*store), &user_msg)
+                let _assembled = context_manager
+                    .prepare(&mut assembled_messages, Some(&*store), &user_msg)
                     .map_err(|e| format!("subagent context preparation failed: {}", e))?;
                 // Use the assembled context (repo-map + memory injected, compaction applied)
                 std::mem::swap(&mut assembled_messages, &mut messages);
@@ -213,7 +222,11 @@ impl Subagent {
                 messages: messages.clone(),
                 config: provider_config.clone(),
                 stream: false,
-                tools: if available_tools.is_empty() { None } else { Some(available_tools.clone()) },
+                tools: if available_tools.is_empty() {
+                    None
+                } else {
+                    Some(available_tools.clone())
+                },
             };
 
             let response = provider.chat(chat_request).await?;
@@ -234,7 +247,8 @@ impl Subagent {
                     match result {
                         Ok(output) => {
                             // Track file-changing tools for the summary
-                            if matches!(tc.function.name.as_str(), "write" | "edit" | "git_commit") {
+                            if matches!(tc.function.name.as_str(), "write" | "edit" | "git_commit")
+                            {
                                 files_changed.push(tc.function.name.clone());
                             }
 

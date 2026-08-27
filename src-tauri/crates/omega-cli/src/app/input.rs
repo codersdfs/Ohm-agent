@@ -50,10 +50,13 @@ impl App {
                     self.config = new_config.clone();
                     save_config(&self.config);
                     save_api_key(self.config.api_key.as_deref());
-                    self.transcript.add_notice(format!(
+                    self.transcript.add_notice(
+                        format!(
                             "Provider set to {} ({})",
                             self.config.model, self.config.kind
-                        ), false);
+                        ),
+                        false,
+                    );
                     self.show_provider_panel = false;
                 }
                 omega_core::tui::provider_panel::PanelAction::Close => {
@@ -66,10 +69,8 @@ impl App {
 
         // Command palette takes over key handling
         if self.show_command_palette {
-            let action = omega_core::tui::command_palette::handle_key(
-                &mut self.command_palette,
-                key,
-            );
+            let action =
+                omega_core::tui::command_palette::handle_key(&mut self.command_palette, key);
             match action {
                 omega_core::tui::command_palette::PaletteAction::Select(id) => {
                     self.command_palette.close();
@@ -151,7 +152,8 @@ impl App {
 
     /// Cancel the current streaming request.
     pub fn cancel_streaming(&mut self) {
-        self.cancel_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.cancel_flag
+            .store(true, std::sync::atomic::Ordering::SeqCst);
 
         // Drop the receiver so the streaming task's tx.send() fails
         self.transcript.drop_stream_rx();
@@ -261,13 +263,16 @@ impl App {
 
     /// Read a file by path, or fall back to the editor buffer if path is empty.
     /// Returns Ok((path_display, content)) or Err with an error message.
-    pub fn read_file_or_buffer(&self, cmd: &str, prefix: &str) -> anyhow::Result<(String, String), String> {
+    pub fn read_file_or_buffer(
+        &self,
+        cmd: &str,
+        prefix: &str,
+    ) -> anyhow::Result<(String, String), String> {
         let path = cmd.trim_start_matches(prefix).trim();
         let content = if path.is_empty() {
             self.editor.buffer.clone()
         } else {
-            std::fs::read_to_string(path)
-                .map_err(|e| format!("Failed to read {path}: {e}"))?
+            std::fs::read_to_string(path).map_err(|e| format!("Failed to read {path}: {e}"))?
         };
         if content.is_empty() {
             return Err("File is empty".into());

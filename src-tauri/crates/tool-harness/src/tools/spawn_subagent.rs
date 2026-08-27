@@ -1,9 +1,11 @@
-use crate::metadata::{ToolCategory, ToolMetadata, LatencyHint};
-use crate::{Tool, ToolError, ToolInput, ToolResult, ToolUseContext, PermissionResult};
+use crate::metadata::{LatencyHint, ToolCategory, ToolMetadata};
+use crate::{PermissionResult, Tool, ToolError, ToolInput, ToolResult, ToolUseContext};
 use async_trait::async_trait;
 
 #[allow(dead_code)]
-#[deprecated(note = "subagent spawning is handled via the chat.rs interception path — see F-t-harness-02")]
+#[deprecated(
+    note = "subagent spawning is handled via the chat.rs interception path — see F-t-harness-02"
+)]
 pub(crate) struct SpawnSubagentTool;
 
 #[allow(dead_code, deprecated)]
@@ -125,8 +127,14 @@ impl Tool for SpawnSubagentTool {
         // Full implementation would fork context and run the agent loop via omega-core
         let result_msg = format!(
             "Subagent spawned: task={}, token_budget={}, max_turns={}, tools={}",
-            task, token_budget, max_turns,
-            if tool_whitelist.is_empty() { "all".to_string() } else { tool_whitelist.join(", ") }
+            task,
+            token_budget,
+            max_turns,
+            if tool_whitelist.is_empty() {
+                "all".to_string()
+            } else {
+                tool_whitelist.join(", ")
+            }
         );
         Ok(ToolResult::success(result_msg))
     }

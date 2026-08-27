@@ -98,7 +98,10 @@ impl MemoryStore {
 
     /// Create a MemoryStore with a custom embedding engine.
     /// Use this to inject an `ONNXEmbeddingEngine` or any other `Embedder`.
-    pub fn with_embedder(db_path: &str, embedder: Box<dyn crate::embed::Embedder + Send + Sync>) -> Result<Self, String> {
+    pub fn with_embedder(
+        db_path: &str,
+        embedder: Box<dyn crate::embed::Embedder + Send + Sync>,
+    ) -> Result<Self, String> {
         let conn =
             Connection::open(db_path).map_err(|e| format!("Failed to open memory db: {}", e))?;
 
@@ -128,7 +131,10 @@ impl MemoryStore {
             END;"
         ).map_err(|e| format!("Failed to initialize memory schema: {}", e))?;
 
-        Ok(Self { conn, embedding: embedder })
+        Ok(Self {
+            conn,
+            embedding: embedder,
+        })
     }
 
     /// Store a memory entry. Generates embedding and persists to SQLite.
@@ -210,7 +216,9 @@ impl MemoryStore {
                     Some(l) => {
                         self.search_scan(Some(l), limit, &query_vec, &mut entries, &mut relevances)
                     }
-                    None => self.search_scan(None, limit, &query_vec, &mut entries, &mut relevances),
+                    None => {
+                        self.search_scan(None, limit, &query_vec, &mut entries, &mut relevances)
+                    }
                 }
             }
             Ok(true) => {}
@@ -483,7 +491,9 @@ mod tests {
         let store = test_store()?;
         store.store(MemoryLayer::Session, "key1", "hello world")?;
         // Drop the FTS5 virtual table so the FTS query will error.
-        store.conn.execute("DROP TABLE memory_fts", [])
+        store
+            .conn
+            .execute("DROP TABLE memory_fts", [])
             .map_err(|e| format!("Failed to drop fts table: {}", e))?;
         // FTS error must propagate out of search() rather than silently falling back.
         let result = store.search("hello", Some("session"), 10);

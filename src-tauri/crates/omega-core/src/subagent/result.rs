@@ -29,7 +29,11 @@ pub struct SubagentResult {
 }
 
 impl SubagentResult {
-    pub fn completed(summary: impl Into<String>, gate_score: Option<f64>, files_changed: Vec<String>) -> Self {
+    pub fn completed(
+        summary: impl Into<String>,
+        gate_score: Option<f64>,
+        files_changed: Vec<String>,
+    ) -> Self {
         Self {
             summary: Some(summary.into()),
             outcome: RunOutcome::Completed,

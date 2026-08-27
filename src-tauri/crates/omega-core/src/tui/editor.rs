@@ -116,7 +116,6 @@ impl EditorState {
         self.cursor += 1;
     }
 
-
     /// Paste text at the cursor; leaves the cursor at the end of the inserted
     /// text so subsequent typing appends after the block.
     pub fn paste_text(&mut self, s: &str) {
@@ -321,7 +320,10 @@ mod tests {
         ed.insert_char('h');
 
         // A genuine Enter (no SHIFT) is the only path that submits.
-        assert_eq!(ed.handle_key(key(KeyCode::Enter, false)), Action::SendMessage);
+        assert_eq!(
+            ed.handle_key(key(KeyCode::Enter, false)),
+            Action::SendMessage
+        );
 
         // Shift+Enter keeps editing: inserts a newline, no send.
         assert_eq!(ed.handle_key(key(KeyCode::Enter, true)), Action::Noop);

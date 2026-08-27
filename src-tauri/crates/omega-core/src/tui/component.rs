@@ -21,7 +21,11 @@ pub enum UiStreamEvent {
     },
     Error(String),
     /// Permission request received - show dialog.
-    PermissionRequest { prompt: String, options: Vec<String>, default_idx: usize },
+    PermissionRequest {
+        prompt: String,
+        options: Vec<String>,
+        default_idx: usize,
+    },
     /// User response to a permission request (true = allow, false = deny).
     PermissionResponse(bool),
     /// Permission dialog was cancelled (e.g., ESC).
@@ -63,7 +67,11 @@ pub enum Action {
     /// Streaming finished with an error.
     StreamError,
     /// Permission request received - show dialog.
-    PermissionRequest { prompt: String, options: Vec<String>, default_idx: usize },
+    PermissionRequest {
+        prompt: String,
+        options: Vec<String>,
+        default_idx: usize,
+    },
     /// User selected permission option (index of choice).
     PermissionResponse(usize),
     /// Permission dialog was cancelled (e.g., ESC).

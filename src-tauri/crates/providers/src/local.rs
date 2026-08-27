@@ -15,7 +15,9 @@ impl LocalProvider {
 
 #[async_trait::async_trait]
 impl LlmProvider for LocalProvider {
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, String> {
         self.inner.chat(request).await
     }

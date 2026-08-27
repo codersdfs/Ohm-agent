@@ -42,7 +42,9 @@ pub fn analyze_file(content: &str, lang: &Language) -> Vec<FunctionMetric> {
 pub fn get_ts_language(lang: &Language) -> Option<TSLanguage> {
     match lang {
         Language::Rust => Some(tree_sitter_rust::language()),
-        Language::TypeScript | Language::TypeScriptReact => Some(tree_sitter_typescript::language_typescript()),
+        Language::TypeScript | Language::TypeScriptReact => {
+            Some(tree_sitter_typescript::language_typescript())
+        }
         Language::JavaScript => Some(tree_sitter_typescript::language_typescript()),
         Language::Python => Some(tree_sitter_python::language()),
         _ => None,
@@ -80,7 +82,12 @@ fn collect_functions(node: Node, source: &[u8], metrics: &mut Vec<FunctionMetric
 fn is_function_kind(kind: &str) -> bool {
     matches!(
         kind,
-        "function_definition" | "function_declaration" | "arrow_function" | "method_definition" | "fn_item" | "function_item"
+        "function_definition"
+            | "function_declaration"
+            | "arrow_function"
+            | "method_definition"
+            | "fn_item"
+            | "function_item"
     )
 }
 
@@ -104,13 +111,15 @@ fn get_function_name(node: &Node, source: &[u8]) -> Option<String> {
         }
         "method_definition" => {
             // TypeScript: class { method() { ... } }
-            node.child_by_field_name("name").and_then(|n| n.utf8_text(source).ok().map(|s| s.to_string()))
+            node.child_by_field_name("name")
+                .and_then(|n| n.utf8_text(source).ok().map(|s| s.to_string()))
         }
         "arrow_function" => {
             // Arrow functions may not have names; try parent
             node.parent().and_then(|p| {
                 if p.kind() == "variable_declarator" {
-                    p.child_by_field_name("name").and_then(|n| n.utf8_text(source).ok().map(|s| s.to_string()))
+                    p.child_by_field_name("name")
+                        .and_then(|n| n.utf8_text(source).ok().map(|s| s.to_string()))
                 } else {
                     None
                 }
@@ -214,7 +223,11 @@ fn complex(a: i32, b: i32) -> i32 {
 "#;
         let metrics = analyze_file(content, &Language::Rust);
         let complex_fn = metrics.iter().find(|m| m.name == "complex").unwrap();
-        assert!(complex_fn.cyclomatic_complexity >= 3, "complexity should be >= 3, got {}", complex_fn.cyclomatic_complexity);
+        assert!(
+            complex_fn.cyclomatic_complexity >= 3,
+            "complexity should be >= 3, got {}",
+            complex_fn.cyclomatic_complexity
+        );
     }
 
     #[test]

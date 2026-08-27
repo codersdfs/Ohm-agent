@@ -3,8 +3,8 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use super::state::ToolCallState;
 use super::shell::fit_to_width;
+use super::state::ToolCallState;
 use super::toolbox::{MAX_RETAINED_SOURCE_LINES, MAX_SOURCE_COLUMNS};
 use crate::tui::theme;
 

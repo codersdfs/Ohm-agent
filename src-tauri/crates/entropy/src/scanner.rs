@@ -22,7 +22,13 @@ impl DriftScanner {
                 if path.is_dir() && !path.to_string_lossy().starts_with('.') {
                     let domain_name = path.file_name().unwrap().to_string_lossy().to_string();
                     let (drift, violations) = scan_domain(&path, &mut engine, &lang);
-                    let priority = if drift > 50.0 { 1 } else if drift > 20.0 { 2 } else { 3 };
+                    let priority = if drift > 50.0 {
+                        1
+                    } else if drift > 20.0 {
+                        2
+                    } else {
+                        3
+                    };
                     domains.push(DomainScore {
                         name: domain_name,
                         drift,
@@ -33,11 +39,18 @@ impl DriftScanner {
             }
         }
 
-        let (root_drift, root_violations) = scan_domain(Path::new(project_root), &mut engine, &lang);
+        let (root_drift, root_violations) =
+            scan_domain(Path::new(project_root), &mut engine, &lang);
         domains.push(DomainScore {
             name: "root".to_string(),
             drift: root_drift,
-            priority: if root_drift > 50.0 { 1 } else if root_drift > 20.0 { 2 } else { 3 },
+            priority: if root_drift > 50.0 {
+                1
+            } else if root_drift > 20.0 {
+                2
+            } else {
+                3
+            },
             violations: root_violations as usize,
         });
 
@@ -103,7 +116,10 @@ mod tests {
     async fn scan_detects_drift_in_project() {
         let scanner = DriftScanner::new();
         let report = scanner.scan(".").await.unwrap();
-        assert!(!report.domains.is_empty(), "Should detect at least one domain");
+        assert!(
+            !report.domains.is_empty(),
+            "Should detect at least one domain"
+        );
     }
 
     #[test]

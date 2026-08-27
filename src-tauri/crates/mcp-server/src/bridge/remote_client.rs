@@ -63,7 +63,11 @@ impl RemoteMcpClient {
 
         match &self.config.transport {
             TransportType::Http | TransportType::HttpSse => {
-                let url = self.config.url.as_ref().ok_or("No URL configured for HTTP transport")?;
+                let url = self
+                    .config
+                    .url
+                    .as_ref()
+                    .ok_or("No URL configured for HTTP transport")?;
                 log::info!("Connecting to remote MCP server at {url}");
 
                 let transport = match JsonRpcTransport::new(url) {
@@ -77,22 +81,32 @@ impl RemoteMcpClient {
                 *self.transport.write().await = Some(transport);
 
                 // Do initialize handshake
-                let result = self.send_request("initialize", Some(serde_json::json!({
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {},
-                    "clientInfo": {
-                        "name": "omega-mcp-bridge",
-                        "version": "0.1.0"
-                    }
-                }))).await;
+                let result = self
+                    .send_request(
+                        "initialize",
+                        Some(serde_json::json!({
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": {},
+                            "clientInfo": {
+                                "name": "omega-mcp-bridge",
+                                "version": "0.1.0"
+                            }
+                        })),
+                    )
+                    .await;
 
                 match result {
                     Ok(response) => {
                         // Handle successful initialization
                         if let Some(err) = response.error {
-                            *self.status.write().await =
-                                ConnectionStatus::Failed(format!("Initialize error: {} (code {})", err.message, err.code));
-                            return Err(format!("Remote server {} initialize failed: {}", self.config.name, err.message));
+                            *self.status.write().await = ConnectionStatus::Failed(format!(
+                                "Initialize error: {} (code {})",
+                                err.message, err.code
+                            ));
+                            return Err(format!(
+                                "Remote server {} initialize failed: {}",
+                                self.config.name, err.message
+                            ));
                         }
 
                         // Extract server info
@@ -139,7 +153,10 @@ impl RemoteMcpClient {
         let response = self.send_request("tools/list", None).await?;
 
         if let Some(err) = response.error {
-            return Err(format!("tools/list error: {} (code {})", err.message, err.code));
+            return Err(format!(
+                "tools/list error: {} (code {})",
+                err.message, err.code
+            ));
         }
 
         let tools_list = response
@@ -154,8 +171,13 @@ impl RemoteMcpClient {
         let mut remote_tools = Vec::new();
         for tool_val in tools_list {
             let name = tool_val.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            let description = tool_val.get("description").and_then(|v| v.as_str()).unwrap_or("");
-            let input_schema = tool_val.get("inputSchema").cloned()
+            let description = tool_val
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let input_schema = tool_val
+                .get("inputSchema")
+                .cloned()
                 .unwrap_or_else(|| serde_json::json!({"type":"object","properties":{}}));
 
             // Apply allow/deny filters
@@ -203,7 +225,11 @@ impl RemoteMcpClient {
     }
 
     /// Call a tool on the remote server
-    pub async fn call_tool(&self, remote_name: &str, arguments: serde_json::Value) -> Result<CallToolResult, String> {
+    pub async fn call_tool(
+        &self,
+        remote_name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<CallToolResult, String> {
         let params = serde_json::json!({
             "name": remote_name,
             "arguments": arguments,
@@ -219,7 +245,9 @@ impl RemoteMcpClient {
         }
 
         // Parse the response into CallToolResult
-        let result = response.result.unwrap_or(serde_json::json!({"content": []}));
+        let result = response
+            .result
+            .unwrap_or(serde_json::json!({"content": []}));
         let call_result: CallToolResult = serde_json::from_value(result)
             .map_err(|e| format!("Failed to parse tool result: {e}"))?;
 
@@ -284,7 +312,8 @@ impl RemoteMcpClient {
                 ConnectionStatus::Connected => return Ok(()),
                 ConnectionStatus::Disconnected | ConnectionStatus::Failed(_) => {
                     if attempt > 0 {
-                        tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64)).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64))
+                            .await;
                     }
                     self.connect().await?;
                 }
@@ -294,7 +323,10 @@ impl RemoteMcpClient {
                 }
             }
         }
-        Err(format!("Failed to connect to '{}' after 5 attempts", self.config.name))
+        Err(format!(
+            "Failed to connect to '{}' after 5 attempts",
+            self.config.name
+        ))
     }
 }
 
@@ -332,7 +364,10 @@ mod tests {
         config.timeout_seconds = 2;
         let client = RemoteMcpClient::new(config);
         let result = client.connect().await;
-        assert!(result.is_err(), "Connecting to nonexistent server should fail");
+        assert!(
+            result.is_err(),
+            "Connecting to nonexistent server should fail"
+        );
     }
 
     #[test]

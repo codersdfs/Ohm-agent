@@ -80,7 +80,11 @@ impl ContextManager {
         }
         let mut map = self.repo_map.lock().unwrap();
         let count = map.index_repo(&self.workspace_root)?;
-        log::debug!("repo-map indexed {} files under {:?}", count, self.workspace_root);
+        log::debug!(
+            "repo-map indexed {} files under {:?}",
+            count,
+            self.workspace_root
+        );
         *built = true;
         Ok(())
     }
@@ -183,7 +187,11 @@ impl ContextManager {
 /// Insert `content` as a system message immediately after the base system
 /// prompt (index 0 when present, else at index 0).
 fn insert_system_after_base(messages: &mut Vec<ChatMessage>, content: &str) {
-    let insert_idx = if messages.first().map(|m| m.role == "system").unwrap_or(false) {
+    let insert_idx = if messages
+        .first()
+        .map(|m| m.role == "system")
+        .unwrap_or(false)
+    {
         1
     } else {
         0
@@ -221,7 +229,11 @@ mod tests {
 
         let store = memory::MemoryStore::new(":memory:").unwrap();
         store
-            .store(memory::MemoryLayer::Project, "ctx_key", "login uses alpha tokens")
+            .store(
+                memory::MemoryLayer::Project,
+                "ctx_key",
+                "login uses alpha tokens",
+            )
             .unwrap();
 
         let cm = ContextManager::new(temp.path(), 128_000, "gpt-4o", 6);
@@ -230,7 +242,10 @@ mod tests {
             .prepare(&mut messages, Some(&store), "do alpha login")
             .unwrap();
 
-        assert!(assembled.repo_map.contains("alpha"), "repo map missing alpha");
+        assert!(
+            assembled.repo_map.contains("alpha"),
+            "repo map missing alpha"
+        );
         assert!(assembled.memory.contains("ctx_key"), "memory missing");
         assert!(assembled.total_tokens > 0);
         // Base system + repo-map + memory + user.
@@ -255,7 +270,10 @@ mod tests {
         for i in 0..60 {
             messages.push(msg(
                 "user",
-                &format!("long question number {} with plenty of padding text here", i),
+                &format!(
+                    "long question number {} with plenty of padding text here",
+                    i
+                ),
             ));
             messages.push(msg(
                 "assistant",

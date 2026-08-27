@@ -109,10 +109,7 @@ pub fn render(
         if remaining >= seg_height {
             remaining -= seg_height;
             // Skip separator rows if they exist (2 rows per separator)
-            if i + 1 < segments.len()
-                && segments[i + 1].bg.is_some()
-                && seg.bg.is_some()
-            {
+            if i + 1 < segments.len() && segments[i + 1].bg.is_some() && seg.bg.is_some() {
                 if remaining >= 2 {
                     remaining -= 2;
                 } else {
@@ -135,12 +132,7 @@ pub fn render(
             } else {
                 content_count.min(available)
             };
-            let render_area = Rect::new(
-                area.x,
-                area.y + y as u16,
-                area.width,
-                render_count as u16,
-            );
+            let render_area = Rect::new(area.x, area.y + y as u16, area.width, render_count as u16);
 
             if let Some(bg) = seg.bg {
                 // User card: fill the full render area with the card background
@@ -162,13 +154,17 @@ pub fn render(
                     (pad_v_top_desired, pad_v_bottom_desired)
                 } else if render_area.height > 2 {
                     let pad_v_top = (render_area.height / 3).max(1);
-                    let pad_v_bottom = render_area.height.saturating_sub(pad_v_top).saturating_sub(1);
+                    let pad_v_bottom = render_area
+                        .height
+                        .saturating_sub(pad_v_top)
+                        .saturating_sub(1);
                     (pad_v_top, pad_v_bottom)
                 } else {
                     (0u16, 0u16)
                 };
 
-                let text_area_height = render_area.height
+                let text_area_height = render_area
+                    .height
                     .saturating_sub(pad_v_top)
                     .saturating_sub(pad_v_bottom)
                     .max(1);
@@ -219,7 +215,8 @@ pub fn render(
                     break;
                 }
                 for x in area.x..area.x + area.width {
-                    buf.get_mut(x, area.y + (y + row) as u16).set_bg(theme::USER_CARD_SEPARATOR);
+                    buf.get_mut(x, area.y + (y + row) as u16)
+                        .set_bg(theme::USER_CARD_SEPARATOR);
                 }
             }
             y += sep_rows;
@@ -240,7 +237,6 @@ pub fn fill_area_buf(buf: &mut Buffer, area: Rect, color: Color) {
         }
     }
 }
-
 
 /// Scroll up by `delta` lines.
 pub fn scroll_up(scroll: &mut ScrollState, delta: usize) {

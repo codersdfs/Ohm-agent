@@ -38,12 +38,7 @@ impl<T> FilteredList<T> {
     /// - `query`: The search query (already trimmed by caller if needed).
     /// - `rank`: A closure that returns `Some(score)` if the item matches,
     ///   or `None` if it doesn't. Higher scores rank higher.
-    pub fn recompute(
-        &mut self,
-        items: &[T],
-        query: &str,
-        rank: impl Fn(&T, &str) -> Option<i32>,
-    ) {
+    pub fn recompute(&mut self, items: &[T], query: &str, rank: impl Fn(&T, &str) -> Option<i32>) {
         let q = query.trim();
 
         let mut ranked: Vec<(usize, i32)> = items
@@ -191,7 +186,11 @@ mod tests {
 
     #[test]
     fn empty_query_returns_all() {
-        let items = vec!["apple".to_string(), "banana".to_string(), "cherry".to_string()];
+        let items = vec![
+            "apple".to_string(),
+            "banana".to_string(),
+            "cherry".to_string(),
+        ];
         let mut list = FilteredList::<String>::new();
         list.recompute(&items, "", rank_contains);
         assert_eq!(list.filtered, vec![0, 1, 2]);
@@ -200,7 +199,11 @@ mod tests {
 
     #[test]
     fn filter_substring() {
-        let items = vec!["apple".to_string(), "banana".to_string(), "cherry".to_string()];
+        let items = vec![
+            "apple".to_string(),
+            "banana".to_string(),
+            "cherry".to_string(),
+        ];
         let mut list = FilteredList::<String>::new();
         list.recompute(&items, "an", rank_contains);
         assert_eq!(list.filtered, vec![1]); // "banana"
@@ -232,7 +235,12 @@ mod tests {
 
     #[test]
     fn selection_clamps_when_filter_shrinks() {
-        let items = vec!["a".to_string(), "b".to_string(), "c".to_string(), "d".to_string()];
+        let items = vec![
+            "a".to_string(),
+            "b".to_string(),
+            "c".to_string(),
+            "d".to_string(),
+        ];
         let mut list = FilteredList::<String>::new();
         list.recompute(&items, "", rank_contains);
         list.selected = 3; // last item
@@ -243,7 +251,11 @@ mod tests {
 
     #[test]
     fn preferred_item_selected_if_in_filtered() {
-        let items = vec!["apple".to_string(), "banana".to_string(), "cherry".to_string()];
+        let items = vec![
+            "apple".to_string(),
+            "banana".to_string(),
+            "cherry".to_string(),
+        ];
         let mut list = FilteredList::<String>::new();
         list.recompute(&items, "", rank_contains);
         list.selected = 0; // "apple"
@@ -255,7 +267,11 @@ mod tests {
 
     #[test]
     fn preferred_item_selected_after_recompute() {
-        let items = vec!["apple".to_string(), "banana".to_string(), "cherry".to_string()];
+        let items = vec![
+            "apple".to_string(),
+            "banana".to_string(),
+            "cherry".to_string(),
+        ];
         let mut list = FilteredList::<String>::new();
         list.recompute(&items, "", rank_contains);
         list.selected = 0; // "apple"

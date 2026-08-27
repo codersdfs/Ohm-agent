@@ -56,14 +56,22 @@ impl Tool for GitCommitTool {
             name: "git_commit".into(),
             label: "Git Commit".into(),
             description: "Stage files and create a git commit".into(),
-            doc: Some("Creates a git commit with the specified message.
+            doc: Some(
+                "Creates a git commit with the specified message.
 - files: list of file paths to stage (if empty, stages all changes)
 - skipHooks: skip git hooks (only allowed in strict permission mode)
 - Returns the commit hash on success
-Never uses --no-verify unless skipHooks=true AND permission mode allows it.".into()),
+Never uses --no-verify unless skipHooks=true AND permission mode allows it."
+                    .into(),
+            ),
             category: ToolCategory::System,
             subcategory: Some("git".into()),
-            tags: vec!["git".into(), "commit".into(), "scm".into(), "version-control".into()],
+            tags: vec![
+                "git".into(),
+                "commit".into(),
+                "scm".into(),
+                "version-control".into(),
+            ],
             parameters: schema.clone(),
             param_summaries: ToolMetadata::extract_param_summaries(&schema),
             read_only: false,
@@ -82,13 +90,18 @@ Never uses --no-verify unless skipHooks=true AND permission mode allows it.".int
                     kind: "not_a_repo".into(),
                     description: "The specified path is not a git repository".into(),
                     recoverable: true,
-                    retry_advice: Some("Run in a git repository or provide a valid repoPath".into()),
+                    retry_advice: Some(
+                        "Run in a git repository or provide a valid repoPath".into(),
+                    ),
                 },
                 ToolErrorSpec {
                     kind: "hooks_skipped".into(),
-                    description: "skipHooks was requested but permission mode does not allow it".into(),
+                    description: "skipHooks was requested but permission mode does not allow it"
+                        .into(),
                     recoverable: true,
-                    retry_advice: Some("Use default mode or get explicit permission to skip hooks".into()),
+                    retry_advice: Some(
+                        "Use default mode or get explicit permission to skip hooks".into(),
+                    ),
                 },
             ],
             examples: vec![
@@ -110,7 +123,10 @@ Never uses --no-verify unless skipHooks=true AND permission mode allows it.".int
                     expected_result: None,
                 },
             ],
-            cost_hint: Some(CostHint { tokens_per_call: 50, category: CostCategory::Free }),
+            cost_hint: Some(CostHint {
+                tokens_per_call: 50,
+                category: CostCategory::Free,
+            }),
             version: "1.0.0".into(),
             deprecation: None,
             source: ToolSource::Builtin,
@@ -188,7 +204,10 @@ Never uses --no-verify unless skipHooks=true AND permission mode allows it.".int
                     "Nothing to commit — no staged changes".to_string(),
                 ))
             } else {
-                Err(ToolError::new(format!("git commit failed: {}", stderr.trim())))
+                Err(ToolError::new(format!(
+                    "git commit failed: {}",
+                    stderr.trim()
+                )))
             }
         }
     }

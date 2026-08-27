@@ -14,14 +14,14 @@ pub mod taste;
 pub mod tree_sitter_metrics;
 
 // Public types re-exported from submodules
-pub use violation::{Violation, ViolationCategory, GateResult};
 pub use engine::GateEngine;
 pub use language::Language;
 pub use taste::TasteCheck;
+pub use violation::{GateResult, Violation, ViolationCategory};
 
 // Internal submodules
-mod violation;
 mod language;
+mod violation;
 
 #[cfg(feature = "taste-system")]
 pub mod taste_integration;

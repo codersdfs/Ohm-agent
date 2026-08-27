@@ -1,3 +1,5 @@
+use super::Language;
+use super::Violation;
 use crate::golden::GoldenRules;
 use crate::repeated::{self as repeated_checks, RepeatedPatternTracker};
 use crate::rules::RulesDatabase;
@@ -5,8 +7,6 @@ use crate::scoring;
 use crate::structural::StructuralCheck;
 use crate::taste::TasteCheck;
 use crate::GateResult;
-use super::Language;
-use super::Violation;
 
 /// Unified Gate engine that runs all check types and returns aggregated results.
 pub struct GateEngine {
@@ -72,11 +72,21 @@ impl GateEngine {
             let violations = crate::external::run_clippy(&self.project_root);
             all_violations.extend(violations.into_iter().map(|v| v.to_violation()));
         }
-        if config.eslint_enabled && matches!(self.language, Language::TypeScript | Language::TypeScriptReact | Language::JavaScript) {
+        if config.eslint_enabled
+            && matches!(
+                self.language,
+                Language::TypeScript | Language::TypeScriptReact | Language::JavaScript
+            )
+        {
             let violations = crate::external::run_eslint(&self.project_root);
             all_violations.extend(violations.into_iter().map(|v| v.to_violation()));
         }
-        if config.tsc_enabled && matches!(self.language, Language::TypeScript | Language::TypeScriptReact) {
+        if config.tsc_enabled
+            && matches!(
+                self.language,
+                Language::TypeScript | Language::TypeScriptReact
+            )
+        {
             let violations = crate::external::run_tsc(&self.project_root);
             all_violations.extend(violations.into_iter().map(|v| v.to_violation()));
         }
@@ -104,24 +114,33 @@ impl GateEngine {
 
     /// Run checks with taste agent enabled, applying learned preferences
     #[cfg(feature = "taste-system")]
-    async fn check_file_with_feedback_async(&mut self, path: &str, content: &str, feedback: Option<::taste::TasteFeedback>) -> GateResult {
+    async fn check_file_with_feedback_async(
+        &mut self,
+        path: &str,
+        content: &str,
+        feedback: Option<::taste::TasteFeedback>,
+    ) -> GateResult {
         let mut result = self.check_file(path, content);
-        
+
         if let Some(agent) = self.taste_agent.as_ref() {
             // Convert violations for taste agent processing
-            let converted_violations: Vec<::taste::Violation> = result.violations.iter().map(|v| ::taste::Violation {
-                category: match v.category {
-                    ViolationCategory::Structural => ::taste::ViolationCategory::Structural,
-                    ViolationCategory::Taste => ::taste::ViolationCategory::Taste,
-                    ViolationCategory::Golden => ::taste::ViolationCategory::Golden,
-                    ViolationCategory::Repeated => ::taste::ViolationCategory::Repeated,
-                    ViolationCategory::External => ::taste::ViolationCategory::External,
-                },
-                message: v.message.clone(),
-                tool_hint: v.tool_hint.clone(),
-                line: v.line,
-            }).collect();
-            
+            let converted_violations: Vec<::taste::Violation> = result
+                .violations
+                .iter()
+                .map(|v| ::taste::Violation {
+                    category: match v.category {
+                        ViolationCategory::Structural => ::taste::ViolationCategory::Structural,
+                        ViolationCategory::Taste => ::taste::ViolationCategory::Taste,
+                        ViolationCategory::Golden => ::taste::ViolationCategory::Golden,
+                        ViolationCategory::Repeated => ::taste::ViolationCategory::Repeated,
+                        ViolationCategory::External => ::taste::ViolationCategory::External,
+                    },
+                    message: v.message.clone(),
+                    tool_hint: v.tool_hint.clone(),
+                    line: v.line,
+                })
+                .collect();
+
             let lang = match self.language {
                 Language::Rust => ::taste::Language::Rust,
                 Language::TypeScript => ::taste::Language::TypeScript,
@@ -133,12 +152,12 @@ impl GateEngine {
                 Language::Java => ::taste::Language::Java,
                 Language::Other(ref s) => ::taste::Language::Other(s.clone()),
             };
-            
+
             let base_score = result.score;
             let new_score = agent.apply_taste_score(base_score, &converted_violations, lang);
             result.score = new_score;
         }
-        
+
         result
     }
 

@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use ratatui::backend::CrosstermBackend;
 use ratata::prelude::*;
+use ratatui::backend::CrosstermBackend;
 
 use omega_core::session::SessionStore;
 
@@ -26,8 +26,8 @@ pub fn run_chat(
     let model = config.model.clone();
     let kind = config.kind.to_string();
 
-    let (session_store, session_load) = SessionStore::resolve(session, new_session)
-        .map_err(|e| anyhow::anyhow!("session: {e}"))?;
+    let (session_store, session_load) =
+        SessionStore::resolve(session, new_session).map_err(|e| anyhow::anyhow!("session: {e}"))?;
     let session_id = session_store.id.clone();
 
     let app = App::new(config, session_store, session_load);
@@ -95,13 +95,12 @@ pub fn run_mcp_server(port: u16, host: String, auth_token: Option<String>) -> Re
 
         // Build the MCP server with tool harness
         let registry = tool_harness::tools::default_tool_registry();
-        let server = Arc::new(
-            mcp_server::McpServer::new()
-                .with_tool_registry(registry),
-        );
+        let server = Arc::new(mcp_server::McpServer::new().with_tool_registry(registry));
 
         // Start serving — pass shutdown signal for graceful drain
-        let serve = transport.serve(server, mcp_server::transport::http::shutdown_signal()).await
+        let serve = transport
+            .serve(server, mcp_server::transport::http::shutdown_signal())
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to start MCP server: {e}"))?;
 
         // Wait for shutdown signal (Ctrl+C / SIGTERM), then drain
@@ -155,7 +154,7 @@ mod tests {
         // Use a temp dir to avoid system config with existing .env
         let dir = tempfile::tempdir().unwrap();
         let config = load_provider_config_inner(None, None, None, None, None, dir.path());
-        
+
         // No API key → Local provider
         assert!(matches!(config.kind, providers::ProviderKind::Local));
         assert_eq!(config.max_tokens, 4096);

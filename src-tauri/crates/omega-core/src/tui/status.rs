@@ -4,7 +4,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
-use super::spinner::{CompactOmega, OmegaSpinner, SpinnerState};
+use super::spinner::{OmegaSpinner, SpinnerState};
 use super::theme;
 
 /// Status line state — what to show in the single-line footer.
@@ -78,6 +78,16 @@ impl StatusState {
             Self::format_tokens(tokens_out),
         )
     }
+
+    /// Compact header usage: `12.3k in / 4.5k out` (flat codex-alike header).
+    /// One decimal only when needed; integral counts stay raw below 1000.
+    pub fn format_usage_compact(tokens_in: u64, tokens_out: u64) -> String {
+        format!(
+            "{} in / {} out",
+            Self::format_tokens(tokens_in),
+            Self::format_tokens(tokens_out)
+        )
+    }
 } // end impl StatusState
 
 impl Widget for &StatusState {
@@ -131,6 +141,19 @@ mod tests {
         assert_eq!(
             StatusState::format_token_usage(1_200, 340),
             "input:↓1.2k  output:↑340"
+        );
+    }
+
+    #[test]
+    fn format_usage_compact_matches_header_format() {
+        assert_eq!(
+            StatusState::format_usage_compact(12_300, 4_500),
+            "12.3k in / 4.5k out"
+        );
+        assert_eq!(StatusState::format_usage_compact(0, 0), "0 in / 0 out");
+        assert_eq!(
+            StatusState::format_usage_compact(340, 42),
+            "340 in / 42 out"
         );
     }
 }

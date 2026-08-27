@@ -9,14 +9,9 @@ pub enum AuthConfig {
     /// No authentication
     None,
     /// Header-based auth (e.g., x-api-key)
-    Header {
-        name: String,
-        value: String,
-    },
+    Header { name: String, value: String },
     /// Bearer token
-    Bearer {
-        token: String,
-    },
+    Bearer { token: String },
 }
 
 impl Default for AuthConfig {
@@ -34,10 +29,7 @@ pub enum TransportType {
     /// HTTP + SSE streaming
     HttpSse,
     /// Local process via stdio
-    Stdio {
-        command: String,
-        args: Vec<String>,
-    },
+    Stdio { command: String, args: Vec<String> },
 }
 
 impl Default for TransportType {
@@ -185,13 +177,12 @@ mod tests {
 
     #[test]
     fn test_stdio_config() {
-        let config = RemoteServerConfig::stdio(
-            "local-server",
-            "node",
-            vec!["server.js".into()],
-        );
+        let config = RemoteServerConfig::stdio("local-server", "node", vec!["server.js".into()]);
         match config.transport {
-            TransportType::Stdio { ref command, ref args } => {
+            TransportType::Stdio {
+                ref command,
+                ref args,
+            } => {
                 assert_eq!(command, "node");
                 assert_eq!(args[0], "server.js");
             }

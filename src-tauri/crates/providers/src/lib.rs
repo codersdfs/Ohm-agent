@@ -66,7 +66,9 @@ pub fn create_provider(config: &ProviderConfig) -> Result<Box<dyn LlmProvider>, 
         ))),
         ProviderKind::Google => Ok(Box::new(openai::OpenAIProvider::new(
             api_key,
-            base_url.unwrap_or_else(|| "https://generativelanguage.googleapis.com/v1beta/openai".into()),
+            base_url.unwrap_or_else(|| {
+                "https://generativelanguage.googleapis.com/v1beta/openai".into()
+            }),
         ))),
         ProviderKind::Bedrock => Ok(Box::new(bedrock::BedrockProvider::new(config))),
         ProviderKind::Local => {
@@ -100,13 +102,19 @@ mod tests {
     #[test]
     fn create_provider_openai_routes_to_openai() {
         let p = create_provider(&config_for(ProviderKind::OpenAI)).unwrap();
-        assert!(p.as_any().downcast_ref::<openai::OpenAIProvider>().is_some());
+        assert!(p
+            .as_any()
+            .downcast_ref::<openai::OpenAIProvider>()
+            .is_some());
     }
 
     #[test]
     fn create_provider_anthropic_routes_to_anthropic() {
         let p = create_provider(&config_for(ProviderKind::Anthropic)).unwrap();
-        assert!(p.as_any().downcast_ref::<anthropic::AnthropicProvider>().is_some());
+        assert!(p
+            .as_any()
+            .downcast_ref::<anthropic::AnthropicProvider>()
+            .is_some());
     }
 
     #[test]
@@ -118,21 +126,30 @@ mod tests {
     #[test]
     fn create_provider_bedrock_routes_to_bedrock() {
         let p = create_provider(&config_for(ProviderKind::Bedrock)).unwrap();
-        assert!(p.as_any().downcast_ref::<bedrock::BedrockProvider>().is_some());
+        assert!(p
+            .as_any()
+            .downcast_ref::<bedrock::BedrockProvider>()
+            .is_some());
     }
 
     #[test]
     fn create_provider_google_routes_to_openai_compatible() {
         // Google should route through OpenAIProvider (not a separate GoogleProvider)
         let p = create_provider(&config_for(ProviderKind::Google)).unwrap();
-        assert!(p.as_any().downcast_ref::<openai::OpenAIProvider>().is_some());
+        assert!(p
+            .as_any()
+            .downcast_ref::<openai::OpenAIProvider>()
+            .is_some());
     }
 
     #[test]
     fn create_provider_bedrock_not_openai() {
         // Bedrock must NOT route through OpenAIProvider
         let p = create_provider(&config_for(ProviderKind::Bedrock)).unwrap();
-        assert!(p.as_any().downcast_ref::<openai::OpenAIProvider>().is_none());
+        assert!(p
+            .as_any()
+            .downcast_ref::<openai::OpenAIProvider>()
+            .is_none());
     }
 
     // ---- from_name ----
@@ -142,15 +159,29 @@ mod tests {
         for kind in ProviderKind::all() {
             let name = format!("{}", kind);
             let parsed = ProviderKind::from_name(&name).unwrap();
-            assert_eq!(format!("{}", parsed), name, "round-trip failed for {}", name);
+            assert_eq!(
+                format!("{}", parsed),
+                name,
+                "round-trip failed for {}",
+                name
+            );
         }
     }
 
     #[test]
     fn from_name_aliases() {
-        assert_eq!(ProviderKind::from_name("ollama").unwrap(), ProviderKind::Local);
-        assert_eq!(ProviderKind::from_name("openai-compatible").unwrap(), ProviderKind::Custom);
-        assert_eq!(ProviderKind::from_name("other").unwrap(), ProviderKind::Custom);
+        assert_eq!(
+            ProviderKind::from_name("ollama").unwrap(),
+            ProviderKind::Local
+        );
+        assert_eq!(
+            ProviderKind::from_name("openai-compatible").unwrap(),
+            ProviderKind::Custom
+        );
+        assert_eq!(
+            ProviderKind::from_name("other").unwrap(),
+            ProviderKind::Custom
+        );
     }
 
     #[test]
@@ -163,7 +194,10 @@ mod tests {
     #[test]
     fn from_str_trait_uses_from_name() {
         // std::str::FromStr delegates to from_name
-        assert_eq!("openai".parse::<ProviderKind>().unwrap(), ProviderKind::OpenAI);
+        assert_eq!(
+            "openai".parse::<ProviderKind>().unwrap(),
+            ProviderKind::OpenAI
+        );
         assert!("bogus".parse::<ProviderKind>().is_err());
     }
 

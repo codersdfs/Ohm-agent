@@ -163,7 +163,9 @@ pub static COMMANDS: &[CommandEntry] = &[
         label: "Search memory",
         aliases: &["/mem"],
         description: "Search Hermes memory",
-        keywords: &["memory", "hermes", "search", "remember", "session", "project", "user"],
+        keywords: &[
+            "memory", "hermes", "search", "remember", "session", "project", "user",
+        ],
         handler: CommandHandler::Memory,
     },
     CommandEntry {
@@ -198,7 +200,6 @@ pub static COMMANDS: &[CommandEntry] = &[
 pub fn lookup_command(cmd: &str) -> Option<&'static CommandEntry> {
     let normalized = cmd.to_lowercase();
     COMMANDS.iter().find(|entry| {
-        entry.id == normalized
-            || entry.aliases.iter().any(|alias| alias == &normalized)
+        entry.id == normalized || entry.aliases.iter().any(|alias| alias == &normalized)
     })
 }

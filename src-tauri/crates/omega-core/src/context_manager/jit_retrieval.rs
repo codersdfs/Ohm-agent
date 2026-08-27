@@ -51,12 +51,7 @@ impl JitRetriever {
                 continue;
             }
             let value: String = if entry.value.chars().count() > 500 {
-                entry
-                    .value
-                    .chars()
-                    .take(500)
-                    .collect::<String>()
-                    + "…[truncated]"
+                entry.value.chars().take(500).collect::<String>() + "…[truncated]"
             } else {
                 entry.value.clone()
             };
@@ -125,9 +120,7 @@ mod tests {
                 )
                 .unwrap();
         }
-        let jit = JitRetriever {
-            budget_tokens: 60,
-        };
+        let jit = JitRetriever { budget_tokens: 60 };
         let out = jit.retrieve(&store, "value");
         let approx = out.chars().count() / 4;
         assert!(

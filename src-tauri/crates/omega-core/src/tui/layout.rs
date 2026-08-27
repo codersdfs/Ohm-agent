@@ -3,12 +3,13 @@
 // struct (LayoutChrome). All rendering helpers are private — the interface is
 // narrow to concentrate layout decisions behind one seam.
 
-use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 use ratatui::Frame;
 
+use super::banner;
 use super::command_palette;
 use super::editor::EditorState;
 use super::help;
@@ -45,8 +46,9 @@ pub struct LayoutChrome<'a> {
     // ── Streaming / misc flags (Copy from App) ──
     pub is_streaming: bool,
     pub is_command_mode: bool,
-    pub session_messages: u64,
     pub anim_tick: u64,
+    /// Names of tools currently executing, for live header chips.
+    pub running_tools: Vec<String>,
 }
 
 /// Render the full TUI layout: chrome (bars, panels, editor) plus
@@ -67,10 +69,8 @@ pub fn render_full_layout(frame: &mut Frame, area: Rect, chrome: &mut LayoutChro
 
     // ── Full-screen background ───────────────────────────────────────────
     fill_area(frame, area, theme::BG);
-
-    // ── Layout: vertical stack ───────────────────────────────────────────
-    let top_bar_h = 1u16;
-    let metrics_h = 3u16;
+    // Flat codex-alike header: 3 rows (brand, provider+model, tokens+tools)
+    let header_h = 3u16;
     // Auto-grow the chat editor as input wraps; command mode keeps a taller
     // fixed panel. Overlong input collapses to a `[pasted N lines]` marker so
     // the panel never grows unboundedly or floods the transcript above.
@@ -89,27 +89,37 @@ pub fn render_full_layout(frame: &mut Frame, area: Rect, chrome: &mut LayoutChro
     let vert = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(top_bar_h),
-            Constraint::Length(metrics_h),
+            Constraint::Length(header_h),
             Constraint::Min(4),
             Constraint::Length(editor_h),
             Constraint::Length(status_h),
         ])
         .split(area);
 
-    // ── Top system bar ───────────────────────────────────────────────────
-    render_top_bar(frame, vert[0], chrome.model_name);
-
-    // ── Metrics panel ────────────────────────────────────────────────────
-    render_metrics_panel(frame, vert[1], chrome.config, chrome.is_streaming);
+    // ── Flat codex-alike header ──────────────────────────────────────────
+    render_flat_header(
+        frame,
+        vert[0],
+        chrome.config,
+        chrome.is_streaming,
+        chrome.running_tools.as_slice(),
+    );
 
     // ── Main process panel ───────────────────────────────────────────────
-    render_process_panel(frame, vert[2], chrome.transcript, chrome.show_help);
+    let splash_subtitle = format!("{} / {}", chrome.config.kind, chrome.model_name);
+    render_process_panel(
+        frame,
+        vert[1],
+        chrome.transcript,
+        chrome.show_help,
+        &splash_subtitle,
+        chrome.is_streaming,
+    );
 
     // ── Command panel ────────────────────────────────────────────────────
     render_command_panel(
         frame,
-        vert[3],
+        vert[2],
         chrome.editor,
         chrome.command_palette,
         chrome.is_command_mode,
@@ -117,14 +127,16 @@ pub fn render_full_layout(frame: &mut Frame, area: Rect, chrome: &mut LayoutChro
     );
     // ── Status bar ─────────────────────────────────────────────────────
     if chrome.is_streaming {
-        chrome.status.set_spinner_state(super::spinner::SpinnerState::Streaming);
+        chrome
+            .status
+            .set_spinner_state(super::spinner::SpinnerState::Streaming);
     } else {
-        chrome.status.set_spinner_state(super::spinner::SpinnerState::Idle);
+        chrome
+            .status
+            .set_spinner_state(super::spinner::SpinnerState::Idle);
     }
     chrome.status.tick_spinner();
-    Widget::render(&*chrome.status, vert[4], frame.buffer_mut());
-
-
+    Widget::render(&*chrome.status, vert[3], frame.buffer_mut());
 
     // ── Overlays ─────────────────────────────────────────────────────────
     if chrome.show_help {
@@ -146,248 +158,142 @@ fn fill_area(frame: &mut Frame, area: Rect, color: Color) {
     }
 }
 
-/// Render a glass-style bordered block: fills inner bg, draws box-drawing
-/// border, returns the inner area for content placement.
-fn render_glass_block(
+// ── Flat codex-alike header ──
+
+/// Render a flat, borderless header inspired by Codex-style CLIs.
+///
+/// Layout varies by terminal width:
+///   ≥80 cols: 3 rows (brand, provider/model, tokens + tools)
+///   40–79:   2 rows (brand, tokens + tools; model dropped)
+///   <40:     1 row  (brand only)
+fn render_flat_header(
     frame: &mut Frame,
     area: Rect,
-    inner_bg: Color,
-    border_color: Color,
-    title: &str,
-    title_color: Color,
-) -> Rect {
-    let inner_pad = 1u16;
-    let inner_area = if area.width > 2 && area.height > 2 {
-        Rect::new(
-            area.x + inner_pad,
-            area.y + inner_pad,
-            area.width.saturating_sub(inner_pad * 2),
-            area.height.saturating_sub(inner_pad * 2),
-        )
+    config: &::providers::ProviderConfig,
+    is_streaming: bool,
+    running_tools: &[String],
+) {
+    let version_str = format!("v{}", env!("CARGO_PKG_VERSION"));
+    let kind_str = config.kind.to_string();
+    let model_str = &config.model;
+
+    let logo_style = if is_streaming {
+        Style::default()
+            .fg(theme::PRIMARY)
+            .add_modifier(Modifier::BOLD)
     } else {
-        area
+        theme::style_dim()
     };
 
-    // Fill inner
-    fill_area(frame, inner_area, inner_bg);
+    // Mini wordmark styles: Ω takes the stream-green accent, O M E G A the
+    // bright primary — a small nod to the splash banner without inflating
+    // the 3-row chrome.
+    let omega_mark_style = Style::default()
+        .fg(theme::ACCENT_STREAM)
+        .add_modifier(Modifier::BOLD);
+    let wordmark_style = Style::default()
+        .fg(theme::PRIMARY_CONTAINER)
+        .add_modifier(Modifier::BOLD);
 
-    // Draw border using box-drawing characters ┌─…─┐ │  │ └─…─┘
-    let bw = area.width;
-    let bh = area.height;
-
-    // Top border ┌─ title ────────┐
-    let title_chars: Vec<char> = title.chars().collect();
-    let dash_count = bw
-        .saturating_sub(title_chars.len() as u16)
-        .saturating_sub(4);
-    {
-        let y = area.y;
-        // ┌
-        frame
-            .buffer_mut()
-            .get_mut(area.x, y)
-            .set_symbol("┌")
-            .set_fg(border_color);
-        // title
-        for (i, ch) in title_chars.iter().enumerate() {
-            let cx = area.x + 2 + i as u16;
-            if cx < area.x + bw {
-                frame
-                    .buffer_mut()
-                    .get_mut(cx, y)
-                    .set_char(*ch)
-                    .set_fg(title_color);
-            }
-        }
-        // ─ fill
-        for i in 0..dash_count {
-            let cx = area.x + 2 + title_chars.len() as u16 + i;
-            if cx < area.x + bw - 1 {
-                frame
-                    .buffer_mut()
-                    .get_mut(cx, y)
-                    .set_symbol("─")
-                    .set_fg(border_color);
-            }
-        }
-        // ┐
-        frame
-            .buffer_mut()
-            .get_mut(area.x + bw - 1, y)
-            .set_symbol("┐")
-            .set_fg(border_color);
-    }
-
-    // Sides │ … │
-    for dy in 1..bh.saturating_sub(1) {
-        let y = area.y + dy;
-        frame
-            .buffer_mut()
-            .get_mut(area.x, y)
-            .set_symbol("│")
-            .set_fg(border_color);
-        frame
-            .buffer_mut()
-            .get_mut(area.x + bw - 1, y)
-            .set_symbol("│")
-            .set_fg(border_color);
-    }
-
-    // Bottom border └──────────────┘
-    {
-        let y = area.y + bh - 1;
-        frame
-            .buffer_mut()
-            .get_mut(area.x, y)
-            .set_symbol("└")
-            .set_fg(border_color);
-        for i in 0..dash_count {
-            let cx = area.x + 2 + title_chars.len() as u16 + i;
-            if cx < area.x + bw - 1 {
-                frame
-                    .buffer_mut()
-                    .get_mut(cx, y)
-                    .set_symbol("─")
-                    .set_fg(border_color);
-            }
-        }
-        frame
-            .buffer_mut()
-            .get_mut(area.x + bw - 1, y)
-            .set_symbol("┘")
-            .set_fg(border_color);
-    }
-
-    inner_area
-}
-
-// ── Top system bar ──────────────────────────────────────────────────────
-
-fn render_top_bar(frame: &mut Frame, area: Rect, model: &str) {
-    if area.height < 1 || area.width < 30 {
+    if area.width < 40 {
+        let row1 = Line::from(vec![
+            Span::styled("Ω", omega_mark_style),
+            Span::styled(" omega ", theme::style_dim()),
+            Span::styled(&version_str, theme::style_dim()),
+        ]);
+        Paragraph::new(row1).render(Rect::new(area.x, area.y, area.width, 1), frame.buffer_mut());
         return;
     }
 
-    let left_spans = vec![
-        Span::styled(
-            " OMEGA_AGENT ",
-            Style::default()
-                .fg(theme::PRIMARY)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled("v", theme::style_dim()),
-        Span::styled(env!("CARGO_PKG_VERSION"), theme::style_dim()),
-        Span::styled(" · ", theme::style_dim()),
-        Span::styled("SYS_STATUS: ", theme::style_dim()),
-        Span::styled("ONLINE", Style::default().fg(theme::PRIMARY)),
-        Span::styled(" · ", theme::style_dim()),
-        Span::styled("UPTIME: ", theme::style_dim()),
-        Span::styled(model, Style::default().fg(theme::SECONDARY)),
-    ];
+    let row1 = Line::from(vec![
+        Span::styled("Ω", omega_mark_style),
+        Span::styled("  ", logo_style),
+        Span::styled("O M E G A", wordmark_style),
+        Span::styled("   omega ", theme::style_dim()),
+        Span::styled(&version_str, theme::style_dim()),
+    ]);
+    Paragraph::new(row1).render(Rect::new(area.x, area.y, area.width, 1), frame.buffer_mut());
 
-    let right_hint = format!(" [F1] HELP [F2] LOGS [F3] NET [F10] EXIT ");
-    let right_w = right_hint.len() as u16;
-    let left_w: u16 = left_spans.iter().map(|s| s.width() as u16).sum();
-    let fill = area.width.saturating_sub(left_w).saturating_sub(right_w);
+    let row_count = if area.width >= 80 {
+        let row2 = Line::from(vec![
+            Span::styled(&kind_str, theme::style_dim()),
+            Span::styled("/", theme::style_dim()),
+            Span::styled(model_str, Style::default().fg(theme::SECONDARY)),
+        ]);
+        Paragraph::new(row2).render(
+            Rect::new(area.x, area.y + 1, area.width, 1),
+            frame.buffer_mut(),
+        );
 
-    let mut out = vec![];
-    out.extend(left_spans);
-    if fill > 0 {
-        out.push(Span::raw(" ".repeat(fill as usize)));
-    }
-    out.push(Span::styled(right_hint, theme::style_dim()));
+        render_header_row3(
+            frame,
+            Rect::new(area.x, area.y + 2, area.width, 1),
+            is_streaming,
+            running_tools,
+        );
+        3
+    } else {
+        render_header_row3(
+            frame,
+            Rect::new(area.x, area.y + 1, area.width, 1),
+            is_streaming,
+            running_tools,
+        );
+        2
+    };
 
-    let para = Paragraph::new(Line::from(out));
-    para.render(Rect::new(area.x, area.y, area.width, 1), frame.buffer_mut());
-
-    // separator rule under top bar
-    if area.height > 1 {
+    if area.height > row_count {
         for x in area.x..area.x + area.width {
-            let cell = frame.buffer_mut().get_mut(x, area.y + area.height - 1);
+            let cell = frame.buffer_mut().get_mut(x, area.y + row_count);
             cell.set_symbol("─");
             cell.set_fg(theme::OUTLINE);
         }
     }
 }
 
-// ── Metrics panel ────────────────────────────────────────────────────────
-
-fn render_metrics_panel(
-    frame: &mut Frame,
-    area: Rect,
-    config: &::providers::ProviderConfig,
-    _is_streaming: bool,
-) {
-    if area.height < 3 || area.width < 40 {
-        return;
-    }
-
-    let inner = render_glass_block(
-        frame,
-        area,
-        theme::SURFACE_LOW,
-        theme::OUTLINE,
-        " SYSTEM METRICS & ACTIVE TOOLS ",
-        theme::PRIMARY,
-    );
-
-    // Row 0: real session input/output usage
-    let gauge_y = inner.y;
+/// Render header row 3: compact token counts + stream marker + tool chips.
+fn render_header_row3(frame: &mut Frame, area: Rect, is_streaming: bool, running_tools: &[String]) {
     let (tokens_in, tokens_out) = commands::cost_tracker::session_token_counts();
-    let usage = StatusState::format_token_usage(tokens_in, tokens_out);
-    let gauge_spans = vec![
-        Span::styled("TOKENS ", theme::style_dim()),
-        Span::styled(usage, Style::default().fg(theme::PRIMARY)),
-    ];
-    Paragraph::new(Line::from(gauge_spans)).render(
-        Rect::new(inner.x + 1, gauge_y, inner.width.saturating_sub(2), 1),
-        frame.buffer_mut(),
-    );
+    let usage = StatusState::format_usage_compact(tokens_in, tokens_out);
 
-    // Row 1: model only
-    let row1_y = gauge_y + 1;
-    let model_str = config.model.clone();
-    let model_spans = vec![
-        Span::styled("MODEL ", theme::style_dim()),
-        Span::styled(model_str, Style::default().fg(theme::SECONDARY)),
-    ];
-    Paragraph::new(Line::from(model_spans)).render(
-        Rect::new(inner.x + 1, row1_y, inner.width.saturating_sub(2), 1),
-        frame.buffer_mut(),
-    );
-
-    // Row 2: active tool chips
-    if inner.height > 2 {
-        let chips_y = row1_y + 1;
-        let chips = vec![
-            ("[ BROWSER ]", theme::TOOL_BROWSER),
-            ("[ SHELL ]", theme::TOOL_SHELL),
-            ("[ FILE_SYS ]", theme::TOOL_FILE_SYS),
-            ("[ SEARCH ]", theme::TOOL_SEARCH),
-        ];
-        let mut chip_spans: Vec<Span> = Vec::new();
-        for (i, (label, col)) in chips.iter().enumerate() {
-            if i > 0 {
-                chip_spans.push(Span::raw(" "));
-            }
-            chip_spans.push(Span::styled(*label, Style::default().fg(*col)));
-        }
-        Paragraph::new(Line::from(chip_spans))
-            .alignment(Alignment::Right)
-            .render(
-                Rect::new(inner.x + 1, chips_y, inner.width.saturating_sub(2), 1),
-                frame.buffer_mut(),
-            );
+    let mut left_spans = Vec::new();
+    if is_streaming {
+        left_spans.push(Span::styled(
+            "… ",
+            Style::default().fg(theme::ACCENT_STREAM),
+        ));
     }
+    left_spans.push(Span::styled(&usage, Style::default().fg(theme::FG)));
+
+    let mut tool_spans = Vec::new();
+    for tool in running_tools.iter().take(5) {
+        tool_spans.push(Span::styled(
+            format!("[{}] ", tool.to_uppercase()),
+            Style::default().fg(theme::TOOL_DEFAULT),
+        ));
+    }
+    let tool_text: String = tool_spans.iter().map(|s| s.content.clone()).collect();
+    let tool_w = tool_text.chars().count() as u16;
+
+    let left_w: u16 = left_spans.iter().map(|s| s.width() as u16).sum();
+    let fill = area.width.saturating_sub(left_w).saturating_sub(tool_w);
+    if fill > 0 {
+        left_spans.push(Span::raw(" ".repeat(fill as usize)));
+    }
+    for span in tool_spans {
+        left_spans.push(span);
+    }
+
+    Paragraph::new(Line::from(left_spans))
+        .render(Rect::new(area.x, area.y, area.width, 1), frame.buffer_mut());
 }
-
-// ── Main process panel ────────────────────────────────────────────────────
-
 fn render_process_panel(
     frame: &mut Frame,
     area: Rect,
     transcript: &mut Transcript,
     _show_help: bool,
+    splash_subtitle: &str,
+    is_streaming: bool,
 ) {
     if area.height < 3 || area.width < 20 {
         return;
@@ -395,6 +301,20 @@ fn render_process_panel(
 
     // No frame around the transcript — just the content on the terminal canvas.
     fill_area(frame, area, theme::BG);
+
+    // ── Startup splash: empty conversation → OMEGA AGENT banner ─────────
+    // Clears itself once the first message arrives (or streaming begins);
+    // the banner module no-ops on terminals too small for the art.
+    if transcript.entries.is_empty() && !is_streaming {
+        banner::render_splash(
+            area,
+            frame.buffer_mut(),
+            splash_subtitle,
+            "type a message to begin · ^K commands",
+        );
+        return;
+    }
+
     transcript.render(frame, area);
 }
 
@@ -445,7 +365,7 @@ fn render_command_panel(
     editor: &EditorState,
     palette: &command_palette::CommandPaletteState,
     is_command_mode: bool,
-    _is_streaming: bool,
+    is_streaming: bool,
 ) {
     if area.height < 3 || area.width < 10 {
         return;
@@ -455,7 +375,11 @@ fn render_command_panel(
 
     if !showing_palette {
         let out_style = Style::default().fg(theme::OUTLINE);
-        let input_style = Style::default().fg(theme::FG);
+        let input_style = if is_streaming {
+            Style::default().fg(theme::DIM)
+        } else {
+            Style::default().fg(theme::FG)
+        };
         let rule = "─".repeat(area.width as usize);
 
         // Content is inset one column on each side; wrap to the inner width so
@@ -478,7 +402,9 @@ fn render_command_panel(
             let row = &rows[r as usize];
             let y = content_y + r;
             for (col, ch) in row.chars().take(inner_w as usize).enumerate() {
-                let cell = frame.buffer_mut().get_mut(area.x + left_pad + col as u16, y);
+                let cell = frame
+                    .buffer_mut()
+                    .get_mut(area.x + left_pad + col as u16, y);
                 cell.set_char(ch);
                 cell.set_style(input_style);
             }
@@ -486,7 +412,10 @@ fn render_command_panel(
 
         // Cursor block at the end of the last shown row.
         let last_idx = shown_rows.saturating_sub(1);
-        let last_row_cols = rows.get(last_idx as usize).map(|r| r.chars().count()).unwrap_or(0);
+        let last_row_cols = rows
+            .get(last_idx as usize)
+            .map(|r| r.chars().count())
+            .unwrap_or(0);
         let cursor_x = area.x + left_pad + (last_row_cols as u16).min(inner_w);
         let cursor_y = content_y + last_idx;
         if cursor_x < area.x + area.width && cursor_y < area.y + area.height {
@@ -496,8 +425,10 @@ fn render_command_panel(
         }
 
         // Bottom rule
-        Paragraph::new(Line::from(Span::styled(&rule, out_style)))
-            .render(Rect::new(area.x, area.y + shown_rows + 1, area.width, 1), frame.buffer_mut());
+        Paragraph::new(Line::from(Span::styled(&rule, out_style))).render(
+            Rect::new(area.x, area.y + shown_rows + 1, area.width, 1),
+            frame.buffer_mut(),
+        );
     }
 
     // ── Command palette (top rule with centered label, no side borders) ──
@@ -509,14 +440,18 @@ fn render_command_panel(
         let left_dash = area.width.saturating_sub(title_w) / 2;
 
         for x in area.x..area.x + area.width {
-            frame.buffer_mut().get_mut(x, top_y)
+            frame
+                .buffer_mut()
+                .get_mut(x, top_y)
                 .set_symbol("─")
                 .set_style(line_style);
         }
         for (i, ch) in title.chars().enumerate() {
             let cx = area.x + left_dash + i as u16;
             if cx < area.x + area.width {
-                frame.buffer_mut().get_mut(cx, top_y)
+                frame
+                    .buffer_mut()
+                    .get_mut(cx, top_y)
                     .set_char(ch)
                     .set_fg(theme::PRIMARY);
             }
@@ -527,7 +462,10 @@ fn render_command_panel(
             format!("> {}_", palette.query),
             Style::default().fg(theme::PRIMARY_CONTAINER),
         )))
-        .render(Rect::new(area.x + 2, top_y + 1, area.width.saturating_sub(4), 1), frame.buffer_mut());
+        .render(
+            Rect::new(area.x + 2, top_y + 1, area.width.saturating_sub(4), 1),
+            frame.buffer_mut(),
+        );
 
         // List rows
         let list_y = top_y + 2;
@@ -544,7 +482,9 @@ fn render_command_panel(
         // Bottom rule
         let bottom_y = area.y + area.height - 1;
         for x in area.x..area.x + area.width {
-            frame.buffer_mut().get_mut(x, bottom_y)
+            frame
+                .buffer_mut()
+                .get_mut(x, bottom_y)
                 .set_symbol("─")
                 .set_style(line_style);
         }

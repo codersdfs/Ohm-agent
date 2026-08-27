@@ -73,7 +73,12 @@ impl StructuralCheck {
         violations
     }
 
-    fn check_function_length(content: &str, _path: &str, lang: &Language, violations: &mut Vec<Violation>) {
+    fn check_function_length(
+        content: &str,
+        _path: &str,
+        lang: &Language,
+        violations: &mut Vec<Violation>,
+    ) {
         let metrics = crate::tree_sitter_metrics::analyze_file(content, lang);
         for m in metrics {
             if m.line_count > MAX_FUNCTION_LINES as u32 {

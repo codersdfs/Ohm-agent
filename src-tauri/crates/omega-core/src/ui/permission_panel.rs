@@ -65,11 +65,7 @@ impl PermissionPanelState {
 
 /// Render the permission panel as a collapsible bottom section.
 /// When visible, it takes up the bottom portion of the area.
-pub fn render_permission_panel(
-    area: Rect,
-    buf: &mut Buffer,
-    state: &PermissionPanelState,
-) {
+pub fn render_permission_panel(area: Rect, buf: &mut Buffer, state: &PermissionPanelState) {
     if !state.visible {
         return;
     }
@@ -80,7 +76,7 @@ pub fn render_permission_panel(
     // - 3: options row
     // - 4: bottom border
     let panel_height = 4u16;
-    
+
     if area.height < panel_height + 1 {
         // Not enough space, skip rendering
         return;
@@ -120,27 +116,30 @@ pub fn render_permission_panel(
 
     let top_line = Line::from(top_spans);
     let top_para = Paragraph::new(top_line);
-    top_para.render(Rect {
-        x: panel_area.x,
-        y: panel_area.y,
-        width: panel_area.width,
-        height: 1,
-    }, buf);
+    top_para.render(
+        Rect {
+            x: panel_area.x,
+            y: panel_area.y,
+            width: panel_area.width,
+            height: 1,
+        },
+        buf,
+    );
 
     // Prompt line (indented)
     let prompt_style = Style::default().fg(theme::FG);
-    let prompt_spans = vec![
-        Span::raw("  "),
-        Span::styled(&state.prompt, prompt_style),
-    ];
+    let prompt_spans = vec![Span::raw("  "), Span::styled(&state.prompt, prompt_style)];
     let prompt_line = Line::from(prompt_spans);
     let prompt_para = Paragraph::new(prompt_line);
-    prompt_para.render(Rect {
-        x: panel_area.x,
-        y: panel_area.y + 1,
-        width: panel_area.width,
-        height: 1,
-    }, buf);
+    prompt_para.render(
+        Rect {
+            x: panel_area.x,
+            y: panel_area.y + 1,
+            width: panel_area.width,
+            height: 1,
+        },
+        buf,
+    );
 
     // Options row with selection highlight
     let mut option_spans = vec![Span::raw("  ")];
@@ -157,10 +156,7 @@ pub fn render_permission_panel(
             Style::default().fg(theme::DIM)
         };
 
-        option_spans.push(Span::styled(
-            format!("{}: {}", i + 1, opt),
-            opt_style,
-        ));
+        option_spans.push(Span::styled(format!("{}: {}", i + 1, opt), opt_style));
     }
 
     // Add navigation hint
@@ -172,12 +168,15 @@ pub fn render_permission_panel(
 
     let options_line = Line::from(option_spans);
     let options_para = Paragraph::new(options_line);
-    options_para.render(Rect {
-        x: panel_area.x,
-        y: panel_area.y + 2,
-        width: panel_area.width,
-        height: 1,
-    }, buf);
+    options_para.render(
+        Rect {
+            x: panel_area.x,
+            y: panel_area.y + 2,
+            width: panel_area.width,
+            height: 1,
+        },
+        buf,
+    );
 
     // Bottom border
     let bottom_spans = vec![Span::styled(
@@ -186,10 +185,13 @@ pub fn render_permission_panel(
     )];
     let bottom_line = Line::from(bottom_spans);
     let bottom_para = Paragraph::new(bottom_line);
-    bottom_para.render(Rect {
-        x: panel_area.x,
-        y: panel_area.y + 3,
-        width: panel_area.width,
-        height: 1,
-    }, buf);
+    bottom_para.render(
+        Rect {
+            x: panel_area.x,
+            y: panel_area.y + 3,
+            width: panel_area.width,
+            height: 1,
+        },
+        buf,
+    );
 }

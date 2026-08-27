@@ -21,7 +21,11 @@ pub async fn run_entropy_scan(_state: &AppState, project_root: &str) -> Result<S
     Ok(output)
 }
 
-pub async fn run_entropy_gc(_state: &AppState, project_root: &str, fix: bool) -> Result<String, String> {
+pub async fn run_entropy_gc(
+    _state: &AppState,
+    project_root: &str,
+    fix: bool,
+) -> Result<String, String> {
     let gc = GarbageCollector::new();
     gc.collect(project_root, fix)
 }

@@ -17,7 +17,13 @@ impl ExternalViolation {
     pub fn to_violation(&self) -> Violation {
         Violation {
             category: ViolationCategory::External,
-            message: format!("[{}] {}:{} {}", self.severity, self.file, self.line.unwrap_or(0), self.message),
+            message: format!(
+                "[{}] {}:{} {}",
+                self.severity,
+                self.file,
+                self.line.unwrap_or(0),
+                self.message
+            ),
             tool_hint: Some("Fix the lint error reported by the external linter".into()),
             line: self.line,
         }

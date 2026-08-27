@@ -123,8 +123,16 @@ impl App {
                     self.editor.state = EditorMode::Thinking;
                     self.status.set_spinner_state(SpinnerState::Thinking);
                 }
-                UiStreamEvent::ToolCall { .. } => {
+                UiStreamEvent::ToolCall { name, .. } => {
                     self.status.set_spinner_state(SpinnerState::ToolCall);
+                    // Track running tool
+                    if !self.running_tools.contains(name) {
+                        self.running_tools.push(name.clone());
+                    }
+                }
+                UiStreamEvent::ToolResult { name, .. } => {
+                    // Remove from running tools if present
+                    self.running_tools.retain(|t| t != name);
                 }
                 UiStreamEvent::Done {
                     tokens_in,

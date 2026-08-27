@@ -117,7 +117,8 @@ mod tests {
     #[tokio::test]
     async fn test_memory_store_project() {
         let state = test_state();
-        let result = memory_store_project(&state, "build_cmd".into(), "cargo tauri dev".into()).await;
+        let result =
+            memory_store_project(&state, "build_cmd".into(), "cargo tauri dev".into()).await;
         assert!(result.is_ok(), "should store project memory");
         let id = result.unwrap();
         assert!(!id.is_empty(), "should return a non-empty id");
@@ -126,18 +127,27 @@ mod tests {
     #[tokio::test]
     async fn test_memory_search_project() {
         let state = test_state();
-        memory_store_project(&state, "api_url".into(), "https://api.example.com".into()).await.unwrap();
+        memory_store_project(&state, "api_url".into(), "https://api.example.com".into())
+            .await
+            .unwrap();
         let result = memory_search_project(&state, "api".into()).await;
         assert!(result.is_ok());
         let response = result.unwrap();
-        assert!(!response.entries.is_empty(), "should find at least one result");
+        assert!(
+            !response.entries.is_empty(),
+            "should find at least one result"
+        );
     }
 
     #[tokio::test]
     async fn test_memory_list_project() {
         let state = test_state();
-        memory_store_project(&state, "key1".into(), "value1".into()).await.unwrap();
-        memory_store_project(&state, "key2".into(), "value2".into()).await.unwrap();
+        memory_store_project(&state, "key1".into(), "value1".into())
+            .await
+            .unwrap();
+        memory_store_project(&state, "key2".into(), "value2".into())
+            .await
+            .unwrap();
         let result = memory_list_project(&state).await;
         assert!(result.is_ok());
         let entries = result.unwrap();

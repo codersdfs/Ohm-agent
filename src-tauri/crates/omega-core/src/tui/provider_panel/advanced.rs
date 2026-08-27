@@ -48,7 +48,11 @@ pub fn render_step_advanced(
     } else {
         theme::style_dim()
     };
-    let key_label = if key_foc { "Γû╕ API key" } else { "  API key" };
+    let key_label = if key_foc {
+        "Γû╕ API key"
+    } else {
+        "  API key"
+    };
     let key_label_style = if key_foc {
         Style::default()
             .fg(theme::PRIMARY_CONTAINER)

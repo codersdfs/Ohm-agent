@@ -6,7 +6,12 @@ pub struct LearningModule;
 
 impl LearningModule {
     /// Record a failure event and check if it should be promoted.
-    pub fn record_failure(state: &AppState, raw_message: &str, kind: &str, fix_recipe: Option<String>) -> Result<bool, String> {
+    pub fn record_failure(
+        state: &AppState,
+        raw_message: &str,
+        kind: &str,
+        fix_recipe: Option<String>,
+    ) -> Result<bool, String> {
         let db_path = format!("{}/.omega/negative_knowledge.sqlite", state.db_path);
         let store = NegativeKnowledgeStore::new(&db_path)?;
         let normalized = normalize_message(raw_message);

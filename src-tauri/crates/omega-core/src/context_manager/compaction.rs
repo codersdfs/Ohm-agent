@@ -250,7 +250,10 @@ mod tests {
         let (result, summary) = compact(messages, 6);
         assert!(!summary.is_empty());
         assert_eq!(result[0].role, "system");
-        assert_eq!(result.last().map(|m| m.content.as_str()), Some("Final question"));
+        assert_eq!(
+            result.last().map(|m| m.content.as_str()),
+            Some("Final question")
+        );
         // Summary message inserted right after the system prompt.
         assert_eq!(result[1].role, "system");
         assert!(result[1].content.starts_with("Conversation summary"));
@@ -274,7 +277,11 @@ mod tests {
         }
         let (result, _summary) = compact(messages, 6);
         let tool_messages = result.iter().filter(|m| m.role == "tool").count();
-        assert!(tool_messages <= 8, "expected <= 8 tool results, got {}", tool_messages);
+        assert!(
+            tool_messages <= 8,
+            "expected <= 8 tool results, got {}",
+            tool_messages
+        );
     }
 
     #[test]
@@ -286,7 +293,10 @@ mod tests {
             messages.push(ChatMessage {
                 role: "assistant".into(),
                 content: String::new(),
-                tool_calls: Some(vec![tool_call("write", &format!("{{\"path\":\"{}.rs\"}}", i))]),
+                tool_calls: Some(vec![tool_call(
+                    "write",
+                    &format!("{{\"path\":\"{}.rs\"}}", i),
+                )]),
                 tool_call_id: None,
                 name: None,
             });
@@ -299,7 +309,10 @@ mod tests {
         messages.push(msg("user", "final"));
         let (_result, summary) = compact(messages, 2);
         assert!(
-            summary.errors_encountered.iter().any(|e| e.contains("permission denied")),
+            summary
+                .errors_encountered
+                .iter()
+                .any(|e| e.contains("permission denied")),
             "expected permission error captured: {:?}",
             summary.errors_encountered
         );

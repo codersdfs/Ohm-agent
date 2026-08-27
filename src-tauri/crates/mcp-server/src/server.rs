@@ -17,17 +17,17 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::RwLock as TokioRwLock;
 
 /// Synchronous handler for a specific MCP method
-pub type SyncHandler = Arc<
-    dyn Fn(serde_json::Value) -> Result<serde_json::Value, McpError> + Send + Sync,
->;
+pub type SyncHandler =
+    Arc<dyn Fn(serde_json::Value) -> Result<serde_json::Value, McpError> + Send + Sync>;
 
 /// Asynchronous handler for a specific MCP method (e.g., tool calls)
-pub type AsyncHandlerPinned =
-    Arc<
-        dyn Fn(serde_json::Value) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, McpError>> + Send>>
-            + Send
-            + Sync,
-    >;
+pub type AsyncHandlerPinned = Arc<
+    dyn Fn(
+            serde_json::Value,
+        ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, McpError>> + Send>>
+        + Send
+        + Sync,
+>;
 
 /// Session state for a connected MCP client
 #[derive(Debug, Clone)]
@@ -124,21 +124,23 @@ impl McpServer {
     /// Set the tool registry to expose via MCP
     pub fn with_tool_registry(mut self, registry: tool_harness::ToolRegistry) -> Self {
         // Extract tool definitions upfront
-        let defs: Vec<McpToolDefinition> = registry.tool_definitions().into_iter().map(|td| {
-            McpToolDefinition {
+        let defs: Vec<McpToolDefinition> = registry
+            .tool_definitions()
+            .into_iter()
+            .map(|td| McpToolDefinition {
                 name: td.function.name,
                 description: td.function.description,
                 input_schema: td.function.parameters,
-            }
-        }).collect();
+            })
+            .collect();
 
         // Register with the router (sync — called from builder context)
-        self.tool_router.register_native_tools_blocking(defs.clone());
+        self.tool_router
+            .register_native_tools_blocking(defs.clone());
 
         *self.tool_definitions.write().unwrap() = defs;
 
-        let pipeline = tool_harness::ExecutionPipeline::new()
-            .with_registry(registry);
+        let pipeline = tool_harness::ExecutionPipeline::new().with_registry(registry);
         self.tool_pipeline = Some(Arc::new(pipeline));
         self.register_tool_handlers();
         self
@@ -165,9 +167,10 @@ impl McpServer {
         Fut: Future<Output = Result<serde_json::Value, McpError>> + Send + 'static,
     {
         let mut handlers = self.async_handlers.write().unwrap();
-        handlers.insert(method.to_string(), Arc::new(move |params| {
-            Box::pin(handler(params))
-        }));
+        handlers.insert(
+            method.to_string(),
+            Arc::new(move |params| Box::pin(handler(params))),
+        );
     }
 
     /// Register built-in handlers (initialize, ping, resources)
@@ -177,10 +180,8 @@ impl McpServer {
         // initialize handler
         let caps_for_init = config.capabilities.clone();
         self.register_sync_handler("initialize", move |params| {
-            let init_params: InitializeParams =
-                serde_json::from_value(params.clone()).map_err(|e| {
-                    McpError::invalid_params(format!("Invalid initialize params: {e}"))
-                })?;
+            let init_params: InitializeParams = serde_json::from_value(params.clone())
+                .map_err(|e| McpError::invalid_params(format!("Invalid initialize params: {e}")))?;
 
             if init_params.protocol_version != MCP_PROTOCOL_VERSION {
                 log::warn!(
@@ -202,30 +203,38 @@ impl McpServer {
         });
 
         // ping handler
-        self.register_sync_handler("ping", |_| {
-            Ok(serde_json::json!({}))
-        });
+        self.register_sync_handler("ping", |_| Ok(serde_json::json!({})));
 
         // resources/list handler (stub — returns empty list)
         let res_caps = config.capabilities.clone();
         self.register_sync_handler("resources/list", move |_| {
-            let resources = res_caps.resources.as_ref()
+            let resources = res_caps
+                .resources
+                .as_ref()
                 .and_then(|r| r.get("list"))
                 .and_then(|v| v.as_array())
                 .cloned()
                 .unwrap_or_default();
-            let defs: Vec<ResourceDefinition> = resources.iter().filter_map(|r| {
-                let uri = r.get("uri")?.as_str()?.to_string();
-                let name = r.get("name")?.as_str()?.to_string();
-                Some(ResourceDefinition {
-                    uri,
-                    name,
-                    description: r.get("description").and_then(|v| v.as_str()).map(String::from),
-                    mime_type: r.get("mimeType").and_then(|v| v.as_str()).map(String::from),
+            let defs: Vec<ResourceDefinition> = resources
+                .iter()
+                .filter_map(|r| {
+                    let uri = r.get("uri")?.as_str()?.to_string();
+                    let name = r.get("name")?.as_str()?.to_string();
+                    Some(ResourceDefinition {
+                        uri,
+                        name,
+                        description: r
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .map(String::from),
+                        mime_type: r.get("mimeType").and_then(|v| v.as_str()).map(String::from),
+                    })
                 })
-            }).collect();
-            Ok(serde_json::to_value(ListResourcesResult { resources: defs })
-                .map_err(|e| McpError::internal_error(format!("Serialize error: {e}")))?)
+                .collect();
+            Ok(
+                serde_json::to_value(ListResourcesResult { resources: defs })
+                    .map_err(|e| McpError::internal_error(format!("Serialize error: {e}")))?,
+            )
         });
 
         // resources/read handler (stub)
@@ -240,17 +249,13 @@ impl McpServer {
     /// Register stub tool handlers (return empty list / not found)
     fn register_stub_tool_handlers(&self) {
         self.register_sync_handler("tools/list", |_| {
-            Ok(serde_json::to_value(ListToolsResult {
-                tools: vec![],
-            })
-            .map_err(|e| McpError::internal_error(format!("Serialize error: {e}")))?)
+            Ok(serde_json::to_value(ListToolsResult { tools: vec![] })
+                .map_err(|e| McpError::internal_error(format!("Serialize error: {e}")))?)
         });
 
         self.register_sync_handler("tools/call", |params| {
-            let call_params: CallToolParams =
-                serde_json::from_value(params).map_err(|e| {
-                    McpError::invalid_params(format!("Invalid call params: {e}"))
-                })?;
+            let call_params: CallToolParams = serde_json::from_value(params)
+                .map_err(|e| McpError::invalid_params(format!("Invalid call params: {e}")))?;
             Err(McpError::tool_not_found(call_params.name))
         });
     }
@@ -286,10 +291,8 @@ impl McpServer {
             let router = router_for_call.clone();
             let pipeline = pipeline_for_call.clone();
             async move {
-                let call_params: CallToolParams =
-                    serde_json::from_value(params).map_err(|e| {
-                        McpError::invalid_params(format!("Invalid call params: {e}"))
-                    })?;
+                let call_params: CallToolParams = serde_json::from_value(params)
+                    .map_err(|e| McpError::invalid_params(format!("Invalid call params: {e}")))?;
 
                 let tool_name = call_params.name;
                 let tool_args = call_params.arguments.unwrap_or(serde_json::json!({}));
@@ -344,10 +347,8 @@ impl McpServer {
             Ok(v) => v,
             Err(_e) => {
                 let err = McpError::parse_error();
-                return serde_json::to_string(
-                    &err.to_json_rpc_response(RequestId::Null),
-                )
-                .unwrap_or_default();
+                return serde_json::to_string(&err.to_json_rpc_response(RequestId::Null))
+                    .unwrap_or_default();
             }
         };
 
@@ -370,7 +371,10 @@ impl McpServer {
             }
         };
 
-        let params = raw.get("params").cloned().unwrap_or(serde_json::Value::Null);
+        let params = raw
+            .get("params")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
 
         // Handle notifications specially
         if is_notification {
@@ -402,12 +406,10 @@ impl McpServer {
             } else {
                 let sync_handlers = self.sync_handlers.read().unwrap();
                 match sync_handlers.get(&method) {
-                    Some(handler) => {
-                        match handler(params) {
-                            Ok(result) => JsonRpcResponse::success(request_id, result),
-                            Err(err) => err.to_json_rpc_response(request_id),
-                        }
-                    }
+                    Some(handler) => match handler(params) {
+                        Ok(result) => JsonRpcResponse::success(request_id, result),
+                        Err(err) => err.to_json_rpc_response(request_id),
+                    },
                     None => {
                         let err = McpError::method_not_found(&method);
                         err.to_json_rpc_response(request_id)
@@ -516,10 +518,7 @@ mod tests {
             .await;
         let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
         assert_eq!(parsed["id"], "1");
-        assert_eq!(
-            parsed["result"]["protocolVersion"],
-            "2024-11-05"
-        );
+        assert_eq!(parsed["result"]["protocolVersion"], "2024-11-05");
         assert_eq!(parsed["result"]["serverInfo"]["name"], "omega-mcp");
     }
 
@@ -548,7 +547,10 @@ mod tests {
         let response = server
             .handle_request(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
             .await;
-        assert!(response.is_empty(), "Notifications should not produce a response");
+        assert!(
+            response.is_empty(),
+            "Notifications should not produce a response"
+        );
     }
 
     #[tokio::test]
@@ -605,8 +607,10 @@ mod tests {
             )
             .await;
         let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
-        assert_eq!(parsed["error"]["code"], MCP_TOOL_NOT_FOUND,
-            "Unknown tool should return tool_not_found");
+        assert_eq!(
+            parsed["error"]["code"], MCP_TOOL_NOT_FOUND,
+            "Unknown tool should return tool_not_found"
+        );
     }
 
     #[tokio::test]

@@ -51,7 +51,11 @@ pub fn format_memory_context(entries: &[MemoryEntry], relevances: &[f64]) -> Str
 
     for (entry, rel) in entries.iter().zip(relevances.iter()) {
         let value: String = if entry.value.chars().count() > MAX_ENTRY_CHARS {
-            entry.value.chars().take(MAX_ENTRY_CHARS).collect::<String>()
+            entry
+                .value
+                .chars()
+                .take(MAX_ENTRY_CHARS)
+                .collect::<String>()
                 + "…[truncated]"
         } else {
             entry.value.clone()
@@ -96,7 +100,11 @@ pub fn retrieve_memories(store: &MemoryStore, query: &str, budget_tokens: usize)
         }
 
         let value: String = if entry.value.chars().count() > MAX_ENTRY_CHARS {
-            entry.value.chars().take(MAX_ENTRY_CHARS).collect::<String>()
+            entry
+                .value
+                .chars()
+                .take(MAX_ENTRY_CHARS)
+                .collect::<String>()
                 + "…[truncated]"
         } else {
             entry.value.clone()
@@ -128,7 +136,10 @@ pub fn retrieve_memories(store: &MemoryStore, query: &str, budget_tokens: usize)
         return String::new();
     }
 
-    format!("# Relevant project memory (from previous sessions):\n{}\n", context)
+    format!(
+        "# Relevant project memory (from previous sessions):\n{}\n",
+        context
+    )
 }
 
 #[cfg(test)]
@@ -137,27 +148,31 @@ mod tests {
 
     #[test]
     fn test_format_memory_context_basic() {
-        let entries = vec![
-            memory::MemoryEntry {
-                id: "1".into(),
-                layer: memory::MemoryLayer::Project,
-                key: "build_cmd".into(),
-                value: "cargo tauri dev".into(),
-                embedding: None,
-                timestamp: "2026-07-27T00:00:00Z".into(),
-            },
-        ];
+        let entries = vec![memory::MemoryEntry {
+            id: "1".into(),
+            layer: memory::MemoryLayer::Project,
+            key: "build_cmd".into(),
+            value: "cargo tauri dev".into(),
+            embedding: None,
+            timestamp: "2026-07-27T00:00:00Z".into(),
+        }];
         let relevances = vec![0.95];
         let result = format_memory_context(&entries, &relevances);
         assert!(result.contains("build_cmd"), "should contain key");
         assert!(result.contains("cargo tauri dev"), "should contain value");
-        assert!(result.contains("Relevant project memory"), "should have header");
+        assert!(
+            result.contains("Relevant project memory"),
+            "should have header"
+        );
     }
 
     #[test]
     fn test_format_memory_context_empty() {
         let result = format_memory_context(&[], &[]);
-        assert!(result.is_empty(), "empty entries should produce empty string");
+        assert!(
+            result.is_empty(),
+            "empty entries should produce empty string"
+        );
     }
 
     #[test]
@@ -184,18 +199,23 @@ mod tests {
         let result = format_memory_context(&entries, &relevances);
         assert!(result.contains("api_url"), "should contain first key");
         assert!(result.contains("db_name"), "should contain second key");
-        assert!(result.contains("https://api.example.com"), "should contain first value");
+        assert!(
+            result.contains("https://api.example.com"),
+            "should contain first value"
+        );
     }
 
     #[test]
     fn test_retrieve_memories_respects_budget() {
         let store = memory::MemoryStore::new(":memory:").unwrap();
         for i in 0..5 {
-            store.store(
-                memory::MemoryLayer::Project,
-                &format!("key_{}", i),
-                &format!("value_{}", "x".repeat(100)),
-            ).unwrap();
+            store
+                .store(
+                    memory::MemoryLayer::Project,
+                    &format!("key_{}", i),
+                    &format!("value_{}", "x".repeat(100)),
+                )
+                .unwrap();
         }
         let result = retrieve_memories(&store, "value", 50);
         let counter = TokenCounter::chars4();
@@ -206,7 +226,11 @@ mod tests {
             tool_call_id: None,
             name: None,
         }]) as usize;
-        assert!(token_count <= 100, "should stay within budget, got {} tokens", token_count);
+        assert!(
+            token_count <= 100,
+            "should stay within budget, got {} tokens",
+            token_count
+        );
     }
 
     #[test]

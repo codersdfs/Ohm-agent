@@ -65,7 +65,11 @@ impl MemoryInjector {
                 }
             };
 
-            for (entry, relevance) in search_result.entries.iter().zip(search_result.relevance.iter()) {
+            for (entry, relevance) in search_result
+                .entries
+                .iter()
+                .zip(search_result.relevance.iter())
+            {
                 if *relevance < self.min_relevance {
                     continue;
                 }
@@ -113,10 +117,7 @@ impl MemoryInjector {
     }
 }
 
-pub fn build_turn_context(
-    state: &crate::AppState,
-    user_msg: &str,
-) -> Result<String, String> {
+pub fn build_turn_context(state: &crate::AppState, user_msg: &str) -> Result<String, String> {
     let mut ctx = String::new();
 
     let learning_rules = crate::learning::LearningModule::get_prompt_rules(state);

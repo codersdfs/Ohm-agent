@@ -340,4 +340,3 @@ mod tests {
         assert_eq!(cfg.api_key.as_deref(), Some("new-secret"));
     }
 }
-

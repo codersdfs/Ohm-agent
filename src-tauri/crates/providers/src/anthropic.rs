@@ -235,7 +235,9 @@ impl AnthropicProvider {
 
 #[async_trait::async_trait]
 impl LlmProvider for AnthropicProvider {
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, String> {
         let client = reqwest::Client::new();
         let messages = Self::convert_messages(&request);

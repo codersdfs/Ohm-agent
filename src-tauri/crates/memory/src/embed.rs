@@ -67,11 +67,7 @@ impl EmbeddingEngine {
     /// Cosine similarity between two vectors.
     pub fn similarity(&self, a: &[f32], b: &[f32]) -> Result<f64, String> {
         if a.len() != b.len() {
-            return Err(format!(
-                "Dimension mismatch: {} vs {}",
-                a.len(),
-                b.len()
-            ));
+            return Err(format!("Dimension mismatch: {} vs {}", a.len(), b.len()));
         }
 
         let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
@@ -166,7 +162,10 @@ impl ONNXEmbeddingEngine {
             "attention_mask" => attention_mask,
         ];
 
-        let mut session = self.session.lock().map_err(|e| format!("ONNX session lock poisoned: {}", e))?;
+        let mut session = self
+            .session
+            .lock()
+            .map_err(|e| format!("ONNX session lock poisoned: {}", e))?;
         let outputs = session
             .run(inputs)
             .map_err(|e| format!("ONNX inference failed: {}", e))?;
@@ -204,18 +203,18 @@ impl ONNXEmbeddingEngine {
 
         // Truncate if needed
         if encoding.len() > self.max_length {
-            encoding.truncate(0, self.max_length, tokenizers::utils::truncation::TruncationDirection::Right);
+            encoding.truncate(
+                0,
+                self.max_length,
+                tokenizers::utils::truncation::TruncationDirection::Right,
+            );
         }
 
         // Pad to max_length
         let seq_len = encoding.len();
         let pad_len = self.max_length.saturating_sub(seq_len);
 
-        let mut ids: Vec<i64> = encoding
-            .get_ids()
-            .iter()
-            .map(|&i| i as i64)
-            .collect();
+        let mut ids: Vec<i64> = encoding.get_ids().iter().map(|&i| i as i64).collect();
         let mut mask: Vec<i64> = encoding
             .get_attention_mask()
             .iter()
@@ -232,11 +231,7 @@ impl ONNXEmbeddingEngine {
     /// Cosine similarity between two vectors.
     pub fn similarity(&self, a: &[f32], b: &[f32]) -> Result<f64, String> {
         if a.len() != b.len() {
-            return Err(format!(
-                "Dimension mismatch: {} vs {}",
-                a.len(),
-                b.len()
-            ));
+            return Err(format!("Dimension mismatch: {} vs {}", a.len(), b.len()));
         }
 
         let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();

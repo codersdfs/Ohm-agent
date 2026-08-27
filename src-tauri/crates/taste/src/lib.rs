@@ -3,17 +3,20 @@
 //! code-taste learning.
 #![allow(dead_code)]
 
-
-pub mod model;
-pub mod collect;
-pub mod storage;
 pub mod cli;
+pub mod collect;
+pub mod model;
+pub mod storage;
 
 // Re-export key types from submodules
-pub use model::{RLLossFunction, TrustRegionConstraint, AdvantageLengthPenalty, Experience, Context};
-pub use collect::{DataCollector, DefaultDataCollector, FeatureVector, ArtifactType, RawArtifact};
-pub use storage::{PreferenceStorage, PreferenceEntry, ExperienceRecord, StorageError, CloudSyncConfig};
-pub use cli::{TasteCli, TasteCommand, run};
+pub use cli::{run, TasteCli, TasteCommand};
+pub use collect::{ArtifactType, DataCollector, DefaultDataCollector, FeatureVector, RawArtifact};
+pub use model::{
+    AdvantageLengthPenalty, Context, Experience, RLLossFunction, TrustRegionConstraint,
+};
+pub use storage::{
+    CloudSyncConfig, ExperienceRecord, PreferenceEntry, PreferenceStorage, StorageError,
+};
 
 // ======================
 // Core Types
@@ -77,7 +80,12 @@ impl TasteAgent {
         Ok(Vec::new())
     }
 
-    pub fn apply_taste_score(&self, base_score: u32, _violations: &[Violation], _lang: Language) -> u32 {
+    pub fn apply_taste_score(
+        &self,
+        base_score: u32,
+        _violations: &[Violation],
+        _lang: Language,
+    ) -> u32 {
         if !self.config.enabled {
             return base_score;
         }
@@ -85,7 +93,9 @@ impl TasteAgent {
     }
 
     pub fn set_enabled(&self, _enabled: bool) {}
-    pub fn config(&self) -> &TasteConfig { &self.config }
+    pub fn config(&self) -> &TasteConfig {
+        &self.config
+    }
 }
 
 /// Feedback from developer about a suggestion
