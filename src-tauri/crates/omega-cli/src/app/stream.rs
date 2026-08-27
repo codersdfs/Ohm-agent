@@ -6,7 +6,7 @@ use std::sync::Arc;
 use omega_core::commands;
 use omega_core::tui::component::{Action, UiStreamEvent};
 use omega_core::tui::editor::EditorMode;
-use omega_core::tui::spinner::SpinnerState;
+use omega_core::tui::loader::SpinnerState;
 
 use super::{App, ChannelEmitter};
 
@@ -64,7 +64,7 @@ impl App {
                 // Session flushes happen inside stream_message_with_history_cancel
                 // (user msg, each tool round, final assistant) via AppState.
                 let r = commands::chat::stream_message_with_history_cancel(
-                    &state,
+                    state.clone(),
                     request,
                     &emitter,
                     &mut msgs,
@@ -115,9 +115,13 @@ impl App {
         while let Ok(event) = rx.try_recv() {
             // Update App-level state from events
             match &event {
-                UiStreamEvent::Token(_) => {
+                UiStreamEvent::Token(tok) => {
                     self.editor.state = EditorMode::Streaming;
                     self.status.set_spinner_state(SpinnerState::Streaming);
+                    // Approximate streamed output tokens (4 chars ≈ 1 token)
+                    // for the live `↑N tok` counter.
+                    self.status
+                        .record_tokens_out((tok.len() as u64).div_ceil(4));
                 }
                 UiStreamEvent::Thinking(_) => {
                     self.editor.state = EditorMode::Thinking;
@@ -125,6 +129,7 @@ impl App {
                 }
                 UiStreamEvent::ToolCall { name, .. } => {
                     self.status.set_spinner_state(SpinnerState::ToolCall);
+                    self.status.set_tool_name(Some(name.clone()));
                     // Track running tool
                     if !self.running_tools.contains(name) {
                         self.running_tools.push(name.clone());
@@ -133,6 +138,12 @@ impl App {
                 UiStreamEvent::ToolResult { name, .. } => {
                     // Remove from running tools if present
                     self.running_tools.retain(|t| t != name);
+                    if self.running_tools.is_empty() {
+                        // All queued tools done — resume prose appearance
+                        // until the next event refines the state.
+                        self.status.set_spinner_state(SpinnerState::Streaming);
+                        self.status.set_tool_name(None);
+                    }
                 }
                 UiStreamEvent::Done {
                     tokens_in,

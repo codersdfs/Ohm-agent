@@ -3,7 +3,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind};
 use omega_core::tui::component::Action;
 use omega_core::tui::editor::EditorMode;
-use omega_core::tui::spinner::SpinnerState;
+use omega_core::tui::loader::SpinnerState;
 
 use super::App;
 use crate::config_loader::{save_api_key, save_config};
@@ -125,9 +125,8 @@ impl App {
 
         // Delegate to editor component (handles letters, Enter, navigation, Tab)
         let action = self.editor.handle_key(key);
-        match action {
-            Action::SendMessage => self.submit_message(),
-            _ => {}
+        if action == Action::SendMessage {
+            self.submit_message();
         }
 
         // Scroll keys (also handled at App level for dual history+scroll binding)

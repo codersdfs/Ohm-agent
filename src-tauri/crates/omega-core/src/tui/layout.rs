@@ -127,13 +127,14 @@ pub fn render_full_layout(frame: &mut Frame, area: Rect, chrome: &mut LayoutChro
     );
     // ── Status bar ─────────────────────────────────────────────────────
     if chrome.is_streaming {
-        chrome
-            .status
-            .set_spinner_state(super::spinner::SpinnerState::Streaming);
+        // Explicit states (Thinking / Streaming / ToolCall) arrive via
+        // stream events; layout only promotes a still-Idle loader so the
+        // pre-first-token window shows activity too.
+        chrome.status.ensure_active();
     } else {
         chrome
             .status
-            .set_spinner_state(super::spinner::SpinnerState::Idle);
+            .set_spinner_state(super::loader::SpinnerState::Idle);
     }
     chrome.status.tick_spinner();
     Widget::render(&*chrome.status, vert[3], frame.buffer_mut());

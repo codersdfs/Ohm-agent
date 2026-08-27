@@ -144,7 +144,12 @@ impl App {
         let _model = config.model.clone();
         let _kind = format!("{}", config.kind);
         let editor = EditorState::new();
-        let status = StatusState::new();
+        // Loader is config-driven: the future settings panel edits
+        // `config.json`'s "loader" block; unknown styles fall back safely.
+        let mut status = StatusState::new();
+        status.loader = omega_core::tui::loader::LoaderRegistry::from_config(
+            &crate::config_loader::load_loader_config(),
+        );
         let resumed = load.resumed;
         let msg_count = load.messages.len();
         let warnings = load.warnings.clone();

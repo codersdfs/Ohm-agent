@@ -2,6 +2,9 @@
 
 use providers::ProviderConfig;
 
+/// TUI loader settings ride in the same config.json under `"loader"`.
+pub use omega_core::tui::loader::LoaderConfig;
+
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct CliConfig {
     pub provider: Option<String>,
@@ -9,6 +12,9 @@ pub struct CliConfig {
     pub base_url: Option<String>,
     pub max_tokens: Option<u32>,
     pub temperature: Option<f32>,
+    /// Optional activity-loader customization (style, tick rate, phrases).
+    #[serde(default)]
+    pub loader: Option<LoaderConfig>,
 }
 
 pub fn config_dir() -> std::path::PathBuf {
@@ -29,7 +35,14 @@ pub fn load_config() -> CliConfig {
             base_url: None,
             max_tokens: None,
             temperature: None,
+            loader: None,
         })
+}
+
+/// Loader section of the persisted config; all defaults when absent, so a
+/// missing or hand-deleted key never breaks startup.
+pub fn load_loader_config() -> LoaderConfig {
+    load_config().loader.unwrap_or_default()
 }
 
 pub fn save_config(config: &providers::ProviderConfig) {
@@ -39,6 +52,9 @@ pub fn save_config(config: &providers::ProviderConfig) {
         base_url: config.base_url.clone(),
         max_tokens: Some(config.max_tokens),
         temperature: Some(config.temperature),
+        // Round-trip preservation: saving provider settings must never wipe
+        // a user's customized loader block.
+        loader: load_config().loader,
     };
     let path = config_dir().join("config.json");
     if let Ok(json) = serde_json::to_string_pretty(&cli) {
@@ -197,6 +213,7 @@ fn load_config_from_dir(cfg_dir: &std::path::Path) -> CliConfig {
             base_url: None,
             max_tokens: None,
             temperature: None,
+            loader: None,
         })
 }
 
@@ -223,6 +240,7 @@ mod tests {
             base_url: Some("https://api.example.com".into()),
             max_tokens: Some(8192),
             temperature: Some(1.0),
+            loader: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: CliConfig = serde_json::from_str(&json).unwrap();
@@ -249,6 +267,40 @@ mod tests {
         assert_eq!(cfg.provider, None);
         assert_eq!(cfg.max_tokens, None);
         assert_eq!(cfg.temperature, None);
+        assert_eq!(cfg.loader, None);
+    }
+
+    // ── loader section ───────────────────────────────────────────────
+
+    #[test]
+    fn cli_config_parses_loader_block() {
+        let json = r#"{"provider":"openai","loader":{"style":"braille","tick_ms":120}}"#;
+        let cfg: CliConfig = serde_json::from_str(json).unwrap();
+        let loader = cfg.loader.expect("loader block should parse");
+        assert_eq!(loader.resolved_style(), "braille");
+        assert_eq!(loader.resolved_tick_ms(), 120);
+    }
+
+    #[test]
+    fn cli_config_loader_garbage_style_still_parses() {
+        // Unknown style must not break startup — resolution falls back later.
+        let json = r#"{"loader":{"style":"neon_rainbow","phrases":["Hacking…"]}}"#;
+        let cfg: CliConfig = serde_json::from_str(json).unwrap();
+        let loader = cfg.loader.unwrap();
+        assert_eq!(loader.resolved_style(), "shimmer");
+        assert_eq!(
+            loader.resolved_phrases(),
+            Some(vec!["Hacking…".to_string()])
+        );
+    }
+
+    #[test]
+    fn cli_config_missing_loader_defaults_cleanly() {
+        let cfg: CliConfig = serde_json::from_str(r#"{"provider":"openai"}"#).unwrap();
+        assert!(cfg.loader.is_none());
+        let resolved = cfg.loader.unwrap_or_default();
+        assert_eq!(resolved.resolved_style(), "shimmer");
+        assert_eq!(resolved.resolved_tick_ms(), 80);
     }
 
     // ── load_config_from_dir ─────────────────────────────────────────
