@@ -35,6 +35,7 @@ pub enum CommandHandler {
     MemStore,
     MemSearch,
     MemList,
+    Skill,
 }
 
 /// One palette row / slash command.
@@ -191,6 +192,14 @@ pub static COMMANDS: &[CommandEntry] = &[
         description: "List all project-layer memories",
         keywords: &["memory", "list", "show", "all", "entries", "project"],
         handler: CommandHandler::MemList,
+    },
+    CommandEntry {
+        id: "/skill",
+        label: "Load skill",
+        aliases: &["/skills"],
+        description: "Load an agent skill (or list available skills)",
+        keywords: &["skill", "context", "instructions", "load"],
+        handler: CommandHandler::Skill,
     },
 ];
 

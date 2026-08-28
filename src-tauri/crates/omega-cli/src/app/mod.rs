@@ -239,6 +239,15 @@ impl App {
             app.transcript.add_notice(format!("MCP: {}", err), true);
         }
 
+        // Load agent skills from ~/.agents/skill/
+        let agent_skill_count = commands::agent_skills::init();
+        if agent_skill_count > 0 {
+            app.transcript.add_notice(
+                format!("Skills: {} agent skill(s) available (use /skill to list)", agent_skill_count),
+                false,
+            );
+        }
+
         app
     }
 

@@ -428,6 +428,56 @@ impl App {
                     }
                 }
             }
+            CommandHandler::Skill => {
+                let name = cmd
+                    .trim_start_matches("/skill")
+                    .trim_start_matches("/skills")
+                    .trim();
+                if name.is_empty() {
+                    // List available skills
+                    let skills = commands::agent_skills::list_skills();
+                    if skills.is_empty() {
+                        self.transcript.add_notice(
+                            "No agent skills found. Place skills in .omega/skills/<name>/SKILL.md or ~/.agents/skill/".into(),
+                            false,
+                        );
+                    } else {
+                        let mut lines = format!("Agent skills ({}):\n", skills.len());
+                        for s in &skills {
+                            let desc = &s.frontmatter.description;
+                            if desc.is_empty() {
+                                lines.push_str(&format!("  {}\n", s.frontmatter.name));
+                            } else {
+                                lines.push_str(&format!(
+                                    "  {} — {}\n",
+                                    s.frontmatter.name, desc
+                                ));
+                            }
+                        }
+                        lines.push_str("\nUse /skill <name> to load, or let the agent auto-invoke.");
+                        self.transcript.add_notice(lines, false);
+                    }
+                } else {
+                    // Load and inject the skill content into the conversation
+                    match commands::agent_skills::load_skill(name, "") {
+                        Some(skill) => {
+                            let injection =
+                                commands::agent_skills::format_skill_for_injection(&skill);
+                            self.transcript.add_notice(
+                                format!("Loaded skill: {}", skill.frontmatter.name),
+                                false,
+                            );
+                            self.transcript.add_notice(injection, false);
+                        }
+                        None => {
+                            self.transcript.add_notice(
+                                format!("Skill '{}' not found. Use /skill to list available skills.", name),
+                                true,
+                            );
+                        }
+                    }
+                }
+            }
             CommandHandler::Memory => {
                 let query = cmd
                     .trim_start_matches("/memory")

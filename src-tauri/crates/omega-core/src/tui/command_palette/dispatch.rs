@@ -74,6 +74,7 @@ mod tests {
                 "/mem-store",
                 "/mem-search",
                 "/mem-list",
+                "/skill",
             ]
         );
     }

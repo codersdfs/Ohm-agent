@@ -1,3 +1,4 @@
+pub mod agent_skills;
 pub mod build_cmd;
 pub mod chat;
 pub mod cost_tracker;

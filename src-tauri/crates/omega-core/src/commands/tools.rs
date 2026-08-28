@@ -122,6 +122,31 @@ pub async fn execute_tool_inner(
         return crate::commands::mcp::invoke_skill(&skill, &request.args).await;
     }
 
+    // Check agent skills (load_skill tool)
+    if tool_name == "load_skill" {
+        let name = request
+            .args
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let skill_args = request.args.get("args").and_then(|v| v.as_str()).unwrap_or("");
+        return match crate::commands::agent_skills::load_skill(name, skill_args) {
+            Some(skill) => {
+                let injection = crate::commands::agent_skills::format_skill_for_injection(&skill);
+                Ok(ToolResult::ok(injection, None))
+            }
+            None => Ok(ToolResult::err(format!(
+                "Skill '{}' not found. Available skills: {}",
+                name,
+                crate::commands::agent_skills::list_skills()
+                    .iter()
+                    .map(|s| s.frontmatter.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))),
+        };
+    }
+
     let tool_input = request.clone().into_input();
 
     // Shared pipeline: registry + live Gate enforcement hook + real hook
@@ -357,6 +382,9 @@ pub const CHAT_SYSTEM_PROMPT: &str = r#"You are Omega Agent — a tool-using cod
 
 ## Tools
 Tools are provided via the native function-calling API. Call them through the API — do not invent a custom JSON protocol in plain text.
+
+## Agent Skills
+The AGENT SKILLS section at the end of this prompt lists available skills with short descriptions. When a user's task matches a skill description, call `load_skill` with that skill's name to load its full instructions. Use the loaded content to guide your work. Do not load skills that are irrelevant to the task.
 "#;
 
 pub fn format_tool_help(def: &providers::ToolDefinition) -> String {
@@ -492,6 +520,9 @@ fn build_system_prompt() -> String {
     if let Some(project) = build_project_instructions() {
         prompt.push_str(&project);
     }
+    if let Some(skills) = crate::commands::agent_skills::skill_index() {
+        prompt.push_str(&skills);
+    }
     prompt
 }
 
@@ -502,6 +533,29 @@ pub fn tool_definitions() -> Vec<providers::ToolDefinition> {
         .get_or_init(|| {
             let mut defs = registry().tool_definitions();
             defs.extend(crate::commands::mcp::tool_definitions());
+            // Agent skills tool: lets the LLM load skill content on demand
+            defs.push(providers::ToolDefinition {
+                tool_type: "function".into(),
+                function: providers::ToolFunctionDef {
+                    name: "load_skill".into(),
+                    description: "Load an agent skill by name to get its full instructions. Use this when the skill index in the system prompt matches the user's task. The skill content will be returned as context for your response.".into(),
+                    parameters: serde_json::json!({
+                        "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "The skill name from the index (e.g. 'omega-agent')"
+                        },
+                        "args": {
+                            "type": "string",
+                            "description": "Arguments to pass to the skill (substituted into $ARGUMENTS, $0, $1, etc.)",
+                            "default": ""
+                        }
+                    },
+                    "required": ["name"]
+                    }),
+                },
+            });
             defs
         })
         .clone()
