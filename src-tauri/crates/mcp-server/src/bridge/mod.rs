@@ -1,13 +1,11 @@
-//! Bridge module — connects to remote MCP servers and exposes their tools
+//! Bridge module — exposes native tool definitions via the `tools/list`
+//! JSON-RPC method.
 //!
-//! This enables the MCP server to act as a hub/aggregator that merges tools
-//! from multiple external MCP servers (Figma, 21st.dev, local servers, etc.)
-//! with Ohm-agent's native tools.
+//! The remote-MCP bridge (`RemoteMcpClient`, `ToolBackend::Remote`,
+//! `discover_remote_tools`) was removed — see
+//! `docs/agents/tool-calling-cleanup/issues/03-*.md`. Production MCP
+//! transport is the `.mcp.json` skill path in `omega-core/commands/mcp.rs`.
 
-pub mod config;
-pub mod remote_client;
 pub mod router;
 
-pub use config::RemoteServerConfig;
-pub use remote_client::RemoteMcpClient;
 pub use router::ToolRouter;

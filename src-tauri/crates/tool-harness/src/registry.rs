@@ -8,7 +8,6 @@ use std::collections::HashMap;
 /// Tool registry for registration, lookup, and listing
 pub struct ToolRegistry {
     built_ins: HashMap<String, Box<dyn Tool>>,
-    mcp_tools: HashMap<String, Box<dyn Tool>>,
 }
 
 impl Default for ToolRegistry {
@@ -21,7 +20,6 @@ impl ToolRegistry {
     pub fn new() -> Self {
         Self {
             built_ins: HashMap::new(),
-            mcp_tools: HashMap::new(),
         }
     }
 
@@ -37,31 +35,19 @@ impl ToolRegistry {
 
     /// Get a tool by name (built-ins take precedence)
     pub fn get(&self, name: &str) -> Option<&dyn Tool> {
-        self.built_ins
-            .get(name)
-            .map(|t| t.as_ref())
-            .or_else(|| self.mcp_tools.get(name).map(|t| t.as_ref()))
+        self.built_ins.get(name).map(|t| t.as_ref())
     }
 
     /// List all tool names (built-ins first, then MCP)
     pub fn list(&self) -> Vec<String> {
-        let mut names: Vec<String> = self
-            .built_ins
-            .keys()
-            .chain(self.mcp_tools.keys())
-            .cloned()
-            .collect();
+        let mut names: Vec<String> = self.built_ins.keys().cloned().collect();
         names.sort();
         names
     }
 
     /// Get tool definitions for all registered tools
     pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
-        let mut defs: Vec<ToolDefinition> = self
-            .built_ins
-            .values()
-            .chain(self.mcp_tools.values())
-            .map(|t| ToolDefinition {
+        let mut defs: Vec<ToolDefinition> = self.built_ins.values().map(|t| ToolDefinition {
                 tool_type: "function".into(),
                 function: providers::ToolFunctionDef {
                     name: t.name().into(),
@@ -84,12 +70,7 @@ impl ToolRegistry {
 
     /// Return metadata for every registered tool.
     pub fn all_metadata(&self) -> Vec<ToolMetadata> {
-        let mut meta: Vec<ToolMetadata> = self
-            .built_ins
-            .values()
-            .chain(self.mcp_tools.values())
-            .map(|t| t.metadata())
-            .collect();
+        let mut meta: Vec<ToolMetadata> = self.built_ins.values().map(|t| t.metadata()).collect();
         meta.sort_by(|a, b| a.name.cmp(&b.name));
         meta
     }
@@ -161,23 +142,14 @@ impl ToolRegistry {
     /// Count tools by source type.
     pub fn count_by_source(&self) -> (usize, usize, usize) {
         let builtin = self.built_ins.len();
-        let mcp = self.mcp_tools.len();
-        (builtin, mcp, builtin + mcp)
+        // ponytail: mcp_tools field was removed with the dead remote bridge (ticket 03).
+        // Returns 0 for the mcp slot to keep the (builtin, mcp, total) shape stable.
+        (builtin, 0, builtin)
     }
 
     // ── End metadata extensions ──────────────────────────────────
 
-    /// Merge MCP tools into registry
-    pub fn merge_mcp_tools(&mut self, tools: Vec<Box<dyn Tool>>) {
-        for tool in tools {
-            self.mcp_tools.insert(tool.name().to_string(), tool);
-        }
-    }
 
-    /// Get a mutable reference to the MCP tools map for modification
-    pub fn mcp_tools_mut(&mut self) -> &mut HashMap<String, Box<dyn Tool>> {
-        &mut self.mcp_tools
-    }
 
     /// Feature flag filtering (stub - accept all for now)
     pub fn filter_by_feature(&self, _feature_flags: &[&str]) -> Vec<String> {

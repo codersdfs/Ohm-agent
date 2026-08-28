@@ -134,9 +134,9 @@ impl McpServer {
             })
             .collect();
 
-        // Register with the router (sync — called from builder context)
-        self.tool_router
-            .register_native_tools_blocking(defs.clone());
+        // Register with the router (sync — called from builder context).
+        // The router is what the `tools/list` handler reads from.
+        self.tool_router.register_native_tools_blocking(defs.clone());
 
         *self.tool_definitions.write().unwrap() = defs;
 
@@ -267,28 +267,26 @@ impl McpServer {
             None => return,
         };
 
-        // tools/list — return merged tool definitions from router
+        // tools/list — return tool definitions from router.
+        // (ponytail: the previous "fall back to discover_remote_tools" branch
+        //  was removed with the remote bridge — ticket 03.)
         let router_for_list = self.tool_router.clone();
         self.register_async_handler("tools/list", move |_params| {
             let router = router_for_list.clone();
             async move {
                 let tools = router.list_tools().await;
-                // Fall back to stored definitions if router is empty
-                if tools.is_empty() {
-                    // Try fresh discovery from remote servers
-                    let _ = router.discover_remote_tools().await;
-                    let _tools = router.list_tools().await;
-                }
                 Ok(serde_json::to_value(ListToolsResult { tools })
                     .map_err(|e| McpError::internal_error(format!("Serialize error: {e}")))?)
             }
         });
 
-        // tools/call — try router first, then native pipeline
-        let router_for_call = self.tool_router.clone();
+        // tools/call — dispatch straight to the native pipeline.
+        // (ponytail: the previous "try router first" branch was removed with
+        //  the remote bridge — ticket 03. The router always errored for
+        //  native tools, so the pipeline was always the real path; we just
+        //  go to it directly now.)
         let pipeline_for_call = pipeline.clone();
         self.register_async_handler("tools/call", move |params| {
-            let router = router_for_call.clone();
             let pipeline = pipeline_for_call.clone();
             async move {
                 let call_params: CallToolParams = serde_json::from_value(params)
@@ -297,21 +295,6 @@ impl McpServer {
                 let tool_name = call_params.name;
                 let tool_args = call_params.arguments.unwrap_or(serde_json::json!({}));
 
-                // First, try the router (covers remote tools)
-                match router.call_tool(&tool_name, tool_args.clone()).await {
-                    Ok(result) => {
-                        return serde_json::to_value(result)
-                            .map_err(|e| McpError::internal_error(format!("Serialize: {e}")));
-                    }
-                    Err(e) if e.contains("not found") || e.contains("Native tool") => {
-                        // Tool not found in router — try native pipeline
-                    }
-                    Err(e) => {
-                        return Err(McpError::tool_execution_error(&tool_name, e));
-                    }
-                }
-
-                // Fall back to native tool-harness pipeline
                 let input = tool_harness::ToolInput {
                     tool: tool_name.clone(),
                     args: tool_args,
