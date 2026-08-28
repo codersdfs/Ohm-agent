@@ -285,22 +285,56 @@ async fn handle_tool_calls<E: ChatEmitter>(
     }
 
     // ── Split: concurrency-safe tools run in parallel, others serially ─
-    let is_concurrency_safe = |name: &str| -> bool {
-        matches!(
-            name,
-            "read" | "grep" | "glob" | "git_status" | "git_diff" | "git_log" | "web_fetch"
-        )
+    //
+    // Source of truth is `Tool::is_concurrency_safe(&ToolInput)`, consulted
+    // via the registry on the shared `ExecutionPipeline` (ticket 01). This
+    // replaces the previous hardcoded name allow-list, which was a second
+    // source of truth that drifted from the per-tool metadata.
+    //
+    // ponytail: a tool missing from the registry is treated as serial —
+    // it will fail at the actual `execute` step with `NotFound`. The cost
+    // is a slower (serial) path for an unknown tool that already will not
+    // execute; safe default.
+    let pipeline_registry = state
+        .tool_pipeline
+        .get()
+        .map(|p| p.registry());
+
+    let is_concurrency_safe = |name: &str, args_json: &str| -> bool {
+        let Some(reg) = pipeline_registry else {
+            return false;
+        };
+        let Some(tool) = reg.get(name) else {
+            return false;
+        };
+        // ponytail: ToolInput::args is `Value`. LLM-side `arguments` is a
+        // JSON-encoded String. Parse lazily; on parse error fall back to
+        // serial (safe default for an unknown tool or malformed payload).
+        let args = match serde_json::from_str(args_json) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        tool.is_concurrency_safe(&tool_harness::ToolInput {
+            tool: name.to_string(),
+            args,
+        })
     };
 
     let safe_indices: Vec<usize> = allowed
         .iter()
         .copied()
-        .filter(|&i| is_concurrency_safe(&tool_calls[i].function.name))
+        .filter(|&i| {
+            let tc = &tool_calls[i].function;
+            is_concurrency_safe(&tc.name, &tc.arguments)
+        })
         .collect();
     let serial_indices: Vec<usize> = allowed
         .iter()
         .copied()
-        .filter(|&i| !is_concurrency_safe(&tool_calls[i].function.name))
+        .filter(|&i| {
+            let tc = &tool_calls[i].function;
+            !is_concurrency_safe(&tc.name, &tc.arguments)
+        })
         .collect();
 
     // ── Phase 1: parallel execution for concurrency-safe tools ─────────

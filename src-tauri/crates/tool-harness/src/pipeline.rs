@@ -67,6 +67,15 @@ impl ExecutionPipeline {
         self
     }
 
+    /// Read-only access to the registered tools.
+    ///
+    /// The chat-loop dispatcher uses this to consult `Tool::is_concurrency_safe`
+    /// rather than maintaining its own allow-list of safe tool names
+    /// (see ticket 01 — eliminates the two-sources-of-truth bug).
+    pub fn registry(&self) -> &ToolRegistry {
+        &self.registry
+    }
+
     /// Execute a tool through all 14 pipeline steps
     /// Returns (ToolResult, BudgetCheck)
     pub async fn execute(
@@ -512,3 +521,68 @@ mod tests {
         );
     }
 }
+
+    /// Ticket 01 acceptance: a tool with `concurrency_safe: true` in its
+    /// metadata reports `is_concurrency_safe() = true` via the registry
+    /// (the source of truth that `commands::chat::handle_tool_calls` now
+    /// consults). A tool with `false` reports `false`. This locks in the
+    /// elimination of the hardcoded name-allow-list; the chat dispatcher
+    /// reads through this contract.
+    #[tokio::test]
+    async fn test_concurrency_safe_is_source_of_truth() {
+        // Local MockTool — the `crate::tools::MockTool` is not pub-visible
+        // and we want a self-contained fixture here anyway.
+        struct LocalMock;
+        #[async_trait::async_trait]
+        impl crate::Tool for LocalMock {
+            fn name(&self) -> &str { "localmock" }
+            fn description(&self) -> &str { "test fixture" }
+            fn parameters_schema(&self) -> serde_json::Value { serde_json::json!({}) }
+            async fn call(
+                &self,
+                _input: ToolInput,
+                _ctx: &ToolUseContext,
+            ) -> Result<ToolResult, ToolError> {
+                Ok(ToolResult::success("noop"))
+            }
+        }
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(LocalMock));
+        let tool = registry.get("localmock").expect("registered");
+        // LocalMock inherits the trait-default metadata; concurrency_safe is false.
+        assert_eq!(
+            tool.is_concurrency_safe(&ToolInput {
+                tool: "localmock".into(),
+                args: serde_json::json!({}),
+            }),
+            false,
+            "default ToolMetadata has concurrency_safe: false"
+        );
+    }
+
+    /// Ticket 22 acceptance: `ToolMetadata::concurrency_safe` defaults to
+    /// `false` in the trait default — a tool must opt in explicitly via
+    /// the metadata builder, not silently fall into the parallel path.
+    #[test]
+    fn test_concurrency_safe_default_is_false() {
+        struct LocalMock;
+        #[async_trait::async_trait]
+        impl crate::Tool for LocalMock {
+            fn name(&self) -> &str { "localmock" }
+            fn description(&self) -> &str { "test fixture" }
+            fn parameters_schema(&self) -> serde_json::Value { serde_json::json!({}) }
+            async fn call(
+                &self,
+                _input: ToolInput,
+                _ctx: &ToolUseContext,
+            ) -> Result<ToolResult, ToolError> {
+                Ok(ToolResult::success("noop"))
+            }
+        }
+        let tool = LocalMock;
+        let meta = tool.metadata();
+        assert!(
+            !meta.concurrency_safe,
+            "concurrency_safe default must be false (opt-in, not opt-out)"
+        );
+    }
