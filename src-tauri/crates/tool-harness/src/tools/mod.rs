@@ -11,7 +11,6 @@ mod git_status;
 mod glob;
 mod grep;
 mod read;
-mod spawn_subagent;
 mod todo;
 mod web_fetch;
 mod write;

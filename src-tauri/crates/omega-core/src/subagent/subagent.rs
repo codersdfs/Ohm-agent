@@ -347,3 +347,69 @@ pub async fn spawn_subagent<E: ChatEmitter + ?Sized>(
         .run(delta, state, provider, provider_config, tools, emitter)
         .await
 }
+
+
+#[cfg(test)]
+mod tests {
+    //! Subagent inline-path tests (ticket 11 acceptance — partial).
+    //!
+    //! Covers: the public `Subagent::system_prompt` builder, which is the
+    //! part of the inline `handle_spawn_subagent` path that is testable
+    //! without a full AppState + LlmProvider mock.
+    //!
+    //! ponytail: GateHook and budget tests deferred to a follow-up — they
+    //! need a real LlmProvider mock and ChatEmitter to drive
+    //! `spawn_subagent` end-to-end. Whitelist enforcement is structural:
+    //! `subagent.rs:145-153` filters `available_tools` from
+    //! `config.tool_whitelist` before any tool call. Cover it with an
+    //! integration test when a LlmProvider trait mock is in place.
+    //!
+    //! Upgrade path: add a `MockLlmProvider` that returns canned
+    //! ChatResponse objects, then write a test that drives
+    //! `Subagent::run` with a tool-call sequence and asserts that a
+    //! write-class tool blocked by the parent's GateHook bubbles up as
+    //! `RunOutcome::ToolError`. Until then these unit tests are the
+    //! regression guard.
+    use super::*;
+    use crate::subagent::config::{ContextForkMode, SubagentConfig};
+
+    fn cfg(whitelist: Vec<String>, max_turns: u32, deliverable: &str) -> SubagentConfig {
+        SubagentConfig {
+            task: "find the bug in module X".into(),
+            context_mode: ContextForkMode::Full,
+            token_budget: 30_000,
+            max_turns,
+            tool_whitelist: whitelist,
+            deliverable: deliverable.into(),
+        }
+    }
+
+    #[test]
+    fn system_prompt_empty_whitelist_says_read_only() {
+        let cfg = cfg(vec![], 10, "summary");
+        let prompt = Subagent::system_prompt(&cfg);
+        assert!(prompt.contains("Tools: read-only"), "got: {prompt}");
+        assert!(prompt.contains("max_turns=10"));
+        assert!(prompt.contains("Task: find the bug in module X"));
+        assert!(prompt.contains("Deliverable: summary"));
+    }
+
+    #[test]
+    fn system_prompt_whitelist_lists_each_tool() {
+        let cfg = cfg(vec!["read".into(), "grep".into(), "glob".into()], 5, "diff");
+        let prompt = Subagent::system_prompt(&cfg);
+        assert!(prompt.contains("Tools: read, grep, glob"), "got: {prompt}");
+        assert!(prompt.contains("max_turns=5"));
+        assert!(prompt.contains("Deliverable: diff"));
+    }
+
+    #[test]
+    fn system_prompt_ends_with_done_contract() {
+        // The DONE: contract is what the inline branch parses for — see
+        // handle_spawn_subagent. Locking it down here means future
+        // refactors of the prompt cannot silently break parsing.
+        let cfg = cfg(vec![], 1, "summary");
+        let prompt = Subagent::system_prompt(&cfg);
+        assert!(prompt.contains("DONE: <your summary here>"), "got: {prompt}");
+    }
+}
