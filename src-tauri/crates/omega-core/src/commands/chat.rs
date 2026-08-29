@@ -29,6 +29,17 @@ pub struct SendMessageResponse {
 /// Default max tool-loop iterations for a single user turn.
 pub const DEFAULT_MAX_TOOL_LOOPS: u32 = 25;
 
+/// Default permission mode for the REPL chat path (ticket 26 decision).
+///
+/// The REPL is a developer escape hatch: the user typed the command and
+/// the loop is interactive, so we trust them. The TUI/CLI paths have
+/// their own explicit permission handling (see `SendMessageRequest::
+/// permission_mode`); the REPL is the "no questions asked" path.
+///
+/// ponytail: this is a stringly-typed const because `handle_tool_calls`
+/// takes `&str`. If/when a typed enum lands, replace with that.
+pub const REPL_PERMISSION_MODE: &str = "off";
+
 pub async fn send_message(
     state: Arc<AppState>,
     request: SendMessageRequest,
@@ -91,7 +102,7 @@ pub async fn send_message(
                 state.clone(),
                 &tool_calls,
                 &mut messages,
-                "off",
+                REPL_PERMISSION_MODE,
                 &NoopEmitter,
                 None,
                 provider.as_ref(),
