@@ -563,6 +563,34 @@ mod tests {
     /// Ticket 22 acceptance: `ToolMetadata::concurrency_safe` defaults to
     /// `false` in the trait default — a tool must opt in explicitly via
     /// the metadata builder, not silently fall into the parallel path.
+    /// Ticket 19 acceptance: every error returned by `ExecutionPipeline::execute`
+    /// carries the calling tool name in `source_tool`. Downstream consumers
+    /// (gate hook, run_log, telemetry) rely on this to attribute failures to
+    /// a specific tool without trusting the caller to populate the field.
+    /// This test asserts the contract for the NotFound path specifically —
+    /// the other paths (validation, permission, hook) are tested by their
+    /// own existing tests and all already set source_tool.
+    #[tokio::test]
+    async fn test_not_found_error_carries_source_tool() {
+        let pipeline = ExecutionPipeline::new()
+            .with_registry(ToolRegistry::new());
+        let ctx = ToolUseContext::new("test");
+        let input = ToolInput {
+            tool: "no_such_tool".into(),
+            args: serde_json::json!({}),
+        };
+        let err = pipeline
+            .execute("no_such_tool", input, &ctx)
+            .await
+            .expect_err("missing tool must error");
+        assert_eq!(
+            err.source_tool.as_deref(),
+            Some("no_such_tool"),
+            "NotFound error must carry source_tool = Some(tool_name)"
+        );
+        assert!(matches!(err.kind, ToolErrorKind::NotFound));
+    }
+
     #[test]
     fn test_concurrency_safe_default_is_false() {
         struct LocalMock;

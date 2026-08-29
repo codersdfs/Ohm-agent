@@ -25,7 +25,5 @@ atty = "0.2"
 shlex = "1"
 
 providers = { path = "../providers" }
-mcp = { path = "../mcp" }
-
 [dev-dependencies]
 tempfile = "3"
