@@ -172,10 +172,24 @@ pub async fn execute_tool_inner(
 
     let ctx = tool_harness::ToolUseContext::new("omega-core");
 
-    let (result, _budget) = pipeline
+    let (mut result, budget) = pipeline
         .execute(&tool_name, tool_input, &ctx)
         .await
         .map_err(|e| e.message)?;
+
+    // Surface truncation to the LLM (ticket 02). The pipeline persists the
+    // full output to a sidecar file and may chop what the tool returns;
+    // without a breadcrumb the model has no way to know the full text
+    // exists or where to read it. We append a one-line marker so it can
+    // decide whether to re-read via the `read` tool.
+    if budget.truncated {
+        if let Some(path) = budget.persisted_path.as_ref() {
+            let display = render_truncation_path(path, &state.workspace_root);
+            result
+                .output
+                .push_str(&format!("\n...[truncated, full output at {}]", display));
+        }
+    }
 
     // Gate check for write/edit operations
     let gate_result = if matches!(tool_name.as_str(), "write" | "edit") {
@@ -604,3 +618,42 @@ mod tests {
         assert!(issues.iter().any(|i| i.contains("truncated")));
     }
 }
+
+/// Render a persisted truncation path as workspace-relative when possible,
+/// absolute otherwise (ticket 02). The LLM can use the relative form as
+/// a hint that the file is in its own working tree.
+fn render_truncation_path(path: &std::path::Path, workspace: &std::path::Path) -> String {
+    match path.strip_prefix(workspace) {
+        Ok(rel) => rel.display().to_string(),
+        Err(_) => path.display().to_string(),
+    }
+}
+
+    /// Ticket 02: the truncation breadcrumb uses the workspace-relative
+    /// path when the persisted file is inside the workspace, and the
+    /// absolute path when it is outside. The LLM uses this marker to
+    /// decide whether to `read` the sidecar.
+    use std::path::PathBuf;
+
+    #[test]
+    fn render_truncation_path_inside_workspace() {
+        let ws = PathBuf::from("/home/user/proj");
+        let persisted = PathBuf::from("/home/user/proj/.local/share/tool-results/abc.txt");
+        let rendered = render_truncation_path(&persisted, &ws);
+        assert!(
+            rendered.contains(".local/share/tool-results/abc.txt"),
+            "expected relative path, got {rendered}"
+        );
+        assert!(!rendered.contains("/home/user/proj"), "got: {rendered}");
+    }
+
+    #[test]
+    fn render_truncation_path_outside_workspace() {
+        let ws = PathBuf::from("/home/user/proj");
+        let persisted = PathBuf::from("/tmp/tool-results/abc.txt");
+        let rendered = render_truncation_path(&persisted, &ws);
+        assert!(
+            rendered.contains("/tmp/tool-results/abc.txt"),
+            "expected absolute path, got {rendered}"
+        );
+    }
