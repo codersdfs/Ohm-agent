@@ -12,7 +12,10 @@ const MAX_SUMMARY_CHARS: usize = 500;
 /// Generate a turn summary string from user message, assistant response, and tool names.
 fn generate_summary(user_msg: &str, assistant_msg: &str, tool_names: &[String]) -> String {
     let user_short: String = user_msg.chars().take(100).collect();
-    let assistant_short: String = assistant_msg.chars().take(MAX_SUMMARY_CHARS - 100).collect();
+    let assistant_short: String = assistant_msg
+        .chars()
+        .take(MAX_SUMMARY_CHARS - 100)
+        .collect();
 
     let mut summary = format!("User asked: {}. Assistant: {}", user_short, assistant_short);
 
@@ -47,7 +50,11 @@ pub fn store_turn_summary(
     let memory_key = format!("turn-summary:{}", proj_key);
 
     let id = store.store(MemoryLayer::Project, &memory_key, &summary)?;
-    log::info!("stored turn summary (id={}) for project key={}", id, proj_key);
+    log::info!(
+        "stored turn summary (id={}) for project key={}",
+        id,
+        proj_key
+    );
 
     Ok(memory_key)
 }
@@ -94,12 +101,7 @@ mod tests {
     #[test]
     fn test_summarize_turn_empty_assistant() {
         let store = memory::MemoryStore::new(":memory:").unwrap();
-        let result = store_turn_summary(
-            &store,
-            "Hello",
-            "",
-            &[],
-        );
+        let result = store_turn_summary(&store, "Hello", "", &[]);
         assert!(result.is_ok());
     }
 
@@ -107,19 +109,18 @@ mod tests {
     fn test_summarize_turn_truncates_long_response() {
         let store = memory::MemoryStore::new(":memory:").unwrap();
         let long_response = "x".repeat(2000);
-        let result = store_turn_summary(
-            &store,
-            "Tell me something long",
-            &long_response,
-            &[],
-        );
+        let result = store_turn_summary(&store, "Tell me something long", &long_response, &[]);
         assert!(result.is_ok());
         let key = result.unwrap();
         if !key.is_empty() {
             let stored = store.remember(&key, Some("project")).unwrap();
             assert!(stored.is_some());
             let value = stored.unwrap();
-            assert!(value.len() <= 600, "stored value should be truncated, got {} chars", value.len());
+            assert!(
+                value.len() <= 600,
+                "stored value should be truncated, got {} chars",
+                value.len()
+            );
         }
     }
 }

@@ -278,7 +278,9 @@ mod tests {
     fn test_magic_numbers_detected() {
         let content = "const a = 42;\nconst b = 100;\nconst c = 999;\nconst d = 7;\nconst e = 5;";
         let violations = TasteCheck::check(content, "test.ts", &Language::TypeScript);
-        let magic_v = violations.iter().find(|v| v.message.contains("Magic numbers"));
+        let magic_v = violations
+            .iter()
+            .find(|v| v.message.contains("Magic numbers"));
         assert!(
             magic_v.is_some(),
             "Should flag magic numbers (>3): {:?}",
@@ -290,7 +292,9 @@ mod tests {
     fn test_no_magic_numbers_below_threshold() {
         let content = "const a = 42;\nconst b = 100;\nconst c = 999;";
         let violations = TasteCheck::check(content, "test.ts", &Language::TypeScript);
-        let magic_v = violations.iter().find(|v| v.message.contains("Magic numbers"));
+        let magic_v = violations
+            .iter()
+            .find(|v| v.message.contains("Magic numbers"));
         assert!(
             magic_v.is_none(),
             "Should not flag magic numbers (<=3): {:?}",
@@ -303,7 +307,9 @@ mod tests {
         // A .tsx file without non-null assertion should NOT trigger the check
         let content = "const x: number = 5;\nconst y = x?.foo ?? 'bar';";
         let violations = TasteCheck::check(content, "test.tsx", &Language::TypeScriptReact);
-        let nn_v = violations.iter().find(|v| v.message.contains("Non-null assertion"));
+        let nn_v = violations
+            .iter()
+            .find(|v| v.message.contains("Non-null assertion"));
         assert!(
             nn_v.is_none(),
             "Should not flag non-null assertion when absent in .tsx: {:?}",
@@ -315,7 +321,9 @@ mod tests {
     fn test_non_null_assertion_fires_in_tsx() {
         let content = "const val = obj!.property;";
         let violations = TasteCheck::check(content, "test.tsx", &Language::TypeScriptReact);
-        let nn_v = violations.iter().find(|v| v.message.contains("Non-null assertion"));
+        let nn_v = violations
+            .iter()
+            .find(|v| v.message.contains("Non-null assertion"));
         assert!(
             nn_v.is_some(),
             "Should flag non-null assertion in .tsx: {:?}",

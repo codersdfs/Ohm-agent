@@ -86,6 +86,13 @@ impl GateCheckResult {
     }
 }
 
+/// Rules-database-only check used AFTER execution for bookkeeping: it feeds
+/// `ToolResult.gate_result` and drives negative-knowledge promotion.
+///
+/// Enforcement is NOT here — the live GateHook runs the full
+/// `harness::GateEngine` (structural, taste, golden, external included) before
+/// write/edit/apply_patch executes (see `gate_hook_from_state`). This helper
+/// remains because promotion needs per-violation records against the rules DB.
 async fn run_gate(state: &AppState, content: &str) -> GateCheckResult {
     let db = state.rules_db.lock_guard();
     let lang = state.detected_language.lock_guard().clone();
@@ -115,19 +122,74 @@ pub async fn execute_tool_inner(
         return crate::commands::mcp::invoke_skill(&skill, &request.args).await;
     }
 
+    // Check agent skills (load_skill tool)
+    if tool_name == "load_skill" {
+        let name = request
+            .args
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let skill_args = request.args.get("args").and_then(|v| v.as_str()).unwrap_or("");
+        return match crate::commands::agent_skills::load_skill(name, skill_args) {
+            Some(skill) => {
+                let injection = crate::commands::agent_skills::format_skill_for_injection(&skill);
+                Ok(ToolResult::ok(injection, None))
+            }
+            None => Ok(ToolResult::err(format!(
+                "Skill '{}' not found. Available skills: {}",
+                name,
+                crate::commands::agent_skills::list_skills()
+                    .iter()
+                    .map(|s| s.frontmatter.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))),
+        };
+    }
+
     let tool_input = request.clone().into_input();
 
+    // Shared pipeline: registry + live Gate enforcement hook + real hook
+    // context, all built once. The GateHook scores write/edit/apply_patch
+    // through the FULL harness GateEngine (structural, taste, golden, rules,
+    // repeated, external) BEFORE the tool runs, so a sub-threshold write never
+    // touches disk (mode from OMEGA_GATE_MODE, default warn).
     let pipeline = state.tool_pipeline.get_or_init(|| {
         let registry = tool_harness::tools::default_tool_registry();
-        tool_harness::ExecutionPipeline::new().with_registry(registry)
+        let mut hooks = tool_harness::HooksRegistry::new();
+        hooks.register(Box::new(crate::gate_hook::gate_hook_from_state(state)));
+        let session_id = state.session_id().unwrap_or_default();
+        let hook_ctx = tool_harness::HookContext {
+            session_id,
+            turn_id: None,
+            workspace: state.workspace_root.clone(),
+        };
+        tool_harness::ExecutionPipeline::new()
+            .with_registry(registry)
+            .with_hooks(hooks)
+            .with_hook_context(hook_ctx)
     });
 
     let ctx = tool_harness::ToolUseContext::new("omega-core");
 
-    let (result, _budget) = pipeline
+    let (mut result, budget) = pipeline
         .execute(&tool_name, tool_input, &ctx)
         .await
         .map_err(|e| e.message)?;
+
+    // Surface truncation to the LLM (ticket 02). The pipeline persists the
+    // full output to a sidecar file and may chop what the tool returns;
+    // without a breadcrumb the model has no way to know the full text
+    // exists or where to read it. We append a one-line marker so it can
+    // decide whether to re-read via the `read` tool.
+    if budget.truncated {
+        if let Some(path) = budget.persisted_path.as_ref() {
+            let display = render_truncation_path(path, &state.workspace_root);
+            result
+                .output
+                .push_str(&format!("\n...[truncated, full output at {}]", display));
+        }
+    }
 
     // Gate check for write/edit operations
     let gate_result = if matches!(tool_name.as_str(), "write" | "edit") {
@@ -334,9 +396,12 @@ pub const CHAT_SYSTEM_PROMPT: &str = r#"You are Omega Agent — a tool-using cod
 
 ## Tools
 Tools are provided via the native function-calling API. Call them through the API — do not invent a custom JSON protocol in plain text.
+
+## Agent Skills
+The AGENT SKILLS section at the end of this prompt lists available skills with short descriptions. When a user's task matches a skill description, call `load_skill` with that skill's name to load its full instructions. Use the loaded content to guide your work. Do not load skills that are irrelevant to the task.
 "#;
 
-fn format_tool_help(def: &providers::ToolDefinition) -> String {
+pub fn format_tool_help(def: &providers::ToolDefinition) -> String {
     let params: Vec<String> = def
         .function
         .parameters
@@ -365,7 +430,12 @@ fn format_tool_help(def: &providers::ToolDefinition) -> String {
 }
 
 /// Load optional project instructions (AGENTS.md / .omega/instructions.md), capped.
-fn project_instructions_snippet() -> Option<String> {
+///
+/// Cached by file mtime: the snippet is re-read from disk only when a
+/// candidate instruction file actually changes on disk, so repeated
+/// `default_system_prompt()`/`send_message` calls don't do redundant I/O or
+/// re-embed an unchanged (potentially ~2k-token) instructions block.
+pub fn project_instructions_snippet() -> Option<String> {
     const CAP: usize = 8_000;
     let candidates = ["AGENTS.md", ".omega/instructions.md", "CLAUDE.md"];
     for path in candidates {
@@ -389,21 +459,83 @@ fn project_instructions_snippet() -> Option<String> {
     None
 }
 
+static CACHED_SYSTEM_PROMPT: std::sync::Mutex<Option<(Option<(String, u64)>, String)>> =
+    std::sync::Mutex::new(None);
+
 pub fn default_system_prompt() -> String {
-    let mut prompt = CHAT_SYSTEM_PROMPT.to_string();
-    let tools = tool_definitions();
-    if !tools.is_empty() {
-        prompt.push_str("\n\n=== AVAILABLE TOOLS ===\n");
-        for t in &tools {
-            prompt.push_str(&format_tool_help(t));
-            prompt.push('\n');
+    // Fingerprint of the project-instructions sources (mtime of any candidate
+    // that exists). `None` sentinel = no instructions loaded.
+    fn instructions_mtime() -> Option<(String, u64)> {
+        for path in ["AGENTS.md", ".omega/instructions.md", "CLAUDE.md"] {
+            if let Ok(meta) = std::fs::metadata(path) {
+                if let Ok(modified) = meta.modified() {
+                    if let Ok(since_epoch) = modified.duration_since(std::time::UNIX_EPOCH) {
+                        return Some((path.to_string(), since_epoch.as_millis() as u64));
+                    }
+                }
+            }
         }
-        prompt.push_str(
-            "\nUse the provider's native tool/function calling. Do not print raw tool JSON as your only response unless the model has no tool API.\n",
-        );
+        None
     }
-    if let Some(project) = project_instructions_snippet() {
+
+    let sig = instructions_mtime();
+    if let Ok(mut guard) = CACHED_SYSTEM_PROMPT.lock() {
+        if let Some((cached_sig, cached_prompt)) = guard.as_ref() {
+            if *cached_sig == sig {
+                return cached_prompt.clone();
+            }
+        }
+        let prompt = build_system_prompt();
+        *guard = Some((sig, prompt.clone()));
+        return prompt;
+    }
+
+    build_system_prompt()
+}
+
+/// Static base agent instructions. Never changes at runtime.
+pub fn build_base_prompt() -> String {
+    CHAT_SYSTEM_PROMPT.to_string()
+}
+
+/// Formats the available tools section of the system prompt. Cached at the
+/// `tool_definitions()` level (OnceLock); recomputed only when the process
+/// restarts. Returns `None` when no tools are registered.
+pub fn build_tools_section() -> Option<String> {
+    let tools = tool_definitions();
+    if tools.is_empty() {
+        return None;
+    }
+    let mut section = String::from("\n\n=== AVAILABLE TOOLS ===\n");
+    for t in &tools {
+        section.push_str(&format_tool_help(t));
+        section.push('\n');
+    }
+    section.push_str(
+        "\nUse the provider's native tool/function calling. Do not print raw tool JSON as your only response unless the model has no tool API.\n",
+    );
+    Some(section)
+}
+
+/// Reads and formats the project-instructions snippet (AGENTS.md /
+/// .omega/instructions.md / CLAUDE.md). Returns `None` when no candidate
+/// file exists. Disk I/O on every call — callers are expected to cache by
+/// mtime (see `default_system_prompt`).
+pub fn build_project_instructions() -> Option<String> {
+    project_instructions_snippet()
+}
+
+/// Assembles the full system prompt from its independent parts.
+fn build_system_prompt() -> String {
+    let mut prompt = build_base_prompt();
+    if let Some(tools) = build_tools_section() {
+        prompt.push_str(&tools);
+    }
+    if let Some(project) = build_project_instructions() {
         prompt.push_str(&project);
+    }
+    if let Some(skills) = crate::commands::agent_skills::skill_index() {
+        prompt.push_str(&skills);
     }
     prompt
 }
@@ -415,6 +547,29 @@ pub fn tool_definitions() -> Vec<providers::ToolDefinition> {
         .get_or_init(|| {
             let mut defs = registry().tool_definitions();
             defs.extend(crate::commands::mcp::tool_definitions());
+            // Agent skills tool: lets the LLM load skill content on demand
+            defs.push(providers::ToolDefinition {
+                tool_type: "function".into(),
+                function: providers::ToolFunctionDef {
+                    name: "load_skill".into(),
+                    description: "Load an agent skill by name to get its full instructions. Use this when the skill index in the system prompt matches the user's task. The skill content will be returned as context for your response.".into(),
+                    parameters: serde_json::json!({
+                        "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "The skill name from the index (e.g. 'omega-agent')"
+                        },
+                        "args": {
+                            "type": "string",
+                            "description": "Arguments to pass to the skill (substituted into $ARGUMENTS, $0, $1, etc.)",
+                            "default": ""
+                        }
+                    },
+                    "required": ["name"]
+                    }),
+                },
+            });
             defs
         })
         .clone()
@@ -463,3 +618,42 @@ mod tests {
         assert!(issues.iter().any(|i| i.contains("truncated")));
     }
 }
+
+/// Render a persisted truncation path as workspace-relative when possible,
+/// absolute otherwise (ticket 02). The LLM can use the relative form as
+/// a hint that the file is in its own working tree.
+fn render_truncation_path(path: &std::path::Path, workspace: &std::path::Path) -> String {
+    match path.strip_prefix(workspace) {
+        Ok(rel) => rel.display().to_string(),
+        Err(_) => path.display().to_string(),
+    }
+}
+
+    /// Ticket 02: the truncation breadcrumb uses the workspace-relative
+    /// path when the persisted file is inside the workspace, and the
+    /// absolute path when it is outside. The LLM uses this marker to
+    /// decide whether to `read` the sidecar.
+    use std::path::PathBuf;
+
+    #[test]
+    fn render_truncation_path_inside_workspace() {
+        let ws = PathBuf::from("/home/user/proj");
+        let persisted = PathBuf::from("/home/user/proj/.local/share/tool-results/abc.txt");
+        let rendered = render_truncation_path(&persisted, &ws);
+        assert!(
+            rendered.contains(".local/share/tool-results/abc.txt"),
+            "expected relative path, got {rendered}"
+        );
+        assert!(!rendered.contains("/home/user/proj"), "got: {rendered}");
+    }
+
+    #[test]
+    fn render_truncation_path_outside_workspace() {
+        let ws = PathBuf::from("/home/user/proj");
+        let persisted = PathBuf::from("/tmp/tool-results/abc.txt");
+        let rendered = render_truncation_path(&persisted, &ws);
+        assert!(
+            rendered.contains("/tmp/tool-results/abc.txt"),
+            "expected absolute path, got {rendered}"
+        );
+    }

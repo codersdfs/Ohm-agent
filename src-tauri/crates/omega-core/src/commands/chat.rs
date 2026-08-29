@@ -29,8 +29,19 @@ pub struct SendMessageResponse {
 /// Default max tool-loop iterations for a single user turn.
 pub const DEFAULT_MAX_TOOL_LOOPS: u32 = 25;
 
+/// Default permission mode for the REPL chat path (ticket 26 decision).
+///
+/// The REPL is a developer escape hatch: the user typed the command and
+/// the loop is interactive, so we trust them. The TUI/CLI paths have
+/// their own explicit permission handling (see `SendMessageRequest::
+/// permission_mode`); the REPL is the "no questions asked" path.
+///
+/// ponytail: this is a stringly-typed const because `handle_tool_calls`
+/// takes `&str`. If/when a typed enum lands, replace with that.
+pub const REPL_PERMISSION_MODE: &str = "off";
+
 pub async fn send_message(
-    state: &AppState,
+    state: Arc<AppState>,
     request: SendMessageRequest,
 ) -> Result<SendMessageResponse, String> {
     log::debug!(
@@ -87,7 +98,17 @@ pub async fn send_message(
 
         if let Some(tool_calls) = response.tool_calls {
             // Shared handle_tool_calls: permission, diff, emitter hooks.
-            handle_tool_calls(state, &tool_calls, &mut messages, "off", &NoopEmitter, None, provider.as_ref(), &tools).await?;
+            handle_tool_calls(
+                state.clone(),
+                &tool_calls,
+                &mut messages,
+                REPL_PERMISSION_MODE,
+                &NoopEmitter,
+                None,
+                provider.as_ref(),
+                &tools,
+            )
+            .await?;
         } else {
             return Ok(SendMessageResponse {
                 message_id: uuid::Uuid::new_v4().to_string(),
@@ -102,13 +123,27 @@ fn cancelled(flag: Option<&Arc<AtomicBool>>) -> bool {
     flag.map(|f| f.load(Ordering::SeqCst)).unwrap_or(false)
 }
 
+/// Record a tool as running for the TUI header chips. Lock failures and
+/// state races never abort the turn — chips are cosmetic.
+fn mark_tool_running(state: &AppState, name: &str) {
+    let mut tools = state.running_tools.lock_guard();
+    if !tools.iter().any(|t| t == name) {
+        tools.push(name.to_string());
+    }
+}
+
+/// Remove a finished tool from the header chip list.
+fn mark_tool_finished(state: &AppState, name: &str) {
+    let mut tools = state.running_tools.lock_guard();
+    tools.retain(|t| t != name);
+}
+
 /// Persist conversation snapshot if AppState has a session store attached.
 /// Failures are logged but never abort the turn (disk errors shouldn't kill chat).
 fn flush_session(state: &AppState, messages: &[providers::ChatMessage]) {
     if let Err(e) = state.persist_session(messages) {
         log::warn!("session persist failed: {e}");
     }
-
 }
 
 /// Handle a `spawn_subagent` tool call by forking the parent's conversation
@@ -125,7 +160,7 @@ async fn handle_spawn_subagent<E: ChatEmitter>(
     tools: &[providers::ToolDefinition],
     emitter: &E,
 ) -> Result<String, String> {
-    use crate::subagent::{SubagentConfig, spawn_subagent};
+    use crate::subagent::{spawn_subagent, SubagentConfig};
     use serde_json::Value;
 
     let args: Value = serde_json::from_str(args_json)
@@ -141,10 +176,7 @@ async fn handle_spawn_subagent<E: ChatEmitter>(
         .and_then(|v| v.as_u64())
         .unwrap_or(30_000);
 
-    let max_turns = args
-        .get("max_turns")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(10) as u32;
+    let max_turns = args.get("max_turns").and_then(|v| v.as_u64()).unwrap_or(10) as u32;
 
     let tool_whitelist: Vec<String> = args
         .get("tool_whitelist")
@@ -181,6 +213,8 @@ async fn handle_spawn_subagent<E: ChatEmitter>(
     let result = spawn_subagent(
         config,
         &messages,
+        0, // parent_token_count: defer precise count to ContextManager
+        0, // parent_generation: not yet instrumented, pass 0
         &parent_id,
         &parent_session,
         state,
@@ -204,7 +238,7 @@ async fn handle_spawn_subagent<E: ChatEmitter>(
 }
 
 async fn handle_tool_calls<E: ChatEmitter>(
-    state: &AppState,
+    state: Arc<AppState>,
     tool_calls: &[providers::ToolCall],
     messages: &mut Vec<providers::ChatMessage>,
     permission_mode: &str,
@@ -213,6 +247,7 @@ async fn handle_tool_calls<E: ChatEmitter>(
     provider: &dyn providers::LlmProvider,
     tools: &[providers::ToolDefinition],
 ) -> Result<(), String> {
+    // Push the assistant message with all tool calls upfront.
     messages.push(providers::ChatMessage {
         role: "assistant".into(),
         content: String::new(),
@@ -221,20 +256,179 @@ async fn handle_tool_calls<E: ChatEmitter>(
         name: None,
     });
 
-    for tc in tool_calls {
+    if tool_calls.is_empty() {
+        return Ok(());
+    }
+
+    // ── Pre-flight: cancel check + permission check for all tools ──────
+    // Permission prompts are sequential even when tools execute in parallel.
+    // We check upfront so parallel dispatch doesn't race on the emitter.
+    let mut allowed: Vec<usize> = Vec::with_capacity(tool_calls.len());
+    for (i, tc) in tool_calls.iter().enumerate() {
         if cancelled(cancel) {
-            let msg = "Cancelled by user before tool execution".to_string();
-            emitter.emit_tool_result(&tc.function.name, false, &msg)?;
+            break;
+        }
+        match check_permission(
+            permission_mode,
+            &tc.function.name,
+            &tc.function.arguments,
+            emitter,
+        )
+        .await
+        {
+            Permission::Allow => allowed.push(i),
+            Permission::Deny => {
+                emitter.emit_tool_result(&tc.function.name, false, "denied")?;
+                messages.push(providers::ChatMessage {
+                    role: "tool".into(),
+                    content: format!("Tool `{}` was denied by permission mode", tc.function.name),
+                    tool_calls: None,
+                    tool_call_id: Some(tc.id.clone()),
+                    name: Some(tc.function.name.clone()),
+                });
+            }
+            Permission::Abort => return Err("Message aborted by user".into()),
+        }
+    }
+
+    if allowed.is_empty() {
+        return Ok(());
+    }
+
+    // ── Split: concurrency-safe tools run in parallel, others serially ─
+    //
+    // Source of truth is `Tool::is_concurrency_safe(&ToolInput)`, consulted
+    // via the registry on the shared `ExecutionPipeline` (ticket 01). This
+    // replaces the previous hardcoded name allow-list, which was a second
+    // source of truth that drifted from the per-tool metadata.
+    //
+    // ponytail: a tool missing from the registry is treated as serial —
+    // it will fail at the actual `execute` step with `NotFound`. The cost
+    // is a slower (serial) path for an unknown tool that already will not
+    // execute; safe default.
+    let pipeline_registry = state
+        .tool_pipeline
+        .get()
+        .map(|p| p.registry());
+
+    let is_concurrency_safe = |name: &str, args_json: &str| -> bool {
+        let Some(reg) = pipeline_registry else {
+            return false;
+        };
+        let Some(tool) = reg.get(name) else {
+            return false;
+        };
+        // ponytail: ToolInput::args is `Value`. LLM-side `arguments` is a
+        // JSON-encoded String. Parse lazily; on parse error fall back to
+        // serial (safe default for an unknown tool or malformed payload).
+        let args = match serde_json::from_str(args_json) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        tool.is_concurrency_safe(&tool_harness::ToolInput {
+            tool: name.to_string(),
+            args,
+        })
+    };
+
+    let safe_indices: Vec<usize> = allowed
+        .iter()
+        .copied()
+        .filter(|&i| {
+            let tc = &tool_calls[i].function;
+            is_concurrency_safe(&tc.name, &tc.arguments)
+        })
+        .collect();
+    let serial_indices: Vec<usize> = allowed
+        .iter()
+        .copied()
+        .filter(|&i| {
+            let tc = &tool_calls[i].function;
+            !is_concurrency_safe(&tc.name, &tc.arguments)
+        })
+        .collect();
+
+    // ── Phase 1: parallel execution for concurrency-safe tools ─────────
+    // Each tool runs in a tokio task. Results are collected and sorted
+    // by original index to preserve message ordering.
+    if !safe_indices.is_empty() {
+        let mut join_set: tokio::task::JoinSet<(usize, String, bool, String)> =
+            tokio::task::JoinSet::new();
+
+        for &idx in &safe_indices {
+            let tc = &tool_calls[idx];
+            let tool_name = tc.function.name.clone();
+            let args_json = tc.function.arguments.clone();
+            let tc_id = tc.id.clone();
+            let state_arc = state.clone();
+
+            // Announce the call before spawning so the borrowed emitter
+            // never needs to cross into a 'static task boundary.
+            emitter.emit_tool_call(&tool_name, &args_json).ok();
+
+            join_set.spawn(async move {
+                let args = match serde_json::from_str::<serde_json::Value>(&args_json) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        let err_msg = format!(
+                            "Error parsing arguments for `{}`: {}.\nArguments received: {}",
+                            tool_name, e, args_json
+                        );
+                        return (idx, tc_id, false, err_msg);
+                    }
+                };
+                let tool_request = crate::commands::tools::ToolRequest {
+                    tool: tool_name.clone(),
+                    args,
+                };
+                let result = match crate::commands::tools::execute_tool_inner(
+                    &state_arc,
+                    tool_request,
+                )
+                .await
+                {
+                    Ok(r) => r,
+                    Err(e) => crate::commands::tools::ToolResult::err(e),
+                };
+                let output = if result.success {
+                    result.output.clone()
+                } else {
+                    result.error.unwrap_or_default()
+                };
+                (idx, tc_id, result.success, output)
+            });
+        }
+
+        // Collect parallel results, sorted by original index.
+        let mut parallel_results: Vec<(usize, String, bool, String)> =
+            Vec::with_capacity(safe_indices.len());
+        while let Some(join_result) = join_set.join_next().await {
+            if let Ok(result) = join_result {
+                parallel_results.push(result);
+            }
+        }
+        parallel_results.sort_by_key(|r| r.0);
+
+        // Emit results and push to messages in original order.
+        for (idx, tc_id, success, output) in &parallel_results {
+            let tc = &tool_calls[*idx];
+            emitter.emit_tool_result(&tc.function.name, *success, output)?;
             messages.push(providers::ChatMessage {
                 role: "tool".into(),
-                content: msg,
+                content: output.clone(),
                 tool_calls: None,
-                tool_call_id: Some(tc.id.clone()),
+                tool_call_id: Some(tc_id.clone()),
                 name: Some(tc.function.name.clone()),
             });
-            // Mark remaining tools as skipped so the message list stays consistent.
-            continue;
         }
+    }
+
+    // ── Phase 2: serial execution for mutating tools ───────────────────
+    for idx in serial_indices {
+        if cancelled(cancel) {
+            break;
+        }
+        let tc = &tool_calls[idx];
 
         emitter.emit_tool_call(&tc.function.name, &tc.function.arguments)?;
         let args = match serde_json::from_str(&tc.function.arguments) {
@@ -259,34 +453,12 @@ async fn handle_tool_calls<E: ChatEmitter>(
             tool: tc.function.name.clone(),
             args,
         };
-        // Check permission FIRST — before any file I/O
-        match check_permission(
-            permission_mode,
-            &tc.function.name,
-            &tc.function.arguments,
-            emitter,
-        )
-        .await
-        {
-            Permission::Allow => {}
-            Permission::Deny => {
-                emitter.emit_tool_result(&tc.function.name, false, "denied")?;
-                messages.push(providers::ChatMessage {
-                    role: "tool".into(),
-                    content: format!("Tool `{}` was denied by permission mode", tc.function.name),
-                    tool_calls: None,
-                    tool_call_id: Some(tc.id.clone()),
-                    name: Some(tc.function.name.clone()),
-                });
-                continue;
-            }
-            Permission::Abort => return Err("Message aborted by user".into()),
-        }
 
-        // isolated subagent loop. Other tools go through the normal pipeline.
+        // spawn_subagent runs its own isolated loop — intercept before pipeline.
         if tc.function.name == "spawn_subagent" {
+            mark_tool_running(&state, &tc.function.name);
             let result = handle_spawn_subagent(
-                state,
+                &state,
                 &tc.function.arguments,
                 messages,
                 provider,
@@ -294,6 +466,7 @@ async fn handle_tool_calls<E: ChatEmitter>(
                 emitter,
             )
             .await;
+            mark_tool_finished(&state, &tc.function.name);
             match result {
                 Ok(output) => {
                     emitter.emit_tool_result(&tc.function.name, true, &output)?;
@@ -318,6 +491,7 @@ async fn handle_tool_calls<E: ChatEmitter>(
             }
             continue;
         }
+
         // Read old file content for diff (permission already granted)
         let diff_path = if matches!(tc.function.name.as_str(), "write" | "edit") {
             tool_request
@@ -333,13 +507,13 @@ async fn handle_tool_calls<E: ChatEmitter>(
             .and_then(|p| std::fs::read_to_string(p).ok())
             .unwrap_or_default();
 
-        let result = match crate::commands::tools::execute_tool_inner(state, tool_request).await {
+        mark_tool_running(&state, &tc.function.name);
+        let result = match crate::commands::tools::execute_tool_inner(&state, tool_request).await {
             Ok(r) => r,
             Err(e) => crate::commands::tools::ToolResult::err(e),
         };
+        mark_tool_finished(&state, &tc.function.name);
 
-        // Show diff after execution (terminal CLI only; TUI shows the bounded
-        // diff preview inside ToolExecutionComponent).
         if let Some(ref path) = diff_path {
             let new = std::fs::read_to_string(path).unwrap_or_default();
             show_diff(path, &old, &new, emitter);
@@ -388,7 +562,7 @@ fn default_true() -> bool {
 
 /// Canonical interactive agent loop (no cancel flag).
 pub async fn stream_message_with_history<E: ChatEmitter>(
-    state: &AppState,
+    state: Arc<AppState>,
     request: StreamMessageRequest,
     emitter: &E,
     messages: &mut Vec<providers::ChatMessage>,
@@ -401,7 +575,7 @@ pub async fn stream_message_with_history<E: ChatEmitter>(
 /// `cancel` is checked before each provider call, after each stream chunk,
 /// and before each tool execution. When set, returns Err("cancelled").
 pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
-    state: &AppState,
+    state: Arc<AppState>,
     request: StreamMessageRequest,
     emitter: &E,
     messages: &mut Vec<providers::ChatMessage>,
@@ -445,22 +619,21 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
     });
     // Durably record the user turn before any provider call so a mid-stream
     // kill still leaves the prompt on disk.
-    flush_session(state, messages);
+    flush_session(&state, messages);
 
     // P1: assemble context — graph-ranked repo-map + JIT Hermes memory +
     // structured compaction, budgeted per provider window. Replaces the old
     // chars/4 `estimate_tokens` + keep-last-N `compact` block.
     let window = config.kind.context_window();
-    let context_manager = crate::context_manager::ContextManager::new(
-        std::env::current_dir().unwrap_or_default(),
-        window,
-        &config.model,
-        6,
-    );
     {
-        let store = state.memory_store.lock_guard();
-        let assembled = context_manager
-            .prepare(messages, Some(&store), &user_content)
+        let assembled = state
+            .assemble_context(
+                &state.workspace_root,
+                window,
+                &config.model,
+                messages,
+                &user_content,
+            )
             .map_err(|e| format!("context preparation failed: {}", e))?;
         log::debug!(
             "context prepared: {} tokens, repo_map={} chars, memory={} chars, compacted={}",
@@ -470,11 +643,12 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
             assembled.compacted.is_some()
         );
     }
-    flush_session(state, messages);
+    flush_session(&state, messages);
 
     let provider = std::sync::Arc::new(providers::create_provider(&config)?);
     let mut full_response = String::new();
     let mut max_loops = max_tool_loops;
+    const MAX_RATE_LIMIT_RETRIES: u32 = 3;
 
     loop {
         if cancelled(cancel.as_ref()) {
@@ -505,10 +679,8 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
             };
 
             let p = provider.clone();
-            tokio::spawn(async move {
-                let _ = p.chat_stream(chat_request, tx).await;
-            });
-
+            let mut rate_limit_retries = 0u32;
+            let stream_handle = tokio::spawn(async move { p.chat_stream(chat_request, tx).await });
             let spinner = if request.show_progress {
                 let s = indicatif::ProgressBar::new_spinner();
                 s.set_style(
@@ -517,7 +689,7 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
                         .template("{spinner} {msg}")
                         .unwrap(),
                 );
-                s.set_message("Cooking…");
+                s.set_message("Thinking…");
                 s.enable_steady_tick(std::time::Duration::from_millis(80));
                 Some(s)
             } else {
@@ -608,6 +780,36 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
                 }
             }
 
+            // The stream task finished (channel closed). Surface its result;
+            // retry on rate-limit errors with exponential backoff.
+            match stream_handle.await {
+                Ok(Err(e)) if e.contains("429") || e.to_lowercase().contains("rate limit") => {
+                    if rate_limit_retries >= MAX_RATE_LIMIT_RETRIES {
+                        return Err(format!(
+                            "Rate limited after {} retries: {}",
+                            MAX_RATE_LIMIT_RETRIES, e
+                        ));
+                    }
+                    rate_limit_retries += 1;
+                    let backoff_ms = 1000u64 * (1u64 << rate_limit_retries);
+                    log::warn!(
+                        "Rate limited (attempt {}/{}), retrying in {}ms",
+                        rate_limit_retries,
+                        MAX_RATE_LIMIT_RETRIES,
+                        backoff_ms
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                    continue;
+                }
+                Ok(Err(e)) => {
+                    return Err(format!("Stream error: {}", e));
+                }
+                Err(e) => {
+                    return Err(format!("Stream task failed: {}", e));
+                }
+                Ok(Ok(())) => {}
+            }
+
             if let Some(ref s) = spinner {
                 s.finish_and_clear();
             }
@@ -639,7 +841,7 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
                     .collect();
 
                 handle_tool_calls(
-                    state,
+                    state.clone(),
                     &tool_calls,
                     messages,
                     &request.permission_mode,
@@ -649,8 +851,8 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
                     &tools,
                 )
                 .await?;
-            // Snapshot after each completed tool round.
-                flush_session(state, messages);
+                // Snapshot after each completed tool round.
+                flush_session(&state, messages);
                 // Reset text accumulator between tool rounds so final answer is clean.
                 full_response.clear();
                 continue;
@@ -673,9 +875,7 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
                 let tool_names: Vec<String> = messages
                     .iter()
                     .filter(|m| m.role == "assistant")
-                    .filter_map(|m| {
-                        m.tool_calls.as_ref().and_then(|tcs| tcs.first())
-                    })
+                    .filter_map(|m| m.tool_calls.as_ref().and_then(|tcs| tcs.first()))
                     .map(|tc| tc.function.name.clone())
                     .collect();
 
@@ -690,7 +890,7 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
                 }
             }
 
-            flush_session(state, messages);
+            flush_session(&state, messages);
 
             emitter.emit_done(&full_response)?;
             if let Some(ref u) = last_usage {
@@ -712,7 +912,7 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
                         .template("{spinner} {msg}")
                         .unwrap(),
                 );
-                s.set_message("Cooking…");
+                s.set_message("Thinking…");
                 s.enable_steady_tick(std::time::Duration::from_millis(80));
                 Some(s)
             } else {
@@ -726,7 +926,30 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
                 tools: Some(tools.clone()),
             };
 
-            let response = provider.chat(chat_request).await?;
+            let mut rate_limit_retries = 0u32;
+            let response = loop {
+                match provider.chat(chat_request.clone()).await {
+                    Ok(resp) => break resp,
+                    Err(e) if e.contains("429") || e.to_lowercase().contains("rate limit") => {
+                        if rate_limit_retries >= MAX_RATE_LIMIT_RETRIES {
+                            return Err(format!(
+                                "Rate limited after {} retries: {}",
+                                MAX_RATE_LIMIT_RETRIES, e
+                            ));
+                        }
+                        rate_limit_retries += 1;
+                        let backoff_ms = 1000u64 * (1u64 << rate_limit_retries);
+                        log::warn!(
+                            "Rate limited (attempt {}/{}), retrying in {}ms",
+                            rate_limit_retries,
+                            MAX_RATE_LIMIT_RETRIES,
+                            backoff_ms
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                    }
+                    Err(e) => return Err(e),
+                }
+            };
             if let Some(ref s) = spinner {
                 s.finish_and_clear();
             }
@@ -738,7 +961,7 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
 
             if let Some(tool_calls) = response.tool_calls {
                 handle_tool_calls(
-                    state,
+                    state.clone(),
                     &tool_calls,
                     messages,
                     &request.permission_mode,
@@ -748,7 +971,7 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
                     &tools,
                 )
                 .await?;
-                flush_session(state, messages);
+                flush_session(&state, messages);
                 full_response.clear();
                 continue;
             }
@@ -766,7 +989,7 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
                     name: None,
                 });
             }
-            flush_session(state, messages);
+            flush_session(&state, messages);
             emitter.emit_done(&full_response)?;
             if let Some(ref u) = response.usage {
                 cost_tracker::record_cost(u.input_tokens, u.output_tokens);
@@ -783,7 +1006,7 @@ pub async fn stream_message_with_history_cancel<E: ChatEmitter>(
 }
 
 pub async fn stream_message<E: ChatEmitter>(
-    state: &AppState,
+    state: Arc<AppState>,
     request: StreamMessageRequest,
     emitter: &E,
 ) -> Result<String, String> {
@@ -793,7 +1016,7 @@ pub async fn stream_message<E: ChatEmitter>(
 
 /// Headless/API convenience: stream with cancel support and fresh history.
 pub async fn stream_message_cancel<E: ChatEmitter>(
-    state: &AppState,
+    state: Arc<AppState>,
     request: StreamMessageRequest,
     emitter: &E,
     cancel: Arc<AtomicBool>,
@@ -876,46 +1099,45 @@ mod tests {
         .into_bytes()
     }
 
-    /// Fully drain an HTTP/1.1 request (headers + body) off `stream` so the
-    /// server can respond without racing reqwest, which keeps sending the body.
-    async fn drain_http_request(stream: &mut (impl AsyncReadExt + AsyncWriteExt + Unpin)) {
-        let mut buf = Vec::new();
-        let mut tmp = [0u8; 4096];
+    const MAX_REQUEST_BYTES: usize = 1024 * 1024;
+
+    /// Read exactly one HTTP request from `stream`: all header bytes plus the
+    /// `Content-Length`-framed body (capped at [`MAX_REQUEST_BYTES`]).
+    ///
+    /// The mock servers MUST drain the full request before replying: leftover
+    /// inbound bytes make Windows answer the socket close with RST, which
+    /// discards the response already queued for the client.
+    async fn read_http_request(stream: &mut tokio::net::TcpStream) -> Vec<u8> {
+        let mut buf: Vec<u8> = Vec::with_capacity(64 * 1024);
+        let mut chunk = [0u8; 4096];
         loop {
-            match stream.read(&mut tmp).await {
-                Ok(0) => break,
-                Ok(n) => {
-                    buf.extend_from_slice(&tmp[..n]);
-                    if buf.windows(4).any(|w| w == b"\r\n\r\n") {
-                        break;
+            let header_end = if buf.len() >= 4 {
+                buf.windows(4).position(|w| w == b"\r\n\r\n")
+            } else {
+                None
+            };
+            if let Some(header_end) = header_end {
+                let mut content_length = 0usize;
+                let headers = std::str::from_utf8(&buf[..header_end]).unwrap_or("");
+                for line in headers.lines() {
+                    if let Some((name, value)) = line.split_once(':') {
+                        if name.trim().eq_ignore_ascii_case("content-length") {
+                            content_length = value.trim().parse().unwrap_or(0);
+                        }
                     }
                 }
-                Err(_) => break,
+                if buf.len() >= header_end + 4 + content_length {
+                    return buf;
+                }
+            }
+            if buf.len() >= MAX_REQUEST_BYTES {
+                return buf;
+            }
+            match stream.read(&mut chunk).await {
+                Ok(0) | Err(_) => return buf,
+                Ok(n) => buf.extend_from_slice(&chunk[..n]),
             }
         }
-        let Some(cl) = find_header(&buf, "content-length") else { return };
-        let Some(len) = cl.parse::<usize>().ok() else { return };
-        let headers_len = buf
-            .windows(4)
-            .position(|w| w == b"\r\n\r\n")
-            .map(|p| p + 4)
-            .unwrap_or(buf.len());
-        let body_remaining = len.saturating_sub(buf.len().saturating_sub(headers_len));
-        let mut leftover = vec![0u8; body_remaining];
-        let _ = stream.read_exact(&mut leftover).await;
-    }
-
-    fn find_header(buf: &[u8], name: &str) -> Option<String> {
-        let text = std::str::from_utf8(buf).ok()?;
-        let lower = text.to_ascii_lowercase();
-        let key = name.to_lowercase();
-        lower
-            .split("\r\n")
-            .find_map(|line| {
-                line.strip_prefix(&format!("{key}: "))
-                    .or_else(|| line.strip_prefix(&format!("{key}:")))
-            })
-            .map(|v| v.trim().to_string())
     }
 
     fn tool_call_sse() -> Vec<u8> {
@@ -934,9 +1156,6 @@ mod tests {
         ])
     }
 
-    // Integration test: requires running tool-harness backend and real SSE server.
-    // Skipped while the chat loop infrastructure is refactored.
-    // Re-enable with #[test] when the mock tool executor is wired.
     #[tokio::test]
     async fn test_stream_message_tool_calls_execute_and_push_results() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -952,10 +1171,11 @@ mod tests {
                     result = listener.accept() => {
                         match result {
                             Ok((mut stream, _)) => {
-                                drain_http_request(&mut stream).await;
+                                let _request = read_http_request(&mut stream).await;
                                 let idx = counter.fetch_add(1, Ordering::SeqCst);
                                 let resp = if idx == 0 { tool_call_sse() } else { text_sse() };
                                 let _ = stream.write_all(&resp).await;
+                                let _ = stream.shutdown().await;
                             }
                             Err(_) => break,
                         }
@@ -972,6 +1192,7 @@ mod tests {
             base_url: Some(format!("http://127.0.0.1:{}", port)),
             model: "mock".into(),
             max_tokens: 1024,
+            max_concurrent_tools: 3,
             temperature: 0.0,
         };
         let state = AppState::new_with_provider_config(":memory:", cfg.clone());
@@ -988,7 +1209,8 @@ mod tests {
 
         let emitter = TestEmitter;
         let mut messages = Vec::new();
-        let result = stream_message_with_history(&state, request, &emitter, &mut messages).await;
+        let result =
+            stream_message_with_history(Arc::new(state), request, &emitter, &mut messages).await;
 
         assert!(
             result.is_ok(),
@@ -1042,10 +1264,11 @@ mod tests {
                     result = listener.accept() => {
                         match result {
                             Ok((mut stream, _)) => {
-                                drain_http_request(&mut stream).await;
+                                let _request = read_http_request(&mut stream).await;
                                 let idx = counter.fetch_add(1, Ordering::SeqCst);
                                 let resp = if idx == 0 { tool_call_sse() } else { text_sse() };
                                 let _ = stream.write_all(&resp).await;
+                                let _ = stream.shutdown().await;
                             }
                             Err(_) => break,
                         }
@@ -1062,14 +1285,15 @@ mod tests {
             base_url: Some(format!("http://127.0.0.1:{}", port)),
             model: "mock".into(),
             max_tokens: 1024,
+            max_concurrent_tools: 3,
             temperature: 0.0,
         };
-        let state = AppState::new_with_provider_config(":memory:", cfg.clone());
+        let state = Arc::new(AppState::new_with_provider_config(":memory:", cfg.clone()));
         let emitter = TestEmitter;
         let mut messages = Vec::new();
 
         let r1 = stream_message_with_history(
-            &state,
+            state.clone(),
             StreamMessageRequest {
                 content: "first call".into(),
                 agent_type: "chat".into(),
@@ -1086,7 +1310,7 @@ mod tests {
         assert!(r1.is_ok(), "first call failed: {:?}", r1.err());
 
         let r2 = stream_message_with_history(
-            &state,
+            state.clone(),
             StreamMessageRequest {
                 content: "second call".into(),
                 agent_type: "chat".into(),
@@ -1128,7 +1352,7 @@ mod tests {
                     result = listener.accept() => {
                         match result {
                             Ok((mut stream, _)) => {
-                                drain_http_request(&mut stream).await;
+                                let _request = read_http_request(&mut stream).await;
                                 let idx = counter.fetch_add(1, Ordering::SeqCst);
                                 let resp = if idx <= 2 {
                                     // Tool call with invalid JSON arguments
@@ -1142,6 +1366,7 @@ mod tests {
                                     text_sse()
                                 };
                                 let _ = stream.write_all(&resp).await;
+                                let _ = stream.shutdown().await;
                             }
                             Err(_) => break,
                         }
@@ -1158,13 +1383,14 @@ mod tests {
             base_url: Some(format!("http://127.0.0.1:{}", port)),
             model: "mock".into(),
             max_tokens: 1024,
+            max_concurrent_tools: 3,
             temperature: 0.0,
         };
-        let state = AppState::new_with_provider_config(":memory:", cfg.clone());
+        let state = Arc::new(AppState::new_with_provider_config(":memory:", cfg.clone()));
         let emitter = TestEmitter;
         let mut messages = Vec::new();
         let result = stream_message_with_history(
-            &state,
+            state.clone(),
             StreamMessageRequest {
                 content: "run broken tool".into(),
                 agent_type: "chat".into(),
@@ -1206,14 +1432,15 @@ mod tests {
             base_url: Some("http://127.0.0.1:1".into()), // will not be hit
             model: "mock".into(),
             max_tokens: 64,
+            max_concurrent_tools: 3,
             temperature: 0.0,
         };
-        let state = AppState::new_with_provider_config(":memory:", cfg.clone());
+        let state = Arc::new(AppState::new_with_provider_config(":memory:", cfg.clone()));
         let cancel = Arc::new(AtomicBool::new(true));
         let emitter = TestEmitter;
         let mut messages = Vec::new();
         let result = stream_message_with_history_cancel(
-            &state,
+            state,
             StreamMessageRequest {
                 content: "should not run".into(),
                 agent_type: "chat".into(),

@@ -78,10 +78,12 @@ impl RLLossFunction {
         advantage: f32,
         timestep: usize,
     ) -> f32 {
-        let kl_div: f32 = current_policy.iter()
+        let kl_div: f32 = current_policy
+            .iter()
             .zip(updated_policy.iter())
             .map(|(c, u)| ((c - u).powi(2)).abs())
-            .sum::<f32>() / (current_policy.len() as f32);
+            .sum::<f32>()
+            / (current_policy.len() as f32);
 
         let tr_penalty = if kl_div > self.trust_region.max_kl_divergence {
             (kl_div - self.trust_region.max_kl_divergence) * 10.0

@@ -4,21 +4,6 @@ use ratatui::text::{Line, Span, Text};
 use super::markdown;
 use super::theme;
 
-const ACTIVITY_SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-const ACTIVITY_WORDS: &[&str] = &[
-    "Cooking…",
-    "Pondering…",
-    "Reasoning…",
-    "Planning…",
-    "Considering…",
-];
-
-fn activity_text(tick: u64) -> String {
-    let glyph = ACTIVITY_SPINNER[tick as usize % ACTIVITY_SPINNER.len()];
-    let word = ACTIVITY_WORDS[(tick as usize / 24) % ACTIVITY_WORDS.len()];
-    format!("  {glyph} {word} ")
-}
-
 /// A single entry in the conversation transcript.
 #[derive(Clone)]
 pub enum TranscriptEntry {
@@ -47,11 +32,9 @@ pub enum TranscriptEntry {
 
 impl TranscriptEntry {
     /// Render (or re-render) the entry's text content into ratatui Lines.
-    pub fn render_to_text(&mut self, _width: u16, activity_tick: u64) -> Text<'static> {
+    pub fn render_to_text(&mut self, _width: u16, _activity_tick: u64) -> Text<'static> {
         match self {
-            TranscriptEntry::User { content } => {
-                markdown::render_markdown(content)
-            }
+            TranscriptEntry::User { content } => markdown::render_markdown(content),
             TranscriptEntry::Assistant {
                 content,
                 rendered,
@@ -59,15 +42,6 @@ impl TranscriptEntry {
                 thinking,
             } => {
                 let mut all = Vec::new();
-
-                // Show activity text only when content is empty (right after tool call)
-                if *is_streaming && content.is_empty() {
-                    let activity = activity_text(activity_tick);
-                    all.push(Line::from(vec![Span::styled(
-                        activity.trim_start().to_owned(),
-                        theme::style_dim(),
-                    )]));
-                }
 
                 // Reasoning text remains below the activity line.
                 if !thinking.is_empty() {
@@ -90,10 +64,10 @@ impl TranscriptEntry {
                 }
 
                 // Live response cursor uses a conventional terminal spinner.
+                // Live response cursor
                 if *is_streaming && !content.is_empty() {
-                    let glyph = ACTIVITY_SPINNER[activity_tick as usize % ACTIVITY_SPINNER.len()];
                     all.push(Line::from(Span::styled(
-                        format!(" {glyph}"),
+                        " █",
                         Style::default().fg(theme::PRIMARY),
                     )));
                 }
@@ -194,13 +168,13 @@ pub mod preview;
 pub mod render;
 pub mod shell;
 pub mod state;
-pub mod toolbox;
 #[cfg(test)]
 pub mod tests;
+pub mod toolbox;
 
 // Cross-module items used by submodules via direct use super::<module>::....
 pub use component::Transcript;
-pub use state::{ScrollState, ToolCallState, ToolCallStatus};
 use shell::render_tool_call_compact;
 use state::has_attachment_content;
+pub use state::{ScrollState, ToolCallState, ToolCallStatus};
 use toolbox::render_tool_call_box_simple;

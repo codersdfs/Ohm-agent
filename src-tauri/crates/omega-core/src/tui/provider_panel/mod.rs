@@ -25,6 +25,7 @@ mod tests {
             model: "current-model".into(),
             max_tokens: 4096,
             temperature: 0.7,
+            max_concurrent_tools: 3,
         }
     }
 
@@ -339,4 +340,3 @@ mod tests {
         assert_eq!(cfg.api_key.as_deref(), Some("new-secret"));
     }
 }
-

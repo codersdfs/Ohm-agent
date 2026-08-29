@@ -13,7 +13,6 @@ mod grep;
 mod read;
 mod todo;
 mod web_fetch;
-mod spawn_subagent;
 mod write;
 
 use crate::ToolRegistry;
@@ -29,7 +28,7 @@ pub use git_status::GitStatusTool;
 pub use glob::GlobTool;
 pub use grep::GrepTool;
 pub use read::ReadTool;
-pub use todo::{TodoItem, TodoStatus, TodoTool, TodoStore, new_todo_store};
+pub use todo::{new_todo_store, TodoItem, TodoStatus, TodoStore, TodoTool};
 pub use web_fetch::WebFetchTool;
 pub use write::WriteTool;
 

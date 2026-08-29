@@ -20,9 +20,11 @@ pub struct TasteCli {
 impl TasteCli {
     pub fn parse(args: &[&str]) -> Result<Self, String> {
         if args.is_empty() {
-            return Ok(TasteCli { command: TasteCommand::List });
+            return Ok(TasteCli {
+                command: TasteCommand::List,
+            });
         }
-        
+
         let cmd = match args[0] {
             "enable" => TasteCommand::Enable,
             "disable" => TasteCommand::Disable,
@@ -31,7 +33,7 @@ impl TasteCli {
             "reset" => TasteCommand::Reset,
             _ => return Err(format!("Unknown command: {}", args[0])),
         };
-        
+
         Ok(TasteCli { command: cmd })
     }
 }

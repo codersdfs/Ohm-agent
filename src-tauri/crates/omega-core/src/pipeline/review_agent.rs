@@ -28,7 +28,14 @@ impl ReviewAgent {
 
         let violations_str = violations
             .iter()
-            .map(|v| format!("[{}] {}: {}", v.category, v.message, v.tool_hint.as_deref().unwrap_or("")))
+            .map(|v| {
+                format!(
+                    "[{}] {}: {}",
+                    v.category,
+                    v.message,
+                    v.tool_hint.as_deref().unwrap_or("")
+                )
+            })
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -76,8 +83,13 @@ Only output valid JSON, no markdown wrappers.
             return Ok(vec![]);
         }
 
-        let fixes: Vec<FixOp> = serde_json::from_str(content)
-            .map_err(|e| format!("Failed to parse review output as JSON: {} — raw: {}", e, &content[..content.len().min(200)]))?;
+        let fixes: Vec<FixOp> = serde_json::from_str(content).map_err(|e| {
+            format!(
+                "Failed to parse review output as JSON: {} — raw: {}",
+                e,
+                &content[..content.len().min(200)]
+            )
+        })?;
 
         Ok(fixes)
     }

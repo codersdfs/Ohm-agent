@@ -27,3 +27,4 @@ mcp-server = { path = "../mcp-server" }
 
 [dev-dependencies]
 tempfile = "3"
+parking_lot = "0.12"

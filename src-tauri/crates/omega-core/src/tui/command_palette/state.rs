@@ -44,7 +44,8 @@ impl CommandPaletteState {
 
     pub fn recompute_filter(&mut self) {
         // Delegate to the shared FilteredList, then sync our public fields.
-        self.filter_list.recompute(COMMANDS, &self.query, rank_command);
+        self.filter_list
+            .recompute(COMMANDS, &self.query, rank_command);
         self.filtered = self.filter_list.filtered.clone();
         self.selected = self.filter_list.selected;
     }

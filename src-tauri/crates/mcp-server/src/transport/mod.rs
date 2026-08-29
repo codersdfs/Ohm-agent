@@ -8,8 +8,8 @@
 pub mod http;
 pub mod stdio;
 
-use async_trait::async_trait;
 use crate::types::JsonRpcResponse;
+use async_trait::async_trait;
 
 /// A message from a transport connection
 #[derive(Debug)]

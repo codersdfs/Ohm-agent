@@ -4,7 +4,6 @@ mod budget;
 mod context;
 mod hooks;
 mod metadata;
-mod orchestrator;
 mod permission;
 mod pipeline;
 mod registry;
@@ -17,12 +16,13 @@ pub mod tools; // Tool Calling Box modules (phased)
 
 pub use budget::{ConversationBudget, ResultBudget};
 pub use context::ToolUseContext;
-pub use hooks::{HooksRegistry, Hook, HookDecision, HookContext, GateHook, GateHookMode, GateScorer};
+pub use hooks::{
+    GateHook, GateHookMode, GateScorer, Hook, HookContext, HookDecision, HooksRegistry,
+};
 pub use metadata::{
     CostCategory, CostHint, DeprecationInfo, LatencyHint, ParamConstraints, ParamSummary,
     ToolCategory, ToolErrorSpec, ToolExample, ToolMetadata, ToolRef, ToolSource,
 };
-pub use orchestrator::ToolOrchestrator;
 pub use permission::{PermissionMode, PermissionResolver, PermissionRule};
 pub use pipeline::ExecutionPipeline;
 pub use registry::ToolRegistry;

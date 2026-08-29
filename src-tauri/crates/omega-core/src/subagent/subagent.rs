@@ -12,6 +12,7 @@ use crate::MutexExt;
 
 use super::config::SubagentConfig;
 use super::result::{RunOutcome, SubagentResult};
+use crate::context_manager::context_delta::{ContextDelta, ContextSnapshot};
 
 use providers::{ChatMessage, ChatRequest, LlmProvider, ProviderConfig, ToolCall, ToolDefinition};
 
@@ -35,21 +36,33 @@ impl Subagent {
         }
     }
 
-    /// Fork parent context according to the fork mode.
+    /// Fork parent context according to the fork mode, returning an incremental
+    /// view (`ContextDelta`) rather than an owned clone.
     ///
-    /// Per ticket 01's resolution: Full fork copies the entire parent context
-    /// (all messages up to the delegation point). The system prompt is swapped
-    /// later in `run()`.
-    pub fn fork_from_parent(parent_messages: &[ChatMessage]) -> Vec<ChatMessage> {
+    /// Per ticket 01's resolution: Full fork borrows the entire parent
+    /// context (all messages up to the delegation point). The system prompt
+    /// is swapped later in `run()`.
+    ///
+    /// The `token_count` snapshot is derived from the parent's token
+    /// counter if available; callers may pass 0 when it is unknown.
+    pub fn fork_from_parent(
+        parent_messages: &[ChatMessage],
+        parent_token_count: u32,
+        parent_generation: u64,
+    ) -> ContextDelta<'_> {
+        let snapshot = ContextSnapshot {
+            fork_point_len: parent_messages.len(),
+            token_count: parent_token_count,
+            generation: parent_generation,
+        };
         match &parent_messages[..] {
-            [] => vec![],
+            [] => ContextDelta::new(&[], snapshot),
             [system, rest @ ..] if system.role == "system" => {
                 // Keep the original system prompt — it's replaced in run()
-                let mut forked = vec![system.clone()];
-                forked.extend(rest.iter().cloned());
-                forked
+                // Borrow the full window: [system, rest...]
+                ContextDelta::new(parent_messages, snapshot)
             }
-            _ => parent_messages.to_vec(),
+            _ => ContextDelta::new(parent_messages, snapshot),
         }
     }
 
@@ -77,7 +90,7 @@ impl Subagent {
     /// Run the subagent loop and return a structured result.
     ///
     /// # Arguments
-    /// - `messages`: the parent's current message list (forked in)
+    /// - `context`: the forked parent context as an incremental `ContextDelta`
     /// - `state`: the shared AppState (for tool execution, memory, rules)
     /// - `provider`: the LLM provider to use for the subagent
     /// - `provider_config`: provider config (model, max_tokens, temperature)
@@ -85,15 +98,15 @@ impl Subagent {
     /// - `emitter`: chat emitter for progress/logging (can be NoopEmitter for headless)
     pub async fn run<E: ChatEmitter + ?Sized>(
         &self,
-        parent_messages: &[ChatMessage],
+        context: ContextDelta<'_>,
         state: &AppState,
         provider: &dyn LlmProvider,
         provider_config: &ProviderConfig,
         tools: Vec<ToolDefinition>,
         _emitter: &E,
     ) -> Result<SubagentResult, String> {
-        // Fork context
-        let mut messages = Self::fork_from_parent(parent_messages);
+        // Materialise the forked context from the delta.
+        let mut messages = context.to_messages();
 
         // Swap the system prompt: remove parent's system prompt, insert subagent's.
         // Per ticket 01 resolution: Full fork + swapped system.
@@ -107,13 +120,16 @@ impl Subagent {
                     name: None,
                 };
             } else {
-                messages.insert(0, ChatMessage {
-                    role: "system".to_string(),
-                    content: Self::system_prompt(&self.config),
-                    tool_calls: None,
-                    tool_call_id: None,
-                    name: None,
-                });
+                messages.insert(
+                    0,
+                    ChatMessage {
+                        role: "system".to_string(),
+                        content: Self::system_prompt(&self.config),
+                        tool_calls: None,
+                        tool_call_id: None,
+                        name: None,
+                    },
+                );
             }
         }
 
@@ -144,13 +160,18 @@ impl Subagent {
             let state = state;
             let tc = tc.clone();
             async move {
-                let args = serde_json::from_str(&tc.function.arguments)
-                    .map_err(|e| format!("Failed to parse arguments for `{}`: {}", tc.function.name, e))?;
+                let args = serde_json::from_str(&tc.function.arguments).map_err(|e| {
+                    format!(
+                        "Failed to parse arguments for `{}`: {}",
+                        tc.function.name, e
+                    )
+                })?;
                 let tool_request = crate::commands::tools::ToolRequest {
                     tool: tc.function.name.clone(),
                     args,
                 };
-                let result = crate::commands::tools::execute_tool_inner(state, tool_request).await?;
+                let result =
+                    crate::commands::tools::execute_tool_inner(state, tool_request).await?;
                 Ok::<String, String>(result.output)
             }
         };
@@ -185,7 +206,8 @@ impl Subagent {
             {
                 let store = state.memory_store.lock_guard();
                 let user_msg = self.config.task.clone();
-                let _assembled = context_manager.prepare(&mut assembled_messages, Some(&*store), &user_msg)
+                let _assembled = context_manager
+                    .prepare(&mut assembled_messages, Some(&*store), &user_msg)
                     .map_err(|e| format!("subagent context preparation failed: {}", e))?;
                 // Use the assembled context (repo-map + memory injected, compaction applied)
                 std::mem::swap(&mut assembled_messages, &mut messages);
@@ -200,7 +222,11 @@ impl Subagent {
                 messages: messages.clone(),
                 config: provider_config.clone(),
                 stream: false,
-                tools: if available_tools.is_empty() { None } else { Some(available_tools.clone()) },
+                tools: if available_tools.is_empty() {
+                    None
+                } else {
+                    Some(available_tools.clone())
+                },
             };
 
             let response = provider.chat(chat_request).await?;
@@ -221,7 +247,8 @@ impl Subagent {
                     match result {
                         Ok(output) => {
                             // Track file-changing tools for the summary
-                            if matches!(tc.function.name.as_str(), "write" | "edit" | "git_commit") {
+                            if matches!(tc.function.name.as_str(), "write" | "edit" | "git_commit")
+                            {
                                 files_changed.push(tc.function.name.clone());
                             }
 
@@ -296,11 +323,16 @@ impl Subagent {
 
 /// Spawn a subagent from parent context.
 ///
-/// The subagent forks the parent's context, runs an isolated loop using the
-/// provided provider and tool definitions, and returns a structured summary.
+/// The subagent forks the parent's context (via [`ContextDelta`/ContextDelta]),
+/// runs an isolated loop using the provided provider and tool definitions,
+/// and returns a structured summary.
+///
+/// [`ContextDelta`]: crate::context_manager::context_delta::ContextDelta
 pub async fn spawn_subagent<E: ChatEmitter + ?Sized>(
     config: SubagentConfig,
     parent_messages: &[ChatMessage],
+    parent_token_count: u32,
+    parent_generation: u64,
     parent_id: &str,
     parent_session: &str,
     state: &AppState,
@@ -309,8 +341,75 @@ pub async fn spawn_subagent<E: ChatEmitter + ?Sized>(
     tools: Vec<ToolDefinition>,
     emitter: &E,
 ) -> Result<SubagentResult, String> {
+    let delta = Subagent::fork_from_parent(parent_messages, parent_token_count, parent_generation);
     let subagent = Subagent::new(config, parent_id, parent_session);
     subagent
-        .run(parent_messages, state, provider, provider_config, tools, emitter)
+        .run(delta, state, provider, provider_config, tools, emitter)
         .await
+}
+
+
+#[cfg(test)]
+mod tests {
+    //! Subagent inline-path tests (ticket 11 acceptance — partial).
+    //!
+    //! Covers: the public `Subagent::system_prompt` builder, which is the
+    //! part of the inline `handle_spawn_subagent` path that is testable
+    //! without a full AppState + LlmProvider mock.
+    //!
+    //! ponytail: GateHook and budget tests deferred to a follow-up — they
+    //! need a real LlmProvider mock and ChatEmitter to drive
+    //! `spawn_subagent` end-to-end. Whitelist enforcement is structural:
+    //! `subagent.rs:145-153` filters `available_tools` from
+    //! `config.tool_whitelist` before any tool call. Cover it with an
+    //! integration test when a LlmProvider trait mock is in place.
+    //!
+    //! Upgrade path: add a `MockLlmProvider` that returns canned
+    //! ChatResponse objects, then write a test that drives
+    //! `Subagent::run` with a tool-call sequence and asserts that a
+    //! write-class tool blocked by the parent's GateHook bubbles up as
+    //! `RunOutcome::ToolError`. Until then these unit tests are the
+    //! regression guard.
+    use super::*;
+    use crate::subagent::config::{ContextForkMode, SubagentConfig};
+
+    fn cfg(whitelist: Vec<String>, max_turns: u32, deliverable: &str) -> SubagentConfig {
+        SubagentConfig {
+            task: "find the bug in module X".into(),
+            context_mode: ContextForkMode::Full,
+            token_budget: 30_000,
+            max_turns,
+            tool_whitelist: whitelist,
+            deliverable: deliverable.into(),
+        }
+    }
+
+    #[test]
+    fn system_prompt_empty_whitelist_says_read_only() {
+        let cfg = cfg(vec![], 10, "summary");
+        let prompt = Subagent::system_prompt(&cfg);
+        assert!(prompt.contains("Tools: read-only"), "got: {prompt}");
+        assert!(prompt.contains("max_turns=10"));
+        assert!(prompt.contains("Task: find the bug in module X"));
+        assert!(prompt.contains("Deliverable: summary"));
+    }
+
+    #[test]
+    fn system_prompt_whitelist_lists_each_tool() {
+        let cfg = cfg(vec!["read".into(), "grep".into(), "glob".into()], 5, "diff");
+        let prompt = Subagent::system_prompt(&cfg);
+        assert!(prompt.contains("Tools: read, grep, glob"), "got: {prompt}");
+        assert!(prompt.contains("max_turns=5"));
+        assert!(prompt.contains("Deliverable: diff"));
+    }
+
+    #[test]
+    fn system_prompt_ends_with_done_contract() {
+        // The DONE: contract is what the inline branch parses for — see
+        // handle_spawn_subagent. Locking it down here means future
+        // refactors of the prompt cannot silently break parsing.
+        let cfg = cfg(vec![], 1, "summary");
+        let prompt = Subagent::system_prompt(&cfg);
+        assert!(prompt.contains("DONE: <your summary here>"), "got: {prompt}");
+    }
 }

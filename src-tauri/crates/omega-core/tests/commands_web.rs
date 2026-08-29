@@ -7,7 +7,11 @@ use omega_core::commands::web;
 #[ignore]
 async fn test_fetch_integration_httpbin() {
     let result = web::fetch_url("https://httpbin.org/get").await;
-    assert!(result.is_ok(), "httpbin should be reachable: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "httpbin should be reachable: {:?}",
+        result.err()
+    );
     let body = result.unwrap();
     assert!(body.contains("url"), "response should contain 'url' field");
 }
@@ -26,5 +30,8 @@ async fn test_fetch_truncation() {
     let result = web::fetch_url("https://httpbin.org/bytes/15000").await;
     assert!(result.is_ok());
     let body = result.unwrap();
-    assert!(body.contains("truncated"), "large response should be truncated");
+    assert!(
+        body.contains("truncated"),
+        "large response should be truncated"
+    );
 }

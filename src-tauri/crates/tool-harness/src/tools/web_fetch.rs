@@ -137,7 +137,10 @@ impl Tool for WebFetchTool {
         if scheme != "http" && scheme != "https" {
             return Err(ToolError::with_kind(
                 crate::ToolErrorKind::SchemaValidation,
-                format!("Unsupported URL scheme: {}. Only http and https are allowed.", scheme),
+                format!(
+                    "Unsupported URL scheme: {}. Only http and https are allowed.",
+                    scheme
+                ),
             ));
         }
 
@@ -161,7 +164,12 @@ impl Tool for WebFetchTool {
             .header("User-Agent", "Omega-Agent/1.0")
             .send()
             .await
-            .map_err(|e| ToolError::with_kind(crate::ToolErrorKind::Timeout, format!("Request failed: {}", e)))?;
+            .map_err(|e| {
+                ToolError::with_kind(
+                    crate::ToolErrorKind::Timeout,
+                    format!("Request failed: {}", e),
+                )
+            })?;
 
         let status = response.status();
         if !status.is_success() {
@@ -225,12 +233,8 @@ fn is_private_url(url: &url::Url) -> bool {
             // For now, also block common internal TLDs
             false
         }
-        url::Host::Ipv4(ip) => {
-            is_private_ipv4(ip)
-        }
-        url::Host::Ipv6(ip) => {
-            is_private_ipv6(ip)
-        }
+        url::Host::Ipv4(ip) => is_private_ipv4(ip),
+        url::Host::Ipv6(ip) => is_private_ipv6(ip),
     }
 }
 
@@ -383,11 +387,19 @@ mod tests {
 
     #[test]
     fn test_is_private_url() {
-        assert!(is_private_url(&url::Url::parse("http://localhost:8080").unwrap()));
-        assert!(is_private_url(&url::Url::parse("http://127.0.0.1:8080").unwrap()));
+        assert!(is_private_url(
+            &url::Url::parse("http://localhost:8080").unwrap()
+        ));
+        assert!(is_private_url(
+            &url::Url::parse("http://127.0.0.1:8080").unwrap()
+        ));
         assert!(is_private_url(&url::Url::parse("http://10.0.0.1").unwrap()));
-        assert!(is_private_url(&url::Url::parse("http://192.168.1.1").unwrap()));
-        assert!(!is_private_url(&url::Url::parse("https://example.com").unwrap()));
+        assert!(is_private_url(
+            &url::Url::parse("http://192.168.1.1").unwrap()
+        ));
+        assert!(!is_private_url(
+            &url::Url::parse("https://example.com").unwrap()
+        ));
         assert!(!is_private_url(&url::Url::parse("http://8.8.8.8").unwrap()));
     }
 

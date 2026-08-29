@@ -44,11 +44,17 @@ impl McpError {
     }
 
     pub fn invalid_params(detail: impl Into<String>) -> Self {
-        Self::new(types::INVALID_PARAMS, format!("Invalid params: {}", detail.into()))
+        Self::new(
+            types::INVALID_PARAMS,
+            format!("Invalid params: {}", detail.into()),
+        )
     }
 
     pub fn internal_error(detail: impl Into<String>) -> Self {
-        Self::new(types::INTERNAL_ERROR, format!("Internal error: {}", detail.into()))
+        Self::new(
+            types::INTERNAL_ERROR,
+            format!("Internal error: {}", detail.into()),
+        )
     }
 
     pub fn tool_not_found(name: impl Into<String>) -> Self {
@@ -67,12 +73,9 @@ impl McpError {
 
     pub fn to_json_rpc_response(&self, id: types::RequestId) -> types::JsonRpcResponse {
         match &self.data {
-            Some(data) => types::JsonRpcResponse::error_with_data(
-                id,
-                self.code,
-                &self.message,
-                data.clone(),
-            ),
+            Some(data) => {
+                types::JsonRpcResponse::error_with_data(id, self.code, &self.message, data.clone())
+            }
             None => types::JsonRpcResponse::error(id, self.code, &self.message),
         }
     }

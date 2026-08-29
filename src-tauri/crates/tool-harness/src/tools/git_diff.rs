@@ -54,11 +54,15 @@ impl Tool for GitDiffTool {
         ToolMetadata {
             name: "git_diff".into(),
             label: "Git Diff".into(),
-            description: "Show changes between commits, commit and working tree, or staged changes".into(),
-            doc: Some("Runs `git diff` and returns the output.
+            description: "Show changes between commits, commit and working tree, or staged changes"
+                .into(),
+            doc: Some(
+                "Runs `git diff` and returns the output.
 - Default (no args): shows unstaged changes (working tree vs index)
 - staged=true: shows staged changes (index vs HEAD)
-- target: diff against a specific commit/branch".into()),
+- target: diff against a specific commit/branch"
+                    .into(),
+            ),
             category: ToolCategory::System,
             subcategory: Some("git".into()),
             tags: vec!["git".into(), "diff".into(), "scm".into(), "changes".into()],
@@ -74,7 +78,9 @@ impl Tool for GitDiffTool {
                     kind: "not_a_repo".into(),
                     description: "The specified path is not a git repository".into(),
                     recoverable: true,
-                    retry_advice: Some("Run in a git repository or provide a valid repoPath".into()),
+                    retry_advice: Some(
+                        "Run in a git repository or provide a valid repoPath".into(),
+                    ),
                 },
                 ToolErrorSpec {
                     kind: "git_not_found".into(),
@@ -97,7 +103,10 @@ impl Tool for GitDiffTool {
                     expected_result: None,
                 },
             ],
-            cost_hint: Some(CostHint { tokens_per_call: 50, category: CostCategory::Free }),
+            cost_hint: Some(CostHint {
+                tokens_per_call: 50,
+                category: CostCategory::Free,
+            }),
             version: "1.0.0".into(),
             deprecation: None,
             source: ToolSource::Builtin,
@@ -118,10 +127,7 @@ impl Tool for GitDiffTool {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        let target = input
-            .args
-            .get("target")
-            .and_then(|v| v.as_str());
+        let target = input.args.get("target").and_then(|v| v.as_str());
 
         let mut args: Vec<&str> = vec!["diff"];
         if staged {

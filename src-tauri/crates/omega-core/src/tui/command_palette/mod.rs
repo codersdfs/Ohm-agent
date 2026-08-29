@@ -35,6 +35,7 @@ pub enum CommandHandler {
     MemStore,
     MemSearch,
     MemList,
+    Skill,
 }
 
 /// One palette row / slash command.
@@ -163,7 +164,9 @@ pub static COMMANDS: &[CommandEntry] = &[
         label: "Search memory",
         aliases: &["/mem"],
         description: "Search Hermes memory",
-        keywords: &["memory", "hermes", "search", "remember", "session", "project", "user"],
+        keywords: &[
+            "memory", "hermes", "search", "remember", "session", "project", "user",
+        ],
         handler: CommandHandler::Memory,
     },
     CommandEntry {
@@ -190,6 +193,14 @@ pub static COMMANDS: &[CommandEntry] = &[
         keywords: &["memory", "list", "show", "all", "entries", "project"],
         handler: CommandHandler::MemList,
     },
+    CommandEntry {
+        id: "/skill",
+        label: "Load skill",
+        aliases: &["/skills"],
+        description: "Load an agent skill (or list available skills)",
+        keywords: &["skill", "context", "instructions", "load"],
+        handler: CommandHandler::Skill,
+    },
 ];
 
 /// Look up a command by its id or alias and return the matching entry.
@@ -198,7 +209,6 @@ pub static COMMANDS: &[CommandEntry] = &[
 pub fn lookup_command(cmd: &str) -> Option<&'static CommandEntry> {
     let normalized = cmd.to_lowercase();
     COMMANDS.iter().find(|entry| {
-        entry.id == normalized
-            || entry.aliases.iter().any(|alias| alias == &normalized)
+        entry.id == normalized || entry.aliases.iter().any(|alias| alias == &normalized)
     })
 }

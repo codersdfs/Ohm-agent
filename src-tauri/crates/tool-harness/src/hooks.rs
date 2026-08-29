@@ -35,11 +35,21 @@ pub trait Hook: Send + Sync {
         HookDecision::Allow
     }
 
-    fn on_tool_pre(&self, _ctx: &HookContext, _tool_name: &str, _input: &ToolInput) -> HookDecision {
+    fn on_tool_pre(
+        &self,
+        _ctx: &HookContext,
+        _tool_name: &str,
+        _input: &ToolInput,
+    ) -> HookDecision {
         HookDecision::Allow
     }
 
-    fn on_tool_post(&self, _ctx: &HookContext, _tool_name: &str, _result: &ToolResult) -> Result<(), String> {
+    fn on_tool_post(
+        &self,
+        _ctx: &HookContext,
+        _tool_name: &str,
+        _result: &ToolResult,
+    ) -> Result<(), String> {
         Ok(())
     }
 
@@ -73,9 +83,7 @@ impl Default for HooksRegistry {
 
 impl HooksRegistry {
     pub fn new() -> Self {
-        Self {
-            hooks: Vec::new(),
-        }
+        Self { hooks: Vec::new() }
     }
 
     pub fn register(&mut self, hook: Box<dyn Hook>) {
@@ -92,7 +100,12 @@ impl HooksRegistry {
         HookDecision::Allow
     }
 
-    pub fn run_post_tool(&self, ctx: &HookContext, tool: &str, result: &ToolResult) -> Result<(), String> {
+    pub fn run_post_tool(
+        &self,
+        ctx: &HookContext,
+        tool: &str,
+        result: &ToolResult,
+    ) -> Result<(), String> {
         for hook in &self.hooks {
             hook.on_tool_post(ctx, tool, result)?;
         }
@@ -221,7 +234,8 @@ impl Hook for GateHook {
                 if score < self.pass_threshold {
                     let msg = format!(
                         "Gate score {} < threshold {}: {}",
-                        score, self.pass_threshold,
+                        score,
+                        self.pass_threshold,
                         violations.join("; ")
                     );
                     HookDecision::Deny(msg)
@@ -233,7 +247,8 @@ impl Hook for GateHook {
                 if score < self.pass_threshold {
                     let advice = format!(
                         "# Gate feedback (score {}/{}):\n{}\n",
-                        score, self.pass_threshold,
+                        score,
+                        self.pass_threshold,
                         violations.join("\n")
                     );
                     HookDecision::Inject(advice)
@@ -245,7 +260,10 @@ impl Hook for GateHook {
                 if score < self.pass_threshold {
                     log::info!(
                         "Gate advice: score {}/{} for {} — {}",
-                        score, self.pass_threshold, tool_name, violations.join("; ")
+                        score,
+                        self.pass_threshold,
+                        tool_name,
+                        violations.join("; ")
                     );
                 }
                 HookDecision::Allow
@@ -267,7 +285,12 @@ mod tests {
 
     #[async_trait]
     impl Hook for CountingHook {
-        fn on_tool_pre(&self, _ctx: &HookContext, _tool_name: &str, _input: &ToolInput) -> HookDecision {
+        fn on_tool_pre(
+            &self,
+            _ctx: &HookContext,
+            _tool_name: &str,
+            _input: &ToolInput,
+        ) -> HookDecision {
             self.count.fetch_add(1, Ordering::SeqCst);
             HookDecision::Allow
         }
@@ -318,9 +341,11 @@ mod tests {
 
     #[test]
     fn test_gate_hook_blocks_on_low_score() {
-        let scorer = Arc::new(|_path: &str, _content: &str, _input: &ToolInput| -> (u32, Vec<String>) {
-            (40, vec!["too many violations".into()])
-        });
+        let scorer = Arc::new(
+            |_path: &str, _content: &str, _input: &ToolInput| -> (u32, Vec<String>) {
+                (40, vec!["too many violations".into()])
+            },
+        );
 
         let gate = GateHook::new(GateHookMode::Block)
             .with_scorer(scorer)
@@ -349,9 +374,11 @@ mod tests {
 
     #[test]
     fn test_gate_hook_allows_on_high_score() {
-        let scorer = Arc::new(|_path: &str, _content: &str, _input: &ToolInput| -> (u32, Vec<String>) {
-            (95, vec![])
-        });
+        let scorer = Arc::new(
+            |_path: &str, _content: &str, _input: &ToolInput| -> (u32, Vec<String>) {
+                (95, vec![])
+            },
+        );
 
         let gate = GateHook::new(GateHookMode::Block)
             .with_scorer(scorer)

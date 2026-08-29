@@ -1,3 +1,4 @@
+pub mod banner;
 pub mod command_palette;
 pub mod component;
 pub mod editor;
@@ -5,10 +6,9 @@ pub mod filter;
 pub mod header;
 pub mod help;
 pub mod layout;
+pub mod loader;
 pub mod markdown;
-pub mod omega_mark;
 pub mod provider_panel;
-pub mod spinner;
 pub mod status;
 pub mod theme;
 pub mod transcript;

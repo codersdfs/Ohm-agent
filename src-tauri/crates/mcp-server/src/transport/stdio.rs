@@ -38,7 +38,10 @@ impl StdioTransport {
     }
 
     /// Read one JSON-RPC line from stdin (blocking)
-    fn read_line_blocking(stdin: &Mutex<io::Stdin>, buffer_size: usize) -> Result<ReceiveResult, String> {
+    fn read_line_blocking(
+        stdin: &Mutex<io::Stdin>,
+        buffer_size: usize,
+    ) -> Result<ReceiveResult, String> {
         let mut handle = stdin.try_lock().map_err(|_| "Stdin lock contention")?;
         let mut line = String::with_capacity(4096);
 
@@ -85,12 +88,16 @@ impl Default for StdioTransport {
 #[async_trait]
 impl McpTransport for StdioTransport {
     async fn send(&self, response: &JsonRpcResponse) -> Result<(), String> {
-        let json = serde_json::to_string(response)
-            .map_err(|e| format!("Serialize error: {e}"))?;
+        let json = serde_json::to_string(response).map_err(|e| format!("Serialize error: {e}"))?;
 
-        let mut handle = self.stdout.try_lock().map_err(|_| "Stdout lock contention")?;
+        let mut handle = self
+            .stdout
+            .try_lock()
+            .map_err(|_| "Stdout lock contention")?;
         writeln!(handle, "{}", json).map_err(|e| format!("Stdout write error: {e}"))?;
-        handle.flush().map_err(|e| format!("Stdout flush error: {e}"))?;
+        handle
+            .flush()
+            .map_err(|e| format!("Stdout flush error: {e}"))?;
         log::debug!("Stdio transport: sent response");
         Ok(())
     }
@@ -100,11 +107,9 @@ impl McpTransport for StdioTransport {
         let stdin = self.stdin.clone();
         let buffer_size = self.buffer_size;
 
-        tokio::task::spawn_blocking(move || {
-            Self::read_line_blocking(&stdin, buffer_size)
-        })
-        .await
-        .map_err(|e| format!("Spawn blocking failed: {e}"))?
+        tokio::task::spawn_blocking(move || Self::read_line_blocking(&stdin, buffer_size))
+            .await
+            .map_err(|e| format!("Spawn blocking failed: {e}"))?
     }
 
     fn transport_type(&self) -> &str {

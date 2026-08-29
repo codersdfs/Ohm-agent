@@ -1,8 +1,8 @@
 use crate::{ChatRequest, ChatResponse, LlmProvider, ProviderConfig, StreamChunk, Usage};
+use bytes::Buf;
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 use std::time::SystemTime;
-use bytes::Buf;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -48,28 +48,17 @@ pub(crate) fn canonical_request_hash(
 
     let canonical_request = format!(
         "{}\n{}\n{}\n{}\n{}\n{}",
-        method,
-        path,
-        query,
-        canonical_headers,
-        signed_headers_str,
-        payload_hash
+        method, path, query, canonical_headers, signed_headers_str, payload_hash
     );
 
     sha256_hex(canonical_request.as_bytes())
 }
 
 /// Derive the AWS SigV4 signing key.
-fn signing_key(
-    secret_key: &str,
-    date_stamp: &str,
-    region: &str,
-    service: &str,
-) -> Vec<u8> {
+fn signing_key(secret_key: &str, date_stamp: &str, region: &str, service: &str) -> Vec<u8> {
     let k_date = {
-        let mut mac =
-            HmacSha256::new_from_slice(format!("AWS4{}", secret_key).as_bytes())
-                .expect("HMAC accepts any key");
+        let mut mac = HmacSha256::new_from_slice(format!("AWS4{}", secret_key).as_bytes())
+            .expect("HMAC accepts any key");
         mac.update(date_stamp.as_bytes());
         mac.finalize().into_bytes()
     };
@@ -128,7 +117,14 @@ fn sign_request(
         signed_headers_list.push("x-amz-security-token");
     }
 
-    let cr_hash = canonical_request_hash(method, path, query, &headers, &signed_headers_list, &payload_hash);
+    let cr_hash = canonical_request_hash(
+        method,
+        path,
+        query,
+        &headers,
+        &signed_headers_list,
+        &payload_hash,
+    );
 
     let credential_scope = format!("{}/{}/bedrock/aws4_request", date_stamp_str, region);
     let string_to_sign = format!(
@@ -291,10 +287,7 @@ impl BedrockProvider {
     }
 
     fn base_url(&self) -> String {
-        format!(
-            "https://bedrock-runtime.{}.amazonaws.com",
-            self.region
-        )
+        format!("https://bedrock-runtime.{}.amazonaws.com", self.region)
     }
 
     fn host(&self) -> String {
@@ -337,8 +330,7 @@ impl BedrockProvider {
 
                 // Text content
                 if !m.content.is_empty() {
-                    content_blocks
-                        .push(serde_json::json!({ "text": m.content }));
+                    content_blocks.push(serde_json::json!({ "text": m.content }));
                 }
 
                 // Tool results
@@ -355,9 +347,8 @@ impl BedrockProvider {
                 // Tool calls (from assistant)
                 if let Some(ref tool_calls) = m.tool_calls {
                     for tc in tool_calls {
-                        let input: serde_json::Value =
-                            serde_json::from_str(&tc.function.arguments)
-                                .unwrap_or(serde_json::json!({}));
+                        let input: serde_json::Value = serde_json::from_str(&tc.function.arguments)
+                            .unwrap_or(serde_json::json!({}));
                         content_blocks.push(serde_json::json!({
                             "toolUse": {
                                 "toolUseId": tc.id,
@@ -469,7 +460,9 @@ impl BedrockProvider {
 
 fn extract_region(url: &str) -> Option<String> {
     // URLs like "https://bedrock-runtime.us-west-2.amazonaws.com" → "us-west-2"
-    let without_scheme = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://"))?;
+    let without_scheme = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))?;
     let host = without_scheme.split('/').next()?;
     let prefix = "bedrock-runtime.";
     if host.starts_with(prefix) {
@@ -484,11 +477,13 @@ fn extract_region(url: &str) -> Option<String> {
 
 #[async_trait::async_trait]
 impl LlmProvider for BedrockProvider {
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, String> {
         let body = self.build_converse_body(&request);
-        let body_bytes = serde_json::to_vec(&body)
-            .map_err(|e| format!("failed to serialize request: {}", e))?;
+        let body_bytes =
+            serde_json::to_vec(&body).map_err(|e| format!("failed to serialize request: {}", e))?;
 
         let (_status, bytes) = self
             .sign_and_send("POST", &self.converse_path(), &body_bytes)
@@ -522,14 +517,8 @@ impl LlmProvider for BedrockProvider {
             .to_string();
 
         let usage = resp.get("usage").map(|u| Usage {
-            input_tokens: u
-                .get("inputTokens")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u32,
-            output_tokens: u
-                .get("outputTokens")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u32,
+            input_tokens: u.get("inputTokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+            output_tokens: u.get("outputTokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
         });
 
         // Extract tool calls if present
@@ -585,8 +574,8 @@ impl LlmProvider for BedrockProvider {
         tx: tokio::sync::mpsc::UnboundedSender<StreamChunk>,
     ) -> Result<(), String> {
         let body = self.build_converse_body(&request);
-        let body_bytes = serde_json::to_vec(&body)
-            .map_err(|e| format!("failed to serialize request: {}", e))?;
+        let body_bytes =
+            serde_json::to_vec(&body).map_err(|e| format!("failed to serialize request: {}", e))?;
 
         let path = self.converse_stream_path();
         let host = self.host();
@@ -736,9 +725,8 @@ impl LlmProvider for BedrockProvider {
                         // contentBlockDelta may carry toolUse input
                         if let Some(delta) = event.get("contentBlockDelta") {
                             if let Some(tool_delta) = delta.get("delta") {
-                                if let Some(partial) = tool_delta
-                                    .get("partialJson")
-                                    .and_then(|v| v.as_str())
+                                if let Some(partial) =
+                                    tool_delta.get("partialJson").and_then(|v| v.as_str())
                                 {
                                     let _ = tx.send(StreamChunk {
                                         content: String::new(),
@@ -779,11 +767,13 @@ impl LlmProvider for BedrockProvider {
                                 let input_tokens = usage
                                     .get("inputTokens")
                                     .and_then(|v| v.as_u64())
-                                    .unwrap_or(0) as u32;
+                                    .unwrap_or(0)
+                                    as u32;
                                 let output_tokens = usage
                                     .get("outputTokens")
                                     .and_then(|v| v.as_u64())
-                                    .unwrap_or(0) as u32;
+                                    .unwrap_or(0)
+                                    as u32;
                                 let _ = tx.send(StreamChunk {
                                     content: String::new(),
                                     thinking: String::new(),
@@ -831,10 +821,20 @@ mod tests {
     #[test]
     fn test_signing_key_derivation() {
         // AWS test vector: https://docs.aws.amazon.com/general/latest/gr/signature-v4-examples.html
-        let key = signing_key("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "20150830", "us-east-1", "service");
+        let key = signing_key(
+            "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            "20150830",
+            "us-east-1",
+            "service",
+        );
         let hex_key = hex::encode(&key);
         // The derived key is a 32-byte HMAC; verify it's deterministic
-        let key2 = signing_key("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "20150830", "us-east-1", "service");
+        let key2 = signing_key(
+            "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            "20150830",
+            "us-east-1",
+            "service",
+        );
         assert_eq!(hex_key, hex::encode(&key2));
     }
 

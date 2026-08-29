@@ -13,8 +13,8 @@
 use crate::{McpRequest, McpResponse};
 use serde_json::Value;
 use std::collections::HashMap;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use std::process::Stdio;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
@@ -110,7 +110,6 @@ pub struct StdioTransport {
     stderr_task: Option<tokio::task::JoinHandle<()>>,
 }
 impl StdioTransport {
-
     pub fn spawn(program: &str, args: &[&str]) -> Result<Self, String> {
         let mut child = Command::new(program)
             .args(args)
@@ -223,12 +222,7 @@ impl StdioTransport {
             let stdin = child.stdin.take();
             drop(stdin);
             // Wait for child to exit (with a timeout)
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(5),
-                child.wait(),
-            )
-            .await
-            {
+            match tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await {
                 Ok(result) => {
                     result.map_err(|e| format!("Failed waiting for MCP subprocess: {e}"))?;
                 }

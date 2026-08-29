@@ -374,10 +374,7 @@ mod tests {
             },
         };
         let json = serde_json::to_value(&result).unwrap();
-        assert_eq!(
-            json["protocolVersion"],
-            serde_json::json!("2024-11-05")
-        );
+        assert_eq!(json["protocolVersion"], serde_json::json!("2024-11-05"));
         assert!(json["capabilities"]["tools"].is_object());
         assert_eq!(json["serverInfo"]["name"], "omega-mcp");
     }
@@ -426,6 +423,9 @@ mod tests {
         let json = serde_json::to_string(&resp).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["error"]["code"], PARSE_ERROR);
-        assert!(parsed["error"]["message"].as_str().unwrap().contains("Parse error"));
+        assert!(parsed["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Parse error"));
     }
 }

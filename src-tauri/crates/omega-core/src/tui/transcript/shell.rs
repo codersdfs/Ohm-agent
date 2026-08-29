@@ -240,7 +240,10 @@ pub fn render_tool_call_compact(state: &ToolCallState, _avail_width: u16) -> Tex
     let mut lines: Vec<Line<'static>> = Vec::new();
 
     // Summary or tool name line
-    let summary = fit_to_width(&state.tool_summary, _avail_width.saturating_sub(name_w + 2).max(1) as usize);
+    let summary = fit_to_width(
+        &state.tool_summary,
+        _avail_width.saturating_sub(name_w + 2).max(1) as usize,
+    );
 
     if !summary.is_empty() {
         lines.push(Line::from(vec![

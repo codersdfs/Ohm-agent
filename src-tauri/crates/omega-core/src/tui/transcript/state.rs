@@ -1,6 +1,8 @@
 //! Tool call + scroll state (P5 split).
 
-use super::preview::{EditCodePreview, WriteCodePreview, extract_edit_preview, extract_write_preview};
+use super::preview::{
+    extract_edit_preview, extract_write_preview, EditCodePreview, WriteCodePreview,
+};
 use super::shell::{fit_to_width, shorten};
 use super::toolbox::compute_tool_summary;
 
@@ -170,13 +172,17 @@ pub fn has_attachment_content(content: &str) -> bool {
 
     // File path detection: absolute paths or common file extensions
     for word in content.split_whitespace() {
-        let trimmed = word.trim_end_matches(|c: char| matches!(c, ',' | '.' | ';' | ')' | ']' | '"'));
+        let trimmed =
+            word.trim_end_matches(|c: char| matches!(c, ',' | '.' | ';' | ')' | ']' | '"'));
         // Unix absolute path: starts with / followed by more chars
         if trimmed.starts_with('/') && trimmed.len() > 1 {
             return true;
         }
         // Windows absolute path: C:\ or \ (UNC)
-        if trimmed.len() >= 3 && trimmed.chars().nth(1) == Some(':') && trimmed.chars().nth(2) == Some('\\') {
+        if trimmed.len() >= 3
+            && trimmed.chars().nth(1) == Some(':')
+            && trimmed.chars().nth(2) == Some('\\')
+        {
             return true;
         }
         if trimmed.starts_with(r"\\") {
@@ -185,14 +191,56 @@ pub fn has_attachment_content(content: &str) -> bool {
         // Common file extensions (without path prefix)
         if let Some(ext) = trimmed.rsplit('.').next() {
             let ext_lower = ext.to_lowercase();
-            if matches!(ext_lower.as_str(),
-                "rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "go" |
-                "toml" | "json" | "yaml" | "yml" | "md" | "txt" | "csv" |
-                "sh" | "bash" | "zsh" | "fish" | "env" | "cfg" | "ini" |
-                "html" | "css" | "scss" | "sass" | "less" | "xml" | "sql" |
-                "lock" | "log" | "pdf" | "png" | "jpg" | "jpeg" | "gif" | "svg" |
-                "mp4" | "mp3" | "wav" | "mov" | "avi" | "webm" | "mkv" |
-                "zip" | "tar" | "gz" | "bz2" | "7z" | "rar"
+            if matches!(
+                ext_lower.as_str(),
+                "rs" | "py"
+                    | "js"
+                    | "ts"
+                    | "tsx"
+                    | "jsx"
+                    | "go"
+                    | "toml"
+                    | "json"
+                    | "yaml"
+                    | "yml"
+                    | "md"
+                    | "txt"
+                    | "csv"
+                    | "sh"
+                    | "bash"
+                    | "zsh"
+                    | "fish"
+                    | "env"
+                    | "cfg"
+                    | "ini"
+                    | "html"
+                    | "css"
+                    | "scss"
+                    | "sass"
+                    | "less"
+                    | "xml"
+                    | "sql"
+                    | "lock"
+                    | "log"
+                    | "pdf"
+                    | "png"
+                    | "jpg"
+                    | "jpeg"
+                    | "gif"
+                    | "svg"
+                    | "mp4"
+                    | "mp3"
+                    | "wav"
+                    | "mov"
+                    | "avi"
+                    | "webm"
+                    | "mkv"
+                    | "zip"
+                    | "tar"
+                    | "gz"
+                    | "bz2"
+                    | "7z"
+                    | "rar"
             ) {
                 // Only count as file if there's a dot before the extension
                 if trimmed.contains('.') {

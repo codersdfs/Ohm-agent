@@ -43,10 +43,7 @@ pub enum SessionEvent {
         duration_ms: u64,
     },
     /// A tool was interrupted — ONLY emitted by crash recovery.
-    ToolInterrupted {
-        call_id: String,
-        reason: String,
-    },
+    ToolInterrupted { call_id: String, reason: String },
     /// Gate ran on output (post-write).
     GateCheck {
         turn_id: String,
@@ -94,26 +91,28 @@ pub struct ToolCallInfo {
 /// Mirrors OpenCode v2: abandoned side effects are never silently replayed.
 pub fn find_orphaned_tools(events: &[SessionEvent]) -> Vec<String> {
     let mut orphaned = Vec::new();
-    
+
     for event in events {
         if let SessionEvent::ToolStarted { call_id, .. } = event {
-            let completed = events.iter().any(|e| matches!(
-                e,
-                SessionEvent::ToolCompleted { call_id: c, .. } if c == call_id
-            ));
+            let completed = events.iter().any(|e| {
+                matches!(
+                    e,
+                    SessionEvent::ToolCompleted { call_id: c, .. } if c == call_id
+                )
+            });
             if !completed {
                 orphaned.push(call_id.clone());
             }
         }
     }
-    
+
     orphaned
 }
 
 /// Replay events to reconstruct the conversation history.
 pub fn replay_to_messages(events: &[SessionEvent]) -> Vec<providers::ChatMessage> {
     let mut messages = Vec::new();
-    
+
     for event in events {
         match event {
             SessionEvent::UserMessage { content, .. } => {
@@ -125,7 +124,9 @@ pub fn replay_to_messages(events: &[SessionEvent]) -> Vec<providers::ChatMessage
                     name: None,
                 });
             }
-            SessionEvent::ToolCompleted { call_id, result, .. } => {
+            SessionEvent::ToolCompleted {
+                call_id, result, ..
+            } => {
                 messages.push(providers::ChatMessage {
                     role: "tool".to_string(),
                     content: result.clone(),
@@ -137,7 +138,7 @@ pub fn replay_to_messages(events: &[SessionEvent]) -> Vec<providers::ChatMessage
             _ => {}
         }
     }
-    
+
     messages
 }
 
@@ -168,7 +169,7 @@ mod tests {
                 ts: "2024-01-01T00:00:01Z".to_string(),
             },
         ];
-        
+
         let orphaned = find_orphaned_tools(&events);
         assert_eq!(orphaned, vec!["call_2"]);
     }
@@ -187,7 +188,7 @@ mod tests {
                 duration_ms: 100,
             },
         ];
-        
+
         let messages = replay_to_messages(&events);
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].role, "user");

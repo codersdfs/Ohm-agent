@@ -2,6 +2,9 @@
 
 use providers::ProviderConfig;
 
+/// TUI loader settings ride in the same config.json under `"loader"`.
+pub use omega_core::tui::loader::LoaderConfig;
+
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct CliConfig {
     pub provider: Option<String>,
@@ -9,6 +12,9 @@ pub struct CliConfig {
     pub base_url: Option<String>,
     pub max_tokens: Option<u32>,
     pub temperature: Option<f32>,
+    /// Optional activity-loader customization (style, tick rate, phrases).
+    #[serde(default)]
+    pub loader: Option<LoaderConfig>,
 }
 
 pub fn config_dir() -> std::path::PathBuf {
@@ -29,7 +35,14 @@ pub fn load_config() -> CliConfig {
             base_url: None,
             max_tokens: None,
             temperature: None,
+            loader: None,
         })
+}
+
+/// Loader section of the persisted config; all defaults when absent, so a
+/// missing or hand-deleted key never breaks startup.
+pub fn load_loader_config() -> LoaderConfig {
+    load_config().loader.unwrap_or_default()
 }
 
 pub fn save_config(config: &providers::ProviderConfig) {
@@ -39,6 +52,9 @@ pub fn save_config(config: &providers::ProviderConfig) {
         base_url: config.base_url.clone(),
         max_tokens: Some(config.max_tokens),
         temperature: Some(config.temperature),
+        // Round-trip preservation: saving provider settings must never wipe
+        // a user's customized loader block.
+        loader: load_config().loader,
     };
     let path = config_dir().join("config.json");
     if let Ok(json) = serde_json::to_string_pretty(&cli) {
@@ -53,7 +69,19 @@ pub fn save_api_key(api_key: Option<&str>) {
     let _ = std::fs::create_dir_all(config_dir());
     match api_key.map(str::trim).filter(|s| !s.is_empty()) {
         Some(key) => {
-            let _ = std::fs::write(&path, format!("{key}\n"));
+            // Restrict to owner-only on Unix; default umask can leave an API key
+            // world-readable. On Windows the ACL is inherited from the user profile.
+            let mut opts = std::fs::OpenOptions::new();
+            opts.write(true).create(true).truncate(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.mode(0o600);
+            }
+            if let Ok(mut f) = opts.open(&path) {
+                use std::io::Write;
+                let _ = f.write_all(format!("{key}\n").as_bytes());
+            }
         }
         None => {
             let _ = std::fs::remove_file(&path);
@@ -79,7 +107,7 @@ pub fn load_provider_config(
 }
 
 /// Inner implementation parameterised by `config_dir` for testability.
-fn load_provider_config_inner(
+pub(crate) fn load_provider_config_inner(
     override_provider: Option<String>,
     override_model: Option<String>,
     override_base_url: Option<String>,
@@ -169,6 +197,7 @@ fn load_provider_config_inner(
         model,
         max_tokens,
         temperature,
+        max_concurrent_tools: 3,
     }
 }
 
@@ -184,6 +213,7 @@ fn load_config_from_dir(cfg_dir: &std::path::Path) -> CliConfig {
             base_url: None,
             max_tokens: None,
             temperature: None,
+            loader: None,
         })
 }
 
@@ -200,8 +230,6 @@ mod tests {
         dir
     }
 
-
-
     // ── CliConfig serde ──────────────────────────────────────────────
 
     #[test]
@@ -212,6 +240,7 @@ mod tests {
             base_url: Some("https://api.example.com".into()),
             max_tokens: Some(8192),
             temperature: Some(1.0),
+            loader: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: CliConfig = serde_json::from_str(&json).unwrap();
@@ -238,6 +267,40 @@ mod tests {
         assert_eq!(cfg.provider, None);
         assert_eq!(cfg.max_tokens, None);
         assert_eq!(cfg.temperature, None);
+        assert_eq!(cfg.loader, None);
+    }
+
+    // ── loader section ───────────────────────────────────────────────
+
+    #[test]
+    fn cli_config_parses_loader_block() {
+        let json = r#"{"provider":"openai","loader":{"style":"braille","tick_ms":120}}"#;
+        let cfg: CliConfig = serde_json::from_str(json).unwrap();
+        let loader = cfg.loader.expect("loader block should parse");
+        assert_eq!(loader.resolved_style(), "braille");
+        assert_eq!(loader.resolved_tick_ms(), 120);
+    }
+
+    #[test]
+    fn cli_config_loader_garbage_style_still_parses() {
+        // Unknown style must not break startup — resolution falls back later.
+        let json = r#"{"loader":{"style":"neon_rainbow","phrases":["Hacking…"]}}"#;
+        let cfg: CliConfig = serde_json::from_str(json).unwrap();
+        let loader = cfg.loader.unwrap();
+        assert_eq!(loader.resolved_style(), "shimmer");
+        assert_eq!(
+            loader.resolved_phrases(),
+            Some(vec!["Hacking…".to_string()])
+        );
+    }
+
+    #[test]
+    fn cli_config_missing_loader_defaults_cleanly() {
+        let cfg: CliConfig = serde_json::from_str(r#"{"provider":"openai"}"#).unwrap();
+        assert!(cfg.loader.is_none());
+        let resolved = cfg.loader.unwrap_or_default();
+        assert_eq!(resolved.resolved_style(), "shimmer");
+        assert_eq!(resolved.resolved_tick_ms(), 80);
     }
 
     // ── load_config_from_dir ─────────────────────────────────────────
@@ -251,7 +314,10 @@ mod tests {
         let cfg = load_config_from_dir(dir.path());
         assert_eq!(cfg.provider, Some("openai".into()));
         assert_eq!(cfg.model, Some("gpt-4o".into()));
-        assert_eq!(cfg.base_url, Some("https://custom.api.example.com/v1".into()));
+        assert_eq!(
+            cfg.base_url,
+            Some("https://custom.api.example.com/v1".into())
+        );
         assert_eq!(cfg.max_tokens, Some(8192));
         assert_eq!(cfg.temperature, Some(1.2));
     }
@@ -290,7 +356,10 @@ mod tests {
         let dir = setup_config_dir(r#"{"provider":"local"}"#);
         let cfg = load_provider_config_inner(
             Some("anthropic".into()), // CLI override
-            None, None, None, None,
+            None,
+            None,
+            None,
+            None,
             dir.path(),
         );
         assert!(matches!(cfg.kind, providers::ProviderKind::Anthropic));
@@ -322,9 +391,8 @@ mod tests {
         let _guard = lock_env();
         let dir = setup_config_dir(r#"{"model":"from-config"}"#);
         std::env::set_var("OMEGA_MODEL", "from-env");
-        let cfg = load_provider_config_inner(
-            None, Some("from-cli".into()), None, None, None, dir.path(),
-        );
+        let cfg =
+            load_provider_config_inner(None, Some("from-cli".into()), None, None, None, dir.path());
         assert_eq!(cfg.model, "from-cli");
         std::env::remove_var("OMEGA_MODEL");
     }
@@ -355,7 +423,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::env::remove_var("OMEGA_MODEL");
         let cfg = load_provider_config_inner(
-            Some("anthropic".into()), None, None, None, None, dir.path(),
+            Some("anthropic".into()),
+            None,
+            None,
+            None,
+            None,
+            dir.path(),
         );
         assert_eq!(cfg.model, "claude-sonnet-4-20250514");
     }
@@ -367,9 +440,7 @@ mod tests {
         let _guard = lock_env();
         let dir = setup_config_dir(r#"{"max_tokens":2048}"#);
         std::env::set_var("OMEGA_MAX_TOKENS", "1024");
-        let cfg = load_provider_config_inner(
-            None, None, None, Some(16384), None, dir.path(),
-        );
+        let cfg = load_provider_config_inner(None, None, None, Some(16384), None, dir.path());
         assert_eq!(cfg.max_tokens, 16384);
         std::env::remove_var("OMEGA_MAX_TOKENS");
     }
@@ -410,9 +481,7 @@ mod tests {
         let _guard = lock_env();
         let dir = setup_config_dir(r#"{"temperature":0.3}"#);
         std::env::set_var("OMEGA_TEMPERATURE", "0.5");
-        let cfg = load_provider_config_inner(
-            None, None, None, None, Some(1.5), dir.path(),
-        );
+        let cfg = load_provider_config_inner(None, None, None, None, Some(1.5), dir.path());
         assert_eq!(cfg.temperature, 1.5);
         std::env::remove_var("OMEGA_TEMPERATURE");
     }

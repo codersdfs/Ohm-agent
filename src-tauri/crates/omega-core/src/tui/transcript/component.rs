@@ -12,7 +12,6 @@ use crate::ui::permission_panel::PermissionPanelState;
 
 // ─── Transcript Component ────────────────────────────────────────────────────
 
-
 /// Aggregated transcript state: entries, scroll, conversation history, streaming channel.
 pub struct Transcript {
     pub entries: Vec<TranscriptEntry>,
@@ -66,17 +65,28 @@ impl Transcript {
 
     /// Add a notice entry to the transcript.
     pub fn add_notice(&mut self, text: String, is_error: bool) {
-        self.entries.push(TranscriptEntry::Notice {
-            text,
-            is_error,
-        });
+        self.entries
+            .push(TranscriptEntry::Notice { text, is_error });
+    }
+
+    /// Whether any real conversation content exists (user message, assistant
+    /// reply, or tool execution). Startup notices do not count — the splash
+    /// banner stays up until actual interaction begins.
+    pub fn has_conversation(&self) -> bool {
+        self.entries.iter().any(|e| {
+            matches!(
+                e,
+                TranscriptEntry::User { .. }
+                    | TranscriptEntry::Assistant { .. }
+                    | TranscriptEntry::ToolCallBox { .. }
+                    | TranscriptEntry::ToolCall { .. }
+            )
+        })
     }
 
     /// Add a user message entry to the transcript.
     pub fn add_user_message(&mut self, content: String) {
-        self.entries.push(TranscriptEntry::User {
-            content,
-        });
+        self.entries.push(TranscriptEntry::User { content });
     }
 
     /// Add an assistant entry to the transcript (for streaming).
@@ -325,15 +335,17 @@ impl Transcript {
                 }
                 Action::StreamError
             }
-            super::component::UiStreamEvent::PermissionRequest { prompt, options, default_idx } => {
-                Action::PermissionRequest { prompt: prompt.clone(), options: options.clone(), default_idx: *default_idx }
-            }
-            super::component::UiStreamEvent::PermissionResponse(_allowed) => {
-                Action::Noop
-            }
-            super::component::UiStreamEvent::PermissionCancel => {
-                Action::Noop
-            }
+            super::component::UiStreamEvent::PermissionRequest {
+                prompt,
+                options,
+                default_idx,
+            } => Action::PermissionRequest {
+                prompt: prompt.clone(),
+                options: options.clone(),
+                default_idx: *default_idx,
+            },
+            super::component::UiStreamEvent::PermissionResponse(_allowed) => Action::Noop,
+            super::component::UiStreamEvent::PermissionCancel => Action::Noop,
         }
     }
 }

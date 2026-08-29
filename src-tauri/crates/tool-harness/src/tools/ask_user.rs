@@ -57,15 +57,23 @@ impl Tool for AskUserTool {
             name: "ask_user".into(),
             label: "Ask User".into(),
             description: "Ask the user a question and wait for their response.".into(),
-            doc: Some("Emits a structured question to the UI and blocks until the user responds.
+            doc: Some(
+                "Emits a structured question to the UI and blocks until the user responds.
 - question: the question to ask
 - options: optional list of predefined choices (if provided, user selects from these)
 - timeout: optional timeout in seconds (0 = no timeout)
 In CLI mode, prompts via stdin. In TUI mode, shows an interactive prompt.
-Returns the user's answer as the tool output.".into()),
+Returns the user's answer as the tool output."
+                    .into(),
+            ),
             category: ToolCategory::Communication,
             subcategory: Some("ask".into()),
-            tags: vec!["ask".into(), "user".into(), "question".into(), "interactive".into()],
+            tags: vec![
+                "ask".into(),
+                "user".into(),
+                "question".into(),
+                "interactive".into(),
+            ],
             parameters: schema.clone(),
             param_summaries: ToolMetadata::extract_param_summaries(&schema),
             read_only: true,
@@ -106,7 +114,10 @@ Returns the user's answer as the tool output.".into()),
                     expected_result: None,
                 },
             ],
-            cost_hint: Some(CostHint { tokens_per_call: 10, category: CostCategory::Free }),
+            cost_hint: Some(CostHint {
+                tokens_per_call: 10,
+                category: CostCategory::Free,
+            }),
             version: "1.0.0".into(),
             deprecation: None,
             source: ToolSource::Builtin,
@@ -225,7 +236,8 @@ Returns the user's answer as the tool output.".into()),
             // No interactive terminal available
             Err(ToolError::with_kind(
                 crate::ToolErrorKind::PermissionDenied,
-                "No interactive UI available to ask the user. Run in interactive mode (CLI/TUI).".to_string(),
+                "No interactive UI available to ask the user. Run in interactive mode (CLI/TUI)."
+                    .to_string(),
             ))
         }
     }

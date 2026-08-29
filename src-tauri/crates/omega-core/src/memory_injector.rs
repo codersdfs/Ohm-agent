@@ -8,7 +8,6 @@ use memory::MemoryStore;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
-use crate::context_manager::token_counter::Chars4Counter;
 use crate::context_manager::token_counter::TokenCounter;
 use crate::MutexExt;
 
@@ -66,7 +65,11 @@ impl MemoryInjector {
                 }
             };
 
-            for (entry, relevance) in search_result.entries.iter().zip(search_result.relevance.iter()) {
+            for (entry, relevance) in search_result
+                .entries
+                .iter()
+                .zip(search_result.relevance.iter())
+            {
                 if *relevance < self.min_relevance {
                     continue;
                 }
@@ -81,7 +84,7 @@ impl MemoryInjector {
                     entry.value.clone()
                 };
                 let line = format!("- {}: {}", entry.key, value);
-                let counter = Chars4Counter;
+                let counter = TokenCounter::chars4();
                 let line_tokens = counter.count_messages(&[providers::ChatMessage {
                     role: "system".into(),
                     content: line.clone(),
@@ -114,10 +117,7 @@ impl MemoryInjector {
     }
 }
 
-pub fn build_turn_context(
-    state: &crate::AppState,
-    user_msg: &str,
-) -> Result<String, String> {
+pub fn build_turn_context(state: &crate::AppState, user_msg: &str) -> Result<String, String> {
     let mut ctx = String::new();
 
     let learning_rules = crate::learning::LearningModule::get_prompt_rules(state);

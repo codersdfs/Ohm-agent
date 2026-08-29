@@ -229,9 +229,8 @@ fn apply_patch(
 
             // Apply hunks to the file
             if action == "deleted" {
-                std::fs::remove_file(&path).map_err(|e| {
-                    ToolError::new(format!("Failed to delete {}: {}", path, e))
-                })?;
+                std::fs::remove_file(&path)
+                    .map_err(|e| ToolError::new(format!("Failed to delete {}: {}", path, e)))?;
                 changes.push(FileChange {
                     action: "deleted".to_string(),
                     path,
@@ -250,9 +249,8 @@ fn apply_patch(
                         ))
                     })?;
                 }
-                std::fs::write(&path, content).map_err(|e| {
-                    ToolError::new(format!("Failed to create {}: {}", path, e))
-                })?;
+                std::fs::write(&path, content)
+                    .map_err(|e| ToolError::new(format!("Failed to create {}: {}", path, e)))?;
                 changes.push(FileChange {
                     action: "created".to_string(),
                     path,
@@ -261,14 +259,12 @@ fn apply_patch(
                 });
             } else {
                 // Modified: read, apply hunks, write
-                let original = std::fs::read_to_string(&path).map_err(|e| {
-                    ToolError::new(format!("Failed to read {}: {}", path, e))
-                })?;
+                let original = std::fs::read_to_string(&path)
+                    .map_err(|e| ToolError::new(format!("Failed to read {}: {}", path, e)))?;
 
                 let result = apply_hunks(&original, &hunks)?;
-                std::fs::write(&path, result.content).map_err(|e| {
-                    ToolError::new(format!("Failed to write {}: {}", path, e))
-                })?;
+                std::fs::write(&path, result.content)
+                    .map_err(|e| ToolError::new(format!("Failed to write {}: {}", path, e)))?;
 
                 changes.push(FileChange {
                     action: "modified".to_string(),
@@ -362,17 +358,17 @@ fn parse_range(s: &str) -> Result<(usize, usize), ToolError> {
     // or just start (count defaults to 1)
     let s = s.trim_start_matches(|c| c == '-' || c == '+');
     if let Some((start_str, count_str)) = s.split_once(',') {
-        let start = start_str.parse::<usize>().map_err(|_| {
-            ToolError::new(format!("Invalid range start: {}", start_str))
-        })?;
-        let count = count_str.parse::<usize>().map_err(|_| {
-            ToolError::new(format!("Invalid range count: {}", count_str))
-        })?;
+        let start = start_str
+            .parse::<usize>()
+            .map_err(|_| ToolError::new(format!("Invalid range start: {}", start_str)))?;
+        let count = count_str
+            .parse::<usize>()
+            .map_err(|_| ToolError::new(format!("Invalid range count: {}", count_str)))?;
         Ok((start, count))
     } else {
-        let start = s.parse::<usize>().map_err(|_| {
-            ToolError::new(format!("Invalid range start: {}", s))
-        })?;
+        let start = s
+            .parse::<usize>()
+            .map_err(|_| ToolError::new(format!("Invalid range start: {}", s)))?;
         Ok((start, 1))
     }
 }
@@ -520,9 +516,8 @@ mod tests {
         let path_str = path.to_str().unwrap().to_string();
 
         let tool = ApplyPatchTool::new();
-        let patch = format!(
-            "--- /dev/null\n+++ b/{path_str}\n@@ -0,0 +1,2 @@\n+fn main() {{}}\n+\n"
-        );
+        let patch =
+            format!("--- /dev/null\n+++ b/{path_str}\n@@ -0,0 +1,2 @@\n+fn main() {{}}\n+\n");
         let input = ToolInput {
             tool: "apply_patch".into(),
             args: serde_json::json!({ "patch": patch }),

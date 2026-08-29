@@ -60,23 +60,30 @@ impl NegativeKnowledgeStore {
 
         let promoted = match result {
             Ok(_) => false,
-            Err(rusqlite::Error::SqliteFailure(e, _)) if e.code == rusqlite::ErrorCode::ConstraintViolation => {
+            Err(rusqlite::Error::SqliteFailure(e, _))
+                if e.code == rusqlite::ErrorCode::ConstraintViolation =>
+            {
                 self.conn.execute(
                     "UPDATE failures SET count = count + 1, last_seen = ?1 WHERE signature = ?2",
                     params![now, signature],
                 ).map_err(|e| format!("Failed to increment count: {}", e))?;
 
-                let count: i64 = self.conn.query_row(
-                    "SELECT count FROM failures WHERE signature = ?1",
-                    params![signature],
-                    |row| row.get(0),
-                ).map_err(|e| format!("Failed to get count: {}", e))?;
+                let count: i64 = self
+                    .conn
+                    .query_row(
+                        "SELECT count FROM failures WHERE signature = ?1",
+                        params![signature],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| format!("Failed to get count: {}", e))?;
 
                 if count >= 3 {
-                    self.conn.execute(
-                        "UPDATE failures SET promoted = 1 WHERE signature = ?1",
-                        params![signature],
-                    ).map_err(|e| format!("Failed to promote: {}", e))?;
+                    self.conn
+                        .execute(
+                            "UPDATE failures SET promoted = 1 WHERE signature = ?1",
+                            params![signature],
+                        )
+                        .map_err(|e| format!("Failed to promote: {}", e))?;
                     true
                 } else {
                     false
@@ -90,19 +97,22 @@ impl NegativeKnowledgeStore {
 
     /// Get all promoted rules.
     pub fn get_promoted_rules(&self) -> Result<Vec<RuleEntry>, String> {
-        let mut stmt = self.conn.prepare(
-            "SELECT raw, kind, fix_recipe, count FROM failures WHERE promoted = 1",
-        ).map_err(|e| format!("Failed to prepare query: {}", e))?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT raw, kind, fix_recipe, count FROM failures WHERE promoted = 1")
+            .map_err(|e| format!("Failed to prepare query: {}", e))?;
 
         let mut rules = vec![];
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, i64>(3)?,
-            ))
-        }).map_err(|e| format!("Failed to query promoted rules: {}", e))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            })
+            .map_err(|e| format!("Failed to query promoted rules: {}", e))?;
 
         for row in rows.flatten() {
             rules.push(RuleEntry {
@@ -120,23 +130,26 @@ impl NegativeKnowledgeStore {
 
     /// Get statistics about the negative knowledge store.
     pub fn get_stats(&self) -> Result<Stats, String> {
-        let total: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM failures",
-            [],
-            |row| row.get(0),
-        ).map_err(|e| format!("Failed to count patterns: {}", e))?;
+        let total: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM failures", [], |row| row.get(0))
+            .map_err(|e| format!("Failed to count patterns: {}", e))?;
 
-        let promoted: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM failures WHERE promoted = 1",
-            [],
-            |row| row.get(0),
-        ).map_err(|e| format!("Failed to count promoted: {}", e))?;
+        let promoted: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM failures WHERE promoted = 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Failed to count promoted: {}", e))?;
 
-        let avg_count: f64 = self.conn.query_row(
-            "SELECT AVG(count) FROM failures",
-            [],
-            |row| row.get::<_, f64>(0),
-        ).unwrap_or(0.0);
+        let avg_count: f64 = self
+            .conn
+            .query_row("SELECT AVG(count) FROM failures", [], |row| {
+                row.get::<_, f64>(0)
+            })
+            .unwrap_or(0.0);
 
         Ok(Stats {
             total_patterns: total as usize,
@@ -147,7 +160,11 @@ impl NegativeKnowledgeStore {
     }
 
     /// Inject promoted rules into the rules database.
-    pub fn inject_into_rules_db(&self, db: &mut crate::rules::RulesDatabase, lang: &crate::Language) -> Result<u32, String> {
+    pub fn inject_into_rules_db(
+        &self,
+        db: &mut crate::rules::RulesDatabase,
+        lang: &crate::Language,
+    ) -> Result<u32, String> {
         let rules = self.get_promoted_rules()?;
         let mut injected = 0u32;
 
@@ -165,7 +182,8 @@ pub fn normalize_message(msg: &str) -> String {
     let mut result = msg.to_string();
 
     // Strip file paths (src/main.rs:42:)
-    let path_re = regex::Regex::new(r#"[a-zA-Z0-9_/.-]+\.(rs|ts|tsx|js|py|go|java|cs):\d+:"#).unwrap();
+    let path_re =
+        regex::Regex::new(r#"[a-zA-Z0-9_/.-]+\.(rs|ts|tsx|js|py|go|java|cs):\d+:"#).unwrap();
     result = path_re.replace_all(&result, "").to_string();
 
     // Strip line numbers (standalone numbers near colons)
@@ -173,7 +191,9 @@ pub fn normalize_message(msg: &str) -> String {
     result = line_re.replace_all(&result, ":").to_string();
 
     // Strip hex IDs and UUIDs
-    let hex_re = regex::Regex::new(r#"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"#).unwrap();
+    let hex_re =
+        regex::Regex::new(r#"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"#)
+            .unwrap();
     result = hex_re.replace_all(&result, "").to_string();
 
     let hex_short_re = regex::Regex::new(r#"[0-9a-f]{16,}"#).unwrap();
@@ -237,7 +257,10 @@ mod tests {
         assert!(promoted3);
 
         let rules = store.get_promoted_rules().unwrap();
-        assert!(rules.iter().any(|r| r.pattern.contains("test error")), "Should find promoted rule matching 'test error'");
+        assert!(
+            rules.iter().any(|r| r.pattern.contains("test error")),
+            "Should find promoted rule matching 'test error'"
+        );
     }
 
     #[test]
@@ -266,6 +289,9 @@ mod tests {
         let msg2 = "src/lib.rs:20: error: unused variable `x`";
         let sig1 = compute_signature(&normalize_message(msg1));
         let sig2 = compute_signature(&normalize_message(msg2));
-        assert_eq!(sig1, sig2, "Same normalized message should produce same signature");
+        assert_eq!(
+            sig1, sig2,
+            "Same normalized message should produce same signature"
+        );
     }
 }

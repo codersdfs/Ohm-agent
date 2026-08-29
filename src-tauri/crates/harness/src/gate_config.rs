@@ -71,7 +71,8 @@ eslint_enabled = true
 tsc_enabled = false
 ruff_enabled = true
 "#,
-        ).unwrap();
+        )
+        .unwrap();
         let config = load_gate_config(dir.to_str().unwrap());
         assert!(!config.clippy_enabled);
         assert!(config.eslint_enabled);

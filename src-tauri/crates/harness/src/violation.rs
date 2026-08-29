@@ -1,5 +1,5 @@
 //! # Omega Harness Library
-//! 
+//!
 //! Static analysis gate engine that runs code checks and produces structured results.
 #![allow(dead_code)]
 
@@ -55,13 +55,21 @@ pub struct GateResult {
 impl GateResult {
     /// Create a successful result with no violations
     pub fn pass(score: u32) -> Self {
-        Self { score, passed: true, violations: vec![] }
+        Self {
+            score,
+            passed: true,
+            violations: vec![],
+        }
     }
 
     /// Create a gate result with a score and violations.
     /// The `passed` flag is determined by the score threshold (≥80 passes).
     pub fn evaluate(score: u32, violations: Vec<Violation>) -> Self {
-        Self { score, passed: score >= 80, violations }
+        Self {
+            score,
+            passed: score >= 80,
+            violations,
+        }
     }
 
     /// Check if this result represents a pass

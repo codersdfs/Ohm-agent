@@ -14,13 +14,15 @@ struct AnthropicToolDef {
     name: String,
     description: String,
     input_schema: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cache_control: Option<serde_json::Value>,
 }
 
 #[derive(Serialize)]
 struct AnthropicRequest {
     model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    system: Option<String>,
+    system: Option<serde_json::Value>,
     messages: Vec<AnthropicMessage>,
     max_tokens: u32,
     temperature: f32,
@@ -100,13 +102,48 @@ struct AnthropicUsage {
 pub struct AnthropicProvider {
     api_key: String,
     base_url: String,
+    /// Whether Anthropic prompt caching is enabled for this provider
+    /// instance. Set at construction from `OMEGA_PROMPT_CACHING`; on by
+    /// default since caching only reduces tokens and never affects output.
+    caching: bool,
 }
 
 impl AnthropicProvider {
     pub fn new(api_key: String, base_url: Option<String>) -> Self {
+        let caching = std::env::var("OMEGA_PROMPT_CACHING")
+            .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+            .unwrap_or(true);
         Self {
             api_key,
             base_url: base_url.unwrap_or_else(|| "https://api.anthropic.com/v1".into()),
+            caching,
+        }
+    }
+
+    /// Extract the system prompt from the request and wrap it for Anthropic
+    /// prompt caching when enabled.
+    ///
+    /// Returns an array of text blocks with a cache breakpoint on the last
+    /// block so the static system prefix (and tool schemas, when cached) is
+    /// cached across tool-loop turns and follow-ups. When caching is
+    /// disabled, returns a plain string.
+    fn build_system(&self, request: &ChatRequest) -> Option<serde_json::Value> {
+        let system = request
+            .messages
+            .iter()
+            .find(|m| m.role == "system")
+            .map(|m| m.content.clone())
+            .filter(|s| !s.is_empty())?;
+
+        if self.caching {
+            let block = serde_json::json!({
+                "type": "text",
+                "text": system,
+                "cache_control": { "type": "ephemeral" },
+            });
+            Some(serde_json::Value::Array(vec![block]))
+        } else {
+            Some(serde_json::Value::String(system))
         }
     }
 
@@ -170,32 +207,42 @@ impl AnthropicProvider {
         messages
     }
 
-    fn convert_tools(tools: &[crate::ToolDefinition]) -> Vec<AnthropicToolDef> {
+    fn convert_tools(&self, tools: &[crate::ToolDefinition]) -> Vec<AnthropicToolDef> {
+        let cache = if self.caching {
+            Some(serde_json::json!({ "type": "ephemeral" }))
+        } else {
+            None
+        };
         tools
             .iter()
             .map(|t| AnthropicToolDef {
                 name: t.function.name.clone(),
                 description: t.function.description.clone(),
                 input_schema: t.function.parameters.clone(),
+                cache_control: cache.clone(),
             })
             .collect()
     }
 }
 
+/// Anthropic prompt caching (beta→GA). Caches the static system prefix so
+/// repeated tool-loop turns and follow-ups pay ~1 token instead of the full
+/// system + tool schemas. Only *reduces* tokens — never affects output — so it
+/// is on by default; disable with `OMEGA_PROMPT_CACHING=0`.
+///
+/// Configured once per [`AnthropicProvider`] instance via the
+/// `OMEGA_PROMPT_CACHING` env var at construction time.
+
 #[async_trait::async_trait]
 impl LlmProvider for AnthropicProvider {
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, String> {
         let client = reqwest::Client::new();
         let messages = Self::convert_messages(&request);
-        let tools = request.tools.as_ref().map(|t| Self::convert_tools(t));
-
-        let system = request
-            .messages
-            .iter()
-            .find(|m| m.role == "system")
-            .map(|m| m.content.clone())
-            .filter(|s| !s.is_empty());
+        let tools = request.tools.as_ref().map(|t| self.convert_tools(t));
+        let system = self.build_system(&request);
 
         let body = AnthropicRequest {
             model: request.config.model.clone(),
@@ -275,14 +322,8 @@ impl LlmProvider for AnthropicProvider {
     ) -> Result<(), String> {
         let client = reqwest::Client::new();
         let messages = Self::convert_messages(&request);
-        let tools = request.tools.as_ref().map(|t| Self::convert_tools(t));
-
-        let system = request
-            .messages
-            .iter()
-            .find(|m| m.role == "system")
-            .map(|m| m.content.clone())
-            .filter(|s| !s.is_empty());
+        let tools = request.tools.as_ref().map(|t| self.convert_tools(t));
+        let system = self.build_system(&request);
 
         let body = AnthropicRequest {
             model: request.config.model.clone(),

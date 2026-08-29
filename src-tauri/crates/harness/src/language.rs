@@ -3,15 +3,24 @@ use serde::{Deserialize, Serialize};
 /// Programming language enumeration for the Gate engine.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Language {
-    #[serde(rename = "rust")] Rust,
-    #[serde(rename = "typescript")] TypeScript,
-    #[serde(rename = "typescript-react")] TypeScriptReact,
-    #[serde(rename = "javascript")] JavaScript,
-    #[serde(rename = "python")] Python,
-    #[serde(rename = "go")] Go,
-    #[serde(rename = "csharp")] CSharp,
-    #[serde(rename = "java")] Java,
-    #[serde(rename = "other")] Other(String),
+    #[serde(rename = "rust")]
+    Rust,
+    #[serde(rename = "typescript")]
+    TypeScript,
+    #[serde(rename = "typescript-react")]
+    TypeScriptReact,
+    #[serde(rename = "javascript")]
+    JavaScript,
+    #[serde(rename = "python")]
+    Python,
+    #[serde(rename = "go")]
+    Go,
+    #[serde(rename = "csharp")]
+    CSharp,
+    #[serde(rename = "java")]
+    Java,
+    #[serde(rename = "other")]
+    Other(String),
 }
 
 impl Language {
@@ -52,13 +61,21 @@ impl Language {
         let lower: Vec<String> = paths.iter().map(|p| p.to_lowercase()).collect();
         let has = |needle: &str| -> bool { lower.iter().any(|p| p.contains(needle)) };
 
-        if has("cargo.toml") { return Language::Rust; }
-        if has("package.json") { return Language::TypeScript; }
+        if has("cargo.toml") {
+            return Language::Rust;
+        }
+        if has("package.json") {
+            return Language::TypeScript;
+        }
         if has("pyproject.toml") || has("requirements.txt") || has("setup.py") || has("setup.cfg") {
             return Language::Python;
         }
-        if has("go.mod") || has("go.sum") { return Language::Go; }
-        if has(".csproj") || has(".sln") { return Language::CSharp; }
+        if has("go.mod") || has("go.sum") {
+            return Language::Go;
+        }
+        if has(".csproj") || has(".sln") {
+            return Language::CSharp;
+        }
         if has("pom.xml") || has("build.gradle") || has(".java") {
             return Language::Java;
         }

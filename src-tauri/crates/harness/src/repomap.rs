@@ -53,9 +53,11 @@ impl SymbolKind {
     fn from_ts_node_kind(kind: &str) -> Self {
         match kind {
             // Rust grammar (tree-sitter-rust)
-            "function_item" | "function_definition" | "function_declaration" | "arrow_function" | "function" => {
-                Self::Function
-            }
+            "function_item"
+            | "function_definition"
+            | "function_declaration"
+            | "arrow_function"
+            | "function" => Self::Function,
             "struct_item" | "struct_definition" | "struct" => Self::Struct,
             "enum" | "enum_definition" | "enum_item" => Self::Enum,
             "trait_item" | "trait_definition" | "trait" => Self::Trait,
@@ -69,9 +71,8 @@ impl SymbolKind {
             // TS/JS
             "variable_declarator" | "variable_declaration" => Self::Variable,
             // Both
-            "import" | "import_declaration" | "import_statement" | "use_declaration" | "use_item" => {
-                Self::Import
-            }
+            "import" | "import_declaration" | "import_statement" | "use_declaration"
+            | "use_item" => Self::Import,
             "call_expression" | "call" => Self::Call,
             "mod_item" | "module" | "module_declaration" | "mod" => Self::Module,
             // Python
@@ -110,9 +111,13 @@ impl SymbolCache {
         let actual_mtime = std::fs::metadata(path)
             .ok()
             .and_then(|m| m.modified().ok())
-            .map(|t| Duration::from_secs(
-                t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
-            ));
+            .map(|t| {
+                Duration::from_secs(
+                    t.duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
+                )
+            });
         if actual_mtime == Some(entry.file_mtime) {
             Some(&entry.symbols)
         } else {
@@ -149,8 +154,18 @@ impl SymbolCache {
 
 /// Directories to skip during repo walks.
 const IGNORE_DIRS: &[&str] = &[
-    ".git", ".svn", ".hg", "node_modules", "target", ".venv", "venv",
-    "__pycache__", "dist", "build", ".next", ".nuxt",
+    ".git",
+    ".svn",
+    ".hg",
+    "node_modules",
+    "target",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "dist",
+    "build",
+    ".next",
+    ".nuxt",
 ];
 
 /// File extension → language string mapping.
@@ -211,10 +226,7 @@ impl RepoMap {
                 continue;
             }
 
-            let rel = entry
-                .path()
-                .strip_prefix(root)
-                .unwrap_or(entry.path());
+            let rel = entry.path().strip_prefix(root).unwrap_or(entry.path());
             let rel_str = rel.to_string_lossy().to_string();
 
             // Check cache (mtime-based invalidation)
@@ -228,11 +240,13 @@ impl RepoMap {
                     let mtime = std::fs::metadata(entry.path())
                         .ok()
                         .and_then(|m| m.modified().ok())
-                        .map(|t| Duration::from_secs(
-                            t.duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_secs(),
-                        ))
+                        .map(|t| {
+                            Duration::from_secs(
+                                t.duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs(),
+                            )
+                        })
                         .unwrap_or_default();
 
                     self.cache.set(rel_str.clone(), symbols.clone(), mtime);
@@ -255,12 +269,8 @@ impl RepoMap {
             None => return Ok(vec![]),
         };
 
-        let ts_lang = get_ts_language(&lang).ok_or_else(|| {
-            format!(
-                "No tree-sitter grammar for {:?} (extension {})",
-                lang, ext
-            )
-        })?;
+        let ts_lang = get_ts_language(&lang)
+            .ok_or_else(|| format!("No tree-sitter grammar for {:?} (extension {})", lang, ext))?;
 
         let mut parser = Parser::new();
         if parser.set_language(ts_lang).is_err() {
@@ -287,13 +297,7 @@ impl RepoMap {
     }
 
     /// Recursively extract symbols from tree-sitter AST nodes.
-    fn extract_symbols(
-        &self,
-        node: &Node,
-        source: &str,
-        file_path: &str,
-        out: &mut Vec<Symbol>,
-    ) {
+    fn extract_symbols(&self, node: &Node, source: &str, file_path: &str, out: &mut Vec<Symbol>) {
         let kind = node.kind();
         let symbol_kind = SymbolKind::from_ts_node_kind(kind);
 
@@ -348,24 +352,22 @@ impl RepoMap {
     }
 
     fn signature_of(node: &Node, source: &str) -> Option<String> {
-        node.utf8_text(source.as_bytes())
-            .ok()
-            .and_then(|s| {
-                let trimmed = s.trim();
-                if trimmed.is_empty() {
-                    return None;
+        node.utf8_text(source.as_bytes()).ok().and_then(|s| {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            if trimmed.len() > 200 {
+                // Find the nearest char boundary at or before byte 200
+                let mut end = 200;
+                while !trimmed.is_char_boundary(end) {
+                    end -= 1;
                 }
-                if trimmed.len() > 200 {
-                    // Find the nearest char boundary at or before byte 200
-                    let mut end = 200;
-                    while !trimmed.is_char_boundary(end) {
-                        end -= 1;
-                    }
-                    Some(format!("{}...", &trimmed[..end]))
-                } else {
-                    Some(trimmed.to_string())
-                }
-            })
+                Some(format!("{}...", &trimmed[..end]))
+            } else {
+                Some(trimmed.to_string())
+            }
+        })
     }
 
     /// Search symbols by name substring (case-insensitive).
@@ -432,7 +434,10 @@ impl RepoMap {
 
         let kind_weight = |s: &Symbol| -> f64 {
             match s.kind {
-                SymbolKind::Trait | SymbolKind::Struct | SymbolKind::Enum | SymbolKind::TypeAlias => 3.0,
+                SymbolKind::Trait
+                | SymbolKind::Struct
+                | SymbolKind::Enum
+                | SymbolKind::TypeAlias => 3.0,
                 SymbolKind::Function => 2.0,
                 SymbolKind::Impl | SymbolKind::Class | SymbolKind::Interface => 2.5,
                 SymbolKind::Module => 1.5,
@@ -453,7 +458,9 @@ impl RepoMap {
             let sig = s.signature.as_deref().unwrap_or("");
             let text = format!("{} {} {}", s.name, sig, s.file_path);
             for (j, other) in symbols.iter().enumerate() {
-                if i == j { continue; }
+                if i == j {
+                    continue;
+                }
                 if text.contains(&other.name) && other.name.len() > 2 {
                     let weight = kind_weight(other) * 0.5;
                     adj[i].push((j, weight));
@@ -479,16 +486,23 @@ impl RepoMap {
                 for (src, outgoing) in adj.iter().enumerate() {
                     for (tgt, w) in outgoing {
                         if *tgt == j {
-                            let out_weight: f64 = adj[src].iter().map(|(_, w)| *w).sum::<f64>().max(1.0);
+                            let out_weight: f64 =
+                                adj[src].iter().map(|(_, w)| *w).sum::<f64>().max(1.0);
                             sum += ranks[src] * (*w / out_weight);
                         }
                     }
                 }
                 new_ranks[j] = (1.0 - d) / n as f64 + d * sum;
             }
-            let diff: f64 = ranks.iter().zip(new_ranks.iter()).map(|(a, b)| (a - b).abs()).sum();
+            let diff: f64 = ranks
+                .iter()
+                .zip(new_ranks.iter())
+                .map(|(a, b)| (a - b).abs())
+                .sum();
             ranks = new_ranks;
-            if diff < epsilon { break; }
+            if diff < epsilon {
+                break;
+            }
         }
 
         let mut indexed: Vec<(usize, f64)> = (0..n).map(|i| (i, ranks[i])).collect();
@@ -520,7 +534,8 @@ impl RepoMap {
         let mut out = String::new();
         out.push_str("# Repo map (ranked by graph centrality):\n");
 
-        let mut file_groups: std::collections::HashMap<&str, Vec<(&Symbol, f64)>> = std::collections::HashMap::new();
+        let mut file_groups: std::collections::HashMap<&str, Vec<(&Symbol, f64)>> =
+            std::collections::HashMap::new();
         let mut file_order: Vec<&str> = vec![];
 
         for (symbol, rank) in &ranked {
@@ -633,7 +648,11 @@ mod tests {
         let mut map = RepoMap::new();
         let temp = tempfile::tempdir().unwrap();
         let file = temp.path().join("test.py");
-        std::fs::write(&file, "def my_func():\n    pass\nclass MyClass:\n    pass\n").unwrap();
+        std::fs::write(
+            &file,
+            "def my_func():\n    pass\nclass MyClass:\n    pass\n",
+        )
+        .unwrap();
 
         let symbols = map.parse_file(&file).unwrap();
         let names: Vec<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
@@ -652,7 +671,11 @@ mod tests {
         std::fs::write(temp.path().join("README.md"), "# test").unwrap();
 
         let count = map.index_repo(temp.path()).unwrap();
-        assert!(count >= 2, "expected at least 2 indexed files, got {}", count);
+        assert!(
+            count >= 2,
+            "expected at least 2 indexed files, got {}",
+            count
+        );
 
         let all_names: Vec<String> = map
             .files
@@ -660,8 +683,16 @@ mod tests {
             .flatten()
             .map(|s| s.name.clone())
             .collect();
-        assert!(all_names.contains(&"alpha".to_string()), "missing alpha: {:?}", all_names);
-        assert!(all_names.contains(&"beta".to_string()), "missing beta: {:?}", all_names);
+        assert!(
+            all_names.contains(&"alpha".to_string()),
+            "missing alpha: {:?}",
+            all_names
+        );
+        assert!(
+            all_names.contains(&"beta".to_string()),
+            "missing beta: {:?}",
+            all_names
+        );
     }
 
     #[test]
@@ -671,10 +702,18 @@ mod tests {
 
         std::fs::write(temp.path().join("keep.rs"), "fn keep() {}").unwrap();
         std::fs::create_dir_all(temp.path().join("node_modules")).unwrap();
-        std::fs::write(temp.path().join("node_modules").join("skip.rs"), "fn skip() {}").unwrap();
+        std::fs::write(
+            temp.path().join("node_modules").join("skip.rs"),
+            "fn skip() {}",
+        )
+        .unwrap();
 
         let count = map.index_repo(temp.path()).unwrap();
-        assert_eq!(count, 1, "should only index 1 file (skip node_modules), got {}", count);
+        assert_eq!(
+            count, 1,
+            "should only index 1 file (skip node_modules), got {}",
+            count
+        );
 
         let names: Vec<&str> = map
             .files
@@ -683,76 +722,79 @@ mod tests {
             .map(|s| s.name.as_str())
             .collect();
         assert!(names.contains(&"keep"), "missing keep function");
-        assert!(!names.contains(&"skip"), "skip function should not be indexed");
+        assert!(
+            !names.contains(&"skip"),
+            "skip function should not be indexed"
+        );
     }
 }
-    #[test]
-    fn build_graph_empty_repo() {
-        let map = RepoMap::new();
-        let ranked = map.build_graph();
-        assert!(ranked.is_empty());
+#[test]
+fn build_graph_empty_repo() {
+    let map = RepoMap::new();
+    let ranked = map.build_graph();
+    assert!(ranked.is_empty());
+}
+
+#[test]
+fn build_graph_returns_sorted_ranks() {
+    let mut map = RepoMap::new();
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("a.rs"),
+        "fn main() { foo(); bar(); }\nfn foo() {}\nfn bar() {}",
+    )
+    .unwrap();
+    let symbols = map.parse_file(temp.path().join("a.rs").as_path()).unwrap();
+    map.files.insert("a.rs".to_string(), symbols);
+
+    let ranked = map.build_graph();
+    assert!(!ranked.is_empty());
+    // Verify descending order.
+    for w in ranked.windows(2) {
+        assert!(
+            w[0].1 >= w[1].1,
+            "ranks not descending: {} < {}",
+            w[0].1,
+            w[1].1
+        );
     }
+}
 
-    #[test]
-    fn build_graph_returns_sorted_ranks() {
-        let mut map = RepoMap::new();
-        let temp = tempfile::tempdir().unwrap();
-        std::fs::write(
-            temp.path().join("a.rs"),
-            "fn main() { foo(); bar(); }\nfn foo() {}\nfn bar() {}",
-        )
-        .unwrap();
-        let symbols = map.parse_file(temp.path().join("a.rs").as_path()).unwrap();
-        map.files.insert("a.rs".to_string(), symbols);
+#[test]
+fn render_respects_budget() {
+    let mut map = RepoMap::new();
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("a.rs"),
+        "fn alpha() {}\nfn beta() {}\nstruct Gamma;",
+    )
+    .unwrap();
+    let symbols = map.parse_file(temp.path().join("a.rs").as_path()).unwrap();
+    map.files.insert("a.rs".to_string(), symbols);
 
-        let ranked = map.build_graph();
-        assert!(!ranked.is_empty());
-        // Verify descending order.
-        for w in ranked.windows(2) {
-            assert!(
-                w[0].1 >= w[1].1,
-                "ranks not descending: {} < {}",
-                w[0].1,
-                w[1].1
-            );
-        }
-    }
+    // With zero budget → empty.
+    assert_eq!(map.render(0), "");
 
-    #[test]
-    fn render_respects_budget() {
-        let mut map = RepoMap::new();
-        let temp = tempfile::tempdir().unwrap();
-        std::fs::write(
-            temp.path().join("a.rs"),
-            "fn alpha() {}\nfn beta() {}\nstruct Gamma;",
-        )
-        .unwrap();
-        let symbols = map.parse_file(temp.path().join("a.rs").as_path()).unwrap();
-        map.files.insert("a.rs".to_string(), symbols);
+    // With small budget → should fit.
+    let rendered = map.render(512);
+    assert!(rendered.contains("a.rs"));
+    assert!(rendered.contains("alpha"));
+    assert!(rendered.contains("beta"));
+    assert!(rendered.contains("Gamma"));
+}
 
-        // With zero budget → empty.
-        assert_eq!(map.render(0), "");
+#[test]
+fn render_groups_by_file() {
+    let mut map = RepoMap::new();
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(temp.path().join("a.rs"), "fn foo() {}\nstruct Bar;").unwrap();
+    std::fs::write(temp.path().join("b.rs"), "fn baz() {}").unwrap();
+    let syms_a = map.parse_file(temp.path().join("a.rs").as_path()).unwrap();
+    let syms_b = map.parse_file(temp.path().join("b.rs").as_path()).unwrap();
+    map.files.insert("a.rs".to_string(), syms_a);
+    map.files.insert("b.rs".to_string(), syms_b);
 
-        // With small budget → should fit.
-        let rendered = map.render(512);
-        assert!(rendered.contains("a.rs"));
-        assert!(rendered.contains("alpha"));
-        assert!(rendered.contains("beta"));
-        assert!(rendered.contains("Gamma"));
-    }
-
-    #[test]
-    fn render_groups_by_file() {
-        let mut map = RepoMap::new();
-        let temp = tempfile::tempdir().unwrap();
-        std::fs::write(temp.path().join("a.rs"), "fn foo() {}\nstruct Bar;").unwrap();
-        std::fs::write(temp.path().join("b.rs"), "fn baz() {}").unwrap();
-        let syms_a = map.parse_file(temp.path().join("a.rs").as_path()).unwrap();
-        let syms_b = map.parse_file(temp.path().join("b.rs").as_path()).unwrap();
-        map.files.insert("a.rs".to_string(), syms_a);
-        map.files.insert("b.rs".to_string(), syms_b);
-
-        let rendered = map.render(2048);
-        assert!(rendered.contains("a.rs/"));
-        assert!(rendered.contains("b.rs/"));
-    }
+    let rendered = map.render(2048);
+    assert!(rendered.contains("a.rs/"));
+    assert!(rendered.contains("b.rs/"));
+}

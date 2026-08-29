@@ -33,7 +33,12 @@ pub fn index_symbols(store: &MemoryStore, symbols: &[Symbol]) -> Result<usize, S
     for s in symbols {
         let key = format!("{}{}", SYM_PREFIX, symbol_key(s));
         // Skip already-indexed symbols (touch avoids re-embedding on re-index).
-        if store.remember(&key, Some("project")).ok().flatten().is_some() {
+        if store
+            .remember(&key, Some("project"))
+            .ok()
+            .flatten()
+            .is_some()
+        {
             continue;
         }
         let value = serde_json::to_string(s).map_err(|e| format!("serialize symbol: {}", e))?;
@@ -57,11 +62,17 @@ pub fn is_indexed(store: &MemoryStore, root: &str) -> bool {
 fn mark_indexed(store: &MemoryStore, root: &str) -> Result<(), String> {
     // Touch marker so it keeps the latest root; store() appends a new row which
     // is fine for our indexed/idempotent check.
-    store.store(MemoryLayer::Project, INDEX_MARKER, root).map(|_| ())
+    store
+        .store(MemoryLayer::Project, INDEX_MARKER, root)
+        .map(|_| ())
 }
 
 /// Semantically search indexed code symbols. Returns hits ranked by relevance.
-pub fn search_code(store: &MemoryStore, query: &str, limit: usize) -> Result<Vec<CodeSearchHit>, String> {
+pub fn search_code(
+    store: &MemoryStore,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<CodeSearchHit>, String> {
     let SearchResult { entries, relevance } = store.search(query, Some("project"), limit)?;
     let mut hits = Vec::new();
     for (entry, rel) in entries.into_iter().zip(relevance) {
@@ -78,7 +89,11 @@ pub fn search_code(store: &MemoryStore, query: &str, limit: usize) -> Result<Vec
             });
         }
     }
-    hits.sort_by(|a, b| b.relevance.partial_cmp(&a.relevance).unwrap_or(std::cmp::Ordering::Equal));
+    hits.sort_by(|a, b| {
+        b.relevance
+            .partial_cmp(&a.relevance)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     Ok(hits)
 }
 
@@ -140,7 +155,11 @@ mod tests {
         let store = MemoryStore::new(":memory:").unwrap();
         let syms = vec![symbol("connect_db", "db.rs", 4)];
         assert_eq!(index_symbols(&store, &syms).unwrap(), 1);
-        assert_eq!(index_symbols(&store, &syms).unwrap(), 0, "no dupe rows on re-index");
+        assert_eq!(
+            index_symbols(&store, &syms).unwrap(),
+            0,
+            "no dupe rows on re-index"
+        );
     }
 
     #[test]
@@ -152,7 +171,10 @@ mod tests {
         ];
         index_symbols(&store, &syms).unwrap();
         let hits = search_code(&store, "database connection", 5).unwrap();
-        assert_eq!(hits[0].name, "connect_db", "semantic match should rank first");
+        assert_eq!(
+            hits[0].name, "connect_db",
+            "semantic match should rank first"
+        );
         assert_eq!(hits[0].file_path, "db.rs");
         assert_eq!(hits[0].start_line, 4);
     }

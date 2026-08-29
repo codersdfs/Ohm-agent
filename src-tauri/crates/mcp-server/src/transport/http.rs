@@ -16,26 +16,29 @@
 
 use crate::server::McpServer;
 use axum::{
+    body::Body,
     extract::State,
     http::StatusCode,
     middleware::{self, Next},
-    response::{sse::{Event, Sse}, IntoResponse, Json, Response},
+    response::{
+        sse::{Event, Sse},
+        IntoResponse, Json, Response,
+    },
     routing::{get, post},
     Router,
-    body::Body,
 };
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::Instant;
-use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
-use tower_http::cors::CorsLayer;
-use tower_http::trace::TraceLayer;
 use std::future::Future;
 use std::future::IntoFuture;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Instant;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::Stream;
+use tower_http::cors::CorsLayer;
+use tower_http::trace::TraceLayer;
 
 /// Metrics collected by the HTTP transport
 pub struct TransportMetrics {
@@ -140,32 +143,35 @@ impl HttpTransport {
 
         // Add auth middleware if token is configured
         if let Some(token) = auth_token {
-            router = router.layer(middleware::from_fn(move |request: axum::http::Request<Body>, next: Next| {
-                let token = token.clone();
-                async move {
-                    let auth_header = request
-                        .headers()
-                        .get("Authorization")
-                        .and_then(|v| v.to_str().ok())
-                        .unwrap_or("");
+            router = router.layer(middleware::from_fn(
+                move |request: axum::http::Request<Body>, next: Next| {
+                    let token = token.clone();
+                    async move {
+                        let auth_header = request
+                            .headers()
+                            .get("Authorization")
+                            .and_then(|v| v.to_str().ok())
+                            .unwrap_or("");
 
-                    if auth_header != format!("Bearer {}", token) {
-                        return Err::<Response, (StatusCode, String)>((
-                            StatusCode::UNAUTHORIZED,
-                            serde_json::to_string(&serde_json::json!({
-                                "jsonrpc": "2.0",
-                                "id": null,
-                                "error": {
-                                    "code": -32000,
-                                    "message": "Unauthorized: invalid or missing auth token"
-                                }
-                            })).unwrap_or_default(),
-                        ));
+                        if auth_header != format!("Bearer {}", token) {
+                            return Err::<Response, (StatusCode, String)>((
+                                StatusCode::UNAUTHORIZED,
+                                serde_json::to_string(&serde_json::json!({
+                                    "jsonrpc": "2.0",
+                                    "id": null,
+                                    "error": {
+                                        "code": -32000,
+                                        "message": "Unauthorized: invalid or missing auth token"
+                                    }
+                                }))
+                                .unwrap_or_default(),
+                            ));
+                        }
+
+                        Ok(next.run(request).await)
                     }
-
-                    Ok(next.run(request).await)
-                }
-            }));
+                },
+            ));
         }
 
         router
@@ -250,26 +256,34 @@ where
 
 impl<S> Unpin for PermitStream<S> where S: Unpin {}
 
-
 // ─── Axum Handlers ───────────────────────────────────────────────────────────
 
 /// Handle JSON-RPC requests via POST.
 ///
 /// Calls `McpServer::handle_request()` directly — the response is the real
 /// JSON-RPC result/error from the server, not a hardcoded acknowledgement.
-async fn handle_json_rpc(
-    State(state): State<AppState>,
-    body: String,
-) -> axum::response::Response {
-    state.inner.metrics.requests_total.fetch_add(1, Ordering::Relaxed);
+async fn handle_json_rpc(State(state): State<AppState>, body: String) -> axum::response::Response {
+    state
+        .inner
+        .metrics
+        .requests_total
+        .fetch_add(1, Ordering::Relaxed);
 
     // Peek at the raw JSON for metrics before delegating to the server.
     if let Ok(raw) = serde_json::from_str::<serde_json::Value>(&body) {
         if raw.get("method").and_then(|v| v.as_str()) == Some("tools/call") {
-            state.inner.metrics.tools_called.fetch_add(1, Ordering::Relaxed);
+            state
+                .inner
+                .metrics
+                .tools_called
+                .fetch_add(1, Ordering::Relaxed);
         }
     } else {
-        state.inner.metrics.errors_total.fetch_add(1, Ordering::Relaxed);
+        state
+            .inner
+            .metrics
+            .errors_total
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     // Delegate to the real server — this returns the proper JSON-RPC response.
@@ -283,20 +297,30 @@ async fn handle_json_rpc(
             serde_json::to_string(&serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": null,
-            })).unwrap_or_default(),
-        ).into_response();
+            }))
+            .unwrap_or_default(),
+        )
+            .into_response();
     }
 
     // Parse the response back into JSON.
     match serde_json::from_str::<serde_json::Value>(&response_body) {
         Ok(value) => {
             if value.get("error").map_or(false, |e| !e.is_null()) {
-                state.inner.metrics.errors_total.fetch_add(1, Ordering::Relaxed);
+                state
+                    .inner
+                    .metrics
+                    .errors_total
+                    .fetch_add(1, Ordering::Relaxed);
             }
             Json(value).into_response()
         }
         Err(_) => {
-            state.inner.metrics.errors_total.fetch_add(1, Ordering::Relaxed);
+            state
+                .inner
+                .metrics
+                .errors_total
+                .fetch_add(1, Ordering::Relaxed);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({
@@ -307,7 +331,8 @@ async fn handle_json_rpc(
                         "message": "Internal error: failed to encode response"
                     }
                 })),
-            ).into_response()
+            )
+                .into_response()
         }
     }
 }
@@ -347,9 +372,7 @@ async fn handle_sse(
 }
 
 /// Handle health check requests
-async fn handle_health(
-    State(state): State<AppState>,
-) -> Json<serde_json::Value> {
+async fn handle_health(State(state): State<AppState>) -> Json<serde_json::Value> {
     let uptime = state.inner.metrics.start_time.elapsed().as_secs();
     let requests = state.inner.metrics.requests_total.load(Ordering::Relaxed);
     let errors = state.inner.metrics.errors_total.load(Ordering::Relaxed);
@@ -369,7 +392,7 @@ async fn handle_health(
 mod tests {
     use super::*;
     use axum::body::Body;
-    use axum::http::{Request, Method};
+    use axum::http::{Method, Request};
     use tower::util::ServiceExt;
 
     /// Build a minimal `McpServer` and a router for testing.
@@ -388,9 +411,7 @@ mod tests {
                     .method(Method::POST)
                     .uri("/json-rpc")
                     .header("Content-Type", "application/json")
-                    .body(Body::from(
-                        r#"{"jsonrpc":"2.0","id":"1","method":"ping"}"#,
-                    ))
+                    .body(Body::from(r#"{"jsonrpc":"2.0","id":"1","method":"ping"}"#))
                     .unwrap(),
             )
             .await
@@ -398,7 +419,9 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         // Real ping response: no error, id matches
@@ -409,9 +432,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_json_rpc_endpoint_tools_list() {
-        let server = Arc::new(McpServer::new().with_tool_registry(
-            tool_harness::tools::default_tool_registry(),
-        ));
+        let server = Arc::new(
+            McpServer::new().with_tool_registry(tool_harness::tools::default_tool_registry()),
+        );
         let app = HttpTransport::build_router(server, None);
 
         let response = app
@@ -429,7 +452,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), 16384).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 16384)
+            .await
+            .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(
             !parsed["result"]["tools"].as_array().unwrap().is_empty(),
@@ -454,9 +479,14 @@ mod tests {
             .unwrap();
 
         // Server::handle_request() returns a valid error response with 200 OK
-        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(parsed["error"]["code"], -32700, "Parse error should be -32700");
+        assert_eq!(
+            parsed["error"]["code"], -32700,
+            "Parse error should be -32700"
+        );
     }
 
     #[tokio::test]
@@ -478,10 +508,15 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(parsed["id"], "3");
-        assert_eq!(parsed["error"]["code"], -32601, "Method not found should be -32601");
+        assert_eq!(
+            parsed["error"]["code"], -32601,
+            "Method not found should be -32601"
+        );
     }
 
     #[tokio::test]
@@ -520,7 +555,9 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
 
         // Parse and verify health response
-        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
         let health: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(health["status"], "ok");
         assert!(health["uptime_seconds"].as_u64().is_some());
@@ -538,9 +575,7 @@ mod tests {
                     .method(Method::POST)
                     .uri("/json-rpc")
                     .header("Content-Type", "application/json")
-                    .body(Body::from(
-                        r#"{"jsonrpc":"2.0","id":"1","method":"ping"}"#,
-                    ))
+                    .body(Body::from(r#"{"jsonrpc":"2.0","id":"1","method":"ping"}"#))
                     .unwrap(),
             )
             .await
@@ -560,9 +595,7 @@ mod tests {
                     .uri("/json-rpc")
                     .header("Content-Type", "application/json")
                     .header("Authorization", "Bearer valid-token")
-                    .body(Body::from(
-                        r#"{"jsonrpc":"2.0","id":"1","method":"ping"}"#,
-                    ))
+                    .body(Body::from(r#"{"jsonrpc":"2.0","id":"1","method":"ping"}"#))
                     .unwrap(),
             )
             .await
@@ -571,7 +604,9 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
 
         // Verify it's a real ping response, not a hardcoded ack
-        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(parsed["id"], "1");
         assert!(parsed["result"].is_object());
@@ -588,9 +623,7 @@ mod tests {
                     .uri("/json-rpc")
                     .header("Content-Type", "application/json")
                     .header("Authorization", "Bearer wrong-token")
-                    .body(Body::from(
-                        r#"{"jsonrpc":"2.0","id":"1","method":"ping"}"#,
-                    ))
+                    .body(Body::from(r#"{"jsonrpc":"2.0","id":"1","method":"ping"}"#))
                     .unwrap(),
             )
             .await

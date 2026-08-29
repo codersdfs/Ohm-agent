@@ -2,8 +2,8 @@
 
 use ratatui::text::Text;
 
-use super::state::{ToolCallState, ToolCallStatus};
 use super::shell::{render_tool_call_compact, shorten};
+use super::state::{ToolCallState, ToolCallStatus};
 
 // ─── Shared box-rendering helpers ────────────────────────────────────────────
 

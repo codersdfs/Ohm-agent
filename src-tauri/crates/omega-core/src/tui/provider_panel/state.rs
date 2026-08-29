@@ -126,6 +126,7 @@ impl ProviderPanelState {
             },
             max_tokens: self.max_tokens,
             temperature: self.temperature,
+            max_concurrent_tools: 3,
         }
     }
 
@@ -140,14 +141,12 @@ impl ProviderPanelState {
     pub fn recompute_filter(&mut self) {
         // Delegate to the shared FilteredList, then sync our public fields.
         let current = self.model_buffer.clone();
-        self.filter_list.set_preferred(
-            self.models
-                .iter()
-                .position(|m| m == &current),
-        );
-        self.filter_list.recompute(&self.models, &self.search_buffer, |name, query| {
-            rank_model(name, query, &current)
-        });
+        self.filter_list
+            .set_preferred(self.models.iter().position(|m| m == &current));
+        self.filter_list
+            .recompute(&self.models, &self.search_buffer, |name, query| {
+                rank_model(name, query, &current)
+            });
         self.filtered = self.filter_list.filtered.clone();
         self.selected_model = self.filter_list.selected;
         self.model_scroll = self.filter_list.scroll;

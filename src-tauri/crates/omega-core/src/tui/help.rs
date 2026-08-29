@@ -42,7 +42,7 @@ pub fn render(area: Rect, buf: &mut Buffer) {
         ]),
         Line::from(""),
         Line::from(vec![Span::styled(
-            " [F1] HELP  [F2] LOGS  [F3] NET  [F10] EXIT",
+            " [?] HELP  [^K] PALETTE  [^C] QUIT",
             theme::style_dim(),
         )]),
         Line::from(""),

@@ -1,8 +1,7 @@
-use crate::{create_provider, ProviderConfig, ProviderKind, LlmProvider};
+use crate::{create_provider, LlmProvider, ProviderConfig, ProviderKind};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::time::Instant;
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoutingConfig {
@@ -101,8 +100,7 @@ fn parse_provider_string(s: &str) -> (String, String) {
 }
 
 fn build_provider_config(provider_str: &str, model: &str) -> ProviderConfig {
-    let kind = ProviderKind::from_str(provider_str)
-        .unwrap_or(ProviderKind::Custom);
+    let kind = ProviderKind::from_str(provider_str).unwrap_or(ProviderKind::Custom);
     let base_url = kind.default_base_url();
     let model = if model.is_empty() {
         match &kind {
@@ -122,6 +120,7 @@ fn build_provider_config(provider_str: &str, model: &str) -> ProviderConfig {
         model,
         max_tokens: 4096,
         temperature: 0.7,
+        max_concurrent_tools: 3,
     }
 }
 
@@ -137,7 +136,10 @@ pub async fn provider_doctor(config: &ProviderConfig) -> Result<Vec<ProviderHeal
 }
 
 async fn check_provider_health(config: &ProviderConfig, start: Instant) -> ProviderHealth {
-    let url = config.base_url.clone().unwrap_or_else(|| config.kind.default_base_url());
+    let url = config
+        .base_url
+        .clone()
+        .unwrap_or_else(|| config.kind.default_base_url());
     let models_url = format!("{}/v1/models", url.trim_end_matches('/'));
 
     let client = reqwest::Client::builder()
@@ -184,7 +186,11 @@ mod tests {
     fn route_fails_over_to_secondary() {
         let config = RoutingConfig::default();
         let result = route_request(&config, "plan");
-        assert!(result.is_ok(), "Should route successfully: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Should route successfully: {:?}",
+            result.err()
+        );
     }
 
     #[test]

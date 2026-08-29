@@ -93,13 +93,21 @@ impl Tool for TodoTool {
             name: "todo".into(),
             label: "Todo List".into(),
             description: "Manage a task list for long-running work.".into(),
-            doc: Some("Manages a task list that persists for the session.
+            doc: Some(
+                "Manages a task list that persists for the session.
 - op='set': Create a new task (returns task ID)
 - op='update': Update a task's status by ID
-- op='list': Show all tasks with their status".into()),
+- op='list': Show all tasks with their status"
+                    .into(),
+            ),
             category: ToolCategory::AgentManagement,
             subcategory: Some("todo".into()),
-            tags: vec!["todo".into(), "task".into(), "list".into(), "planning".into()],
+            tags: vec![
+                "todo".into(),
+                "task".into(),
+                "list".into(),
+                "planning".into(),
+            ],
             parameters: schema.clone(),
             param_summaries: ToolMetadata::extract_param_summaries(&schema),
             read_only: false,
@@ -148,7 +156,10 @@ impl Tool for TodoTool {
                     expected_result: None,
                 },
             ],
-            cost_hint: Some(CostHint { tokens_per_call: 10, category: CostCategory::Free }),
+            cost_hint: Some(CostHint {
+                tokens_per_call: 10,
+                category: CostCategory::Free,
+            }),
             version: "1.0.0".into(),
             deprecation: None,
             source: ToolSource::Builtin,

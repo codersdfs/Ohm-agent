@@ -272,14 +272,21 @@ mod tests {
     #[test]
     fn parse_all_chat_flags() {
         let cli = Cli::parse_from([
-            "omega", "chat",
-            "-p", "openai",
-            "-m", "gpt-4o",
-            "-b", "https://api.test.com/v1",
-            "--session", "sess-42",
+            "omega",
+            "chat",
+            "-p",
+            "openai",
+            "-m",
+            "gpt-4o",
+            "-b",
+            "https://api.test.com/v1",
+            "--session",
+            "sess-42",
             "--new-session",
-            "--max-tokens", "16384",
-            "--temperature", "0.3",
+            "--max-tokens",
+            "16384",
+            "--temperature",
+            "0.3",
         ]);
         match cli.action.unwrap() {
             CliAction::Chat {
@@ -327,10 +334,14 @@ mod tests {
     #[test]
     fn parse_serve_mcp_custom_port_and_auth() {
         let cli = Cli::parse_from([
-            "omega", "serve-mcp",
-            "--port", "8080",
-            "--host", "0.0.0.0",
-            "--auth-token", "secret123",
+            "omega",
+            "serve-mcp",
+            "--port",
+            "8080",
+            "--host",
+            "0.0.0.0",
+            "--auth-token",
+            "secret123",
         ]);
         match cli.action.unwrap() {
             CliAction::ServeMcp {

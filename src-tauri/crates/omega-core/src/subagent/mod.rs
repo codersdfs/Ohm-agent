@@ -14,5 +14,5 @@ pub use config::ContextForkMode;
 pub use config::SubagentConfig;
 pub use result::RunOutcome;
 pub use result::SubagentResult;
-pub use subagent::Subagent;
 pub use subagent::spawn_subagent;
+pub use subagent::Subagent;

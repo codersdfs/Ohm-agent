@@ -1,5 +1,5 @@
-use crate::rules::RulesDatabase;
 use super::Language;
+use crate::rules::RulesDatabase;
 use std::collections::HashMap;
 
 /// Tracks repeated pattern occurrences and auto-promotes at frequency ≥ 3.

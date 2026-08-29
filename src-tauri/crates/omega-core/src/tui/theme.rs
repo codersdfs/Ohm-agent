@@ -18,6 +18,8 @@ pub const OUTLINE_VARIANT: Color = Color::Rgb(162, 162, 170);
 pub const PRIMARY: Color = Color::Rgb(198, 198, 205);
 pub const PRIMARY_CONTAINER: Color = Color::Rgb(242, 242, 244);
 pub const ACCENT: Color = PRIMARY; // backward compat alias
+/// Stream marker in the flat header (the quiet `…` while tokens arrive).
+pub const ACCENT_STREAM: Color = Color::Rgb(163, 190, 140);
 pub const SECONDARY: Color = Color::Rgb(214, 214, 220);
 pub const DIM: Color = Color::Rgb(174, 174, 181);
 pub const ERROR: Color = Color::Rgb(230, 142, 142);
@@ -142,7 +144,9 @@ pub fn style_permission_highlight() -> Style {
 }
 
 pub fn style_permission_button() -> Style {
-    Style::default().fg(PERMISSION_BLUE).add_modifier(Modifier::BOLD)
+    Style::default()
+        .fg(PERMISSION_BLUE)
+        .add_modifier(Modifier::BOLD)
 }
 
 // ── Convenience styles ───────────────────────────────────────────────────────

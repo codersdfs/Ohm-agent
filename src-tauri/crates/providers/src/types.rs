@@ -199,6 +199,9 @@ pub struct ProviderConfig {
     pub model: String,
     pub max_tokens: u32,
     pub temperature: f32,
+    /// Maximum number of tool calls to execute in parallel per turn.
+    /// Default: 3. Set to 1 for strict sequential execution.
+    pub max_concurrent_tools: usize,
 }
 
 impl Default for ProviderConfig {
@@ -210,6 +213,7 @@ impl Default for ProviderConfig {
             model: "llama3.1:8b".into(),
             max_tokens: 4096,
             temperature: 0.7,
+            max_concurrent_tools: 3,
         }
     }
 }

@@ -109,7 +109,10 @@ impl RulesDatabase {
         severity: &str,
     ) {
         let key = lang.to_key();
-        let group = self.languages.entry(key.to_string()).or_insert_with(CategoryGroup::new);
+        let group = self
+            .languages
+            .entry(key.to_string())
+            .or_insert_with(CategoryGroup::new);
         if let Some(rules) = group.category_mut(category) {
             if let Some(existing) = rules.iter_mut().find(|r| r.pattern == pattern) {
                 existing.frequency += 1;

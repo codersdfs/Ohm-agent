@@ -1,10 +1,8 @@
 //! Transcript tests (P5 split).
 
-use super::*;
-use super::state::{parse_args_kv, ToolCallState, ToolCallStatus};
+use super::state::{parse_args_kv, ToolCallState};
 use super::toolbox::{MAX_RETAINED_SOURCE_LINES, MAX_SOURCE_COLUMNS};
-use ratatui::style::Color;
-use ratatui::text::Line;
+use super::*;
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
@@ -27,48 +25,63 @@ mod tests {
 
     #[test]
     fn test_has_attachments_url() {
-        let entry = TranscriptEntry::User { content: "check https://example.com".into() };
+        let entry = TranscriptEntry::User {
+            content: "check https://example.com".into(),
+        };
         assert!(entry.has_attachments());
     }
 
     #[test]
     fn test_has_attachments_http() {
-        let entry = TranscriptEntry::User { content: "see http://localhost:8080".into() };
+        let entry = TranscriptEntry::User {
+            content: "see http://localhost:8080".into(),
+        };
         assert!(entry.has_attachments());
     }
 
     #[test]
     fn test_no_attachments_plain_text() {
-        let entry = TranscriptEntry::User { content: "hello world".into() };
+        let entry = TranscriptEntry::User {
+            content: "hello world".into(),
+        };
         assert!(!entry.has_attachments());
     }
 
     #[test]
     fn test_has_attachments_file_path() {
-        let entry = TranscriptEntry::User { content: "read /etc/config.toml".into() };
+        let entry = TranscriptEntry::User {
+            content: "read /etc/config.toml".into(),
+        };
         assert!(entry.has_attachments());
     }
 
     #[test]
     fn test_has_attachments_file_extension() {
-        let entry = TranscriptEntry::User { content: "look at Cargo.toml".into() };
+        let entry = TranscriptEntry::User {
+            content: "look at Cargo.toml".into(),
+        };
         assert!(entry.has_attachments());
     }
 
     #[test]
     fn test_no_attachments_bare_domain() {
-        let entry = TranscriptEntry::User { content: "visit example.com".into() };
+        let entry = TranscriptEntry::User {
+            content: "visit example.com".into(),
+        };
         assert!(!entry.has_attachments());
     }
 
     #[test]
     fn test_has_attachments_non_user_entry() {
-        let entry = TranscriptEntry::Notice { text: "hello".into(), is_error: false };
+        let entry = TranscriptEntry::Notice {
+            text: "hello".into(),
+            is_error: false,
+        };
         assert!(!entry.has_attachments());
     }
 
     #[test]
-    fn streaming_assistant_uses_activity_spinner_not_thinking_label() {
+    fn streaming_assistant_no_spinner() {
         let mut entry = TranscriptEntry::Assistant {
             content: String::new(),
             rendered: None,
@@ -76,10 +89,8 @@ mod tests {
             thinking: String::new(),
         };
         let first = text_to_string(&entry.get_rendered(60, 0));
-        let second = text_to_string(&entry.get_rendered(60, 1));
-        assert!(first.contains("⠋ Cooking…"));
-        assert!(second.contains("⠙ Cooking…"));
-        assert!(!first.contains('◆'));
+        assert!(!first.contains("⠋"));
+        assert!(!first.contains("Cooking…"));
         assert!(!first.to_lowercase().contains("thinking"));
     }
 
@@ -319,9 +330,6 @@ mod tests {
             );
         }
 
-        println!(
-            "Tool accent bar OK — {} lines",
-            lines.len(),
-        );
+        println!("Tool accent bar OK — {} lines", lines.len(),);
     }
 }

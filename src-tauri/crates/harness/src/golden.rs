@@ -125,8 +125,8 @@ impl GoldenRules {
             let start = m.start();
             let end = m.end();
             // Check preceding char is not in `! < > =`
-            let prev_ok = start == 0
-                || !['!', '<', '>', '='].contains(&chars[start.saturating_sub(1)]);
+            let prev_ok =
+                start == 0 || !['!', '<', '>', '='].contains(&chars[start.saturating_sub(1)]);
             // Check following char is not `=`
             let next_ok = end >= chars.len() || chars[end] != '=';
             if prev_ok && next_ok {

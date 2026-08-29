@@ -66,7 +66,7 @@ impl PreferenceStorage {
     /// Create a new local-only storage instance
     pub fn local(project_root: &str) -> Result<Self, Box<dyn std::error::Error>> {
         std::fs::create_dir_all(project_root)?;
-        
+
         Ok(Self {
             project_root: project_root.to_string(),
             preferences_path: format!("{}/taste_prefs.json", project_root),
@@ -85,7 +85,10 @@ impl PreferenceStorage {
     }
 
     /// Save an experience record
-    pub fn save_experience(&self, _experience: &ExperienceRecord) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn save_experience(
+        &self,
+        _experience: &ExperienceRecord,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     }
 
