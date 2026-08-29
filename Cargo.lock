@@ -3060,7 +3060,6 @@ dependencies = [
  "dirs",
  "glob",
  "log",
- "mcp",
  "md5",
  "providers",
  "regex",
