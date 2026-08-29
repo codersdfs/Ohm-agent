@@ -52,6 +52,7 @@ pub fn run_chat(
         })
         .on_shutdown(|| {
             Command::Batch(vec![
+                Command::crossterm(crossterm::event::DisableBracketedPaste),
                 Command::crossterm(crossterm::terminal::LeaveAlternateScreen),
                 Command::crossterm(crossterm::event::DisableBracketedPaste),
                 Command::DisableRawMode,

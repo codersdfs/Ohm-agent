@@ -131,6 +131,46 @@ impl EditorState {
         self.cursor = 0;
         content
     }
+
+    /// Count the number of lines in the buffer.
+    pub fn line_count(&self) -> usize {
+        if self.buffer.is_empty() {
+            1
+        } else {
+            self.buffer.lines().count() + 1
+        }
+    }
+
+    /// Count visual (soft-wrapped) lines given a display width.
+    pub fn visual_line_count(&self, display_width: usize) -> usize {
+        if self.buffer.is_empty() {
+            return 1;
+        }
+        if display_width == 0 {
+            return 1;
+        }
+        let mut count = 0;
+        for logical_line in self.buffer.lines() {
+            if logical_line.is_empty() {
+                count += 1;
+            } else {
+                let chars = logical_line.chars().count();
+                count += chars.saturating_sub(1) / display_width + 1;
+            }
+        }
+        // Add one more if buffer ends with newline (empty trailing line)
+        if self.buffer.ends_with('\n') {
+            count += 1;
+        }
+        count
+    }
+
+    /// Handle a pasted string — insert it at cursor, preserving multiline.
+    pub fn handle_paste(&mut self, text: &str) {
+        for c in text.chars() {
+            self.insert_char(c);
+        }
+    }
 }
 
 impl Widget for &EditorState {
