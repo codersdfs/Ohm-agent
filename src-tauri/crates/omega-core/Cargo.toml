@@ -40,3 +40,4 @@ tool-harness = { path = "../tool-harness" }
 
 [dev-dependencies]
 tempfile = "3"
+async-trait = "0.1"

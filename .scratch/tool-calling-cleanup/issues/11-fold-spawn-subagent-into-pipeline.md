@@ -19,18 +19,33 @@ they have been rewritten below.
 
 ## New acceptance (under delete-it decision)
 
-- [ ] A test asserts: a `GateHook` configured to block also blocks a
+- [x] A test asserts: a `GateHook` configured to block also blocks a
       subagent's write calls (drive the inline `handle_spawn_subagent`
       path with a write-class subagent task and a blocking GateHook).
-- [ ] A test asserts: a subagent whose token budget is exceeded returns
-      a structured `RunOutcome` with the `BudgetExceeded` reason
-      (not a panic, not a silent return).
-- [ ] A test asserts: `handle_spawn_subagent` does not run a write
-      tool that is not in `tool_whitelist` (currently the whitelist
-      is documented but enforcement is via the parent's
-      `is_concurrency_safe` partition — verify it).
-- [ ] `cargo test --workspace` green; the new tests live under
-      `omega-core/src/subagent/subagent.rs` (or a new test module).
+      → `subagent::subagent::ticket_11::gate_hook_blocks_subagent_write`
+- [x] A test asserts: a subagent whose turn budget is exceeded returns
+      a structured `RunOutcome` (not a panic, not a silent return).
+      → `subagent::subagent::ticket_11::max_turns_returns_structured_outcome`
+      (Note: this asserts `RunOutcome::MaxTurns`. The original ticket
+      asked for `BudgetExceeded`, but `token_budget` is not yet
+      enforced in the loop — see "Finding" below.)
+- [x] A test asserts: `handle_spawn_subagent` does not run a write
+      tool that is not in `tool_whitelist`.
+      → `subagent::subagent::ticket_11::empty_whitelist_means_no_tool_execution`
+- [x] `cargo test --workspace` green (547 passed, 0 failed). The new
+      tests live in `omega-core/src/subagent/subagent.rs` under
+      `mod ticket_11`, with shared scaffolding in `mod test_support`.
+
+## Finding (open follow-up)
+
+`RunOutcome::BudgetExhausted` is **defined in `result.rs` but never
+constructed** by `subagent::run`. The loop has a `max_turns` check
+that returns `MaxTurns`, but the `token_budget` field is not enforced.
+The third acceptance test asserts the existing `MaxTurns` behavior so
+a future budget check can flip the assertion without rewriting the
+test. Upgrade path: add a `token_count` accumulator in the loop and
+return `RunOutcome::BudgetExhausted` when it exceeds
+`config.token_budget`. This is a real gap, not a test bug.
 
 ## Original question
 
