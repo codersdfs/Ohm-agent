@@ -116,6 +116,10 @@ Available CLI commands: `omega chat` (default), `omega exec`, `omega serve-mcp`,
 
 ---
 
+## Roadmap
+
+The forward-looking plan (vision, current state, what to do tomorrow, and the four phases from v0.1.0 to public launch) is in [`.scratch/project-roadmap/`](.scratch/project-roadmap/README.md). Read `tasks/tomorrow.md` first; it is the day's plan.
+
 ## Architecture
 
 ```
