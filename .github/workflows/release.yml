@@ -80,7 +80,10 @@ jobs:
         shell: bash
         run: |
           mkdir -p staging
-          cp "src-tauri/crates/omega-cli/target/${{ matrix.target }}/release/${{ matrix.binary }}" staging/
+          # Workspace root owns the target/ dir (Cargo.toml at repo root,
+          # members under src-tauri/crates/*). All build outputs land under
+          # target/<triple>/release/ at the repo root.
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" staging/
           cp LICENSE staging/LICENSE.txt
           cp README.md staging/README.md
           cd staging
