@@ -41,7 +41,9 @@ jobs:
             binary: omega
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            archive: zip
+            # Windows 10+ ships bsdtar; no extra install needed. .zip would
+            # require the Info-ZIP `zip` binary which is not in the default PATH.
+            archive: tar.gz
             binary: omega.exe
 
     runs-on: ${{ matrix.os }}
