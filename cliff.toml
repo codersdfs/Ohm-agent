@@ -28,14 +28,19 @@ conventional_commits = true
 filter_unconventional = true
 split_commits = false
 
-[commit_parsers]
-# Match breaking-change footer
+# commit_parsers is an array of tables (the [[ ]] form).
+# - entry 0: extract scope/message from a conventional commit; detect
+#           breaking-change footer in the body.
+# - entry 1: group commits by their conventional-commit type.
+# - entry 2: route revert: commits into a Reverted group.
+[[commit_parsers]]
 message = "^(?P<scope>[a-zA-Z0-9_-]+):\s*(?P<message>.+)$"
 body = "BREAKING[ -]CHANGE: (?P<breaking_change>.+)"
-# Group commits by type
-[commit_parsers.group]
+
+[[commit_parsers]]
 match = "^(feat|fix|perf|refactor|docs|test|build|ci|chore|style|revert)(?:\([^)]*\))?!?:\s*.+"
 group = "{{ type }}"
-[commit_parsers.revert]
+
+[[commit_parsers]]
 message = "^revert:.*"
 group = "Reverted"
