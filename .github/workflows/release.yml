@@ -119,6 +119,9 @@ jobs:
         id: syft
 
       - name: generate SBOM
+        # shell: bash so the line continuations work on Windows
+        # (default on windows-latest is pwsh, which doesn't accept `\`).
+        shell: bash
         run: |
           # Workspace root owns target/. See note on stage artifact step.
           "${{ steps.syft.outputs.cmd }}" "target/${{ matrix.target }}/release/${{ matrix.binary }}" \
