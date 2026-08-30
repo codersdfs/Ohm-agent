@@ -170,6 +170,9 @@ jobs:
         # the rationale on sha256sum portability).
         run: python -c "import hashlib, os; [print(hashlib.sha256(open(f, 'rb').read()).hexdigest() + '  ' + f) for f in sorted(os.listdir('.')) if f.startswith('omega-')]" > SHA256SUMS
 
+      - name: install cosign (publish)
+        uses: sigstore/cosign-installer@v3
+
       - name: sign SHA256SUMS (keyless)
         env:
           COSIGN_EXPERIMENTAL: "1"
