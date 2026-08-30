@@ -103,6 +103,9 @@ jobs:
         uses: sigstore/cosign-installer@v3
 
       - name: sign artifact (keyless)
+        # shell: bash so the line continuations work on Windows
+        # (default on windows-latest is pwsh, which doesn't accept `\`).
+        shell: bash
         env:
           COSIGN_EXPERIMENTAL: "1"
         run: |
