@@ -92,7 +92,10 @@ jobs:
             zip)   zip -r "../omega-${{ matrix.target }}.zip" * ;;
           esac
           cd ..
-          sha256sum "omega-${{ matrix.target }}.${{ matrix.archive }}" > "omega-${{ matrix.target }}.${{ matrix.archive }}.sha256"
+          # Use Python for SHA-256 since it's available on every GitHub runner
+          # (linux, macos, windows) with a stable interface. Avoids the Windows
+          # coreutils gap and stays a single shell expression.
+          python -c "import hashlib, sys; h = hashlib.sha256(open('omega-${{ matrix.target }}.${{ matrix.archive }}', 'rb').read()).hexdigest(); print(f'{h}  omega-${{ matrix.target }}.${{ matrix.archive }}')" > "omega-${{ matrix.target }}.${{ matrix.archive }}.sha256"
 
       - name: install cosign
         uses: sigstore/cosign-installer@v3
@@ -155,7 +158,9 @@ jobs:
 
       - name: compute SHA256SUMS
         working-directory: artifacts
-        run: sha256sum omega-* > SHA256SUMS
+        # Python is on every GitHub runner (see the per-platform stage step for
+        # the rationale on sha256sum portability).
+        run: python -c "import hashlib, os; [print(hashlib.sha256(open(f, 'rb').read()).hexdigest() + '  ' + f) for f in sorted(os.listdir('.')) if f.startswith('omega-')]" > SHA256SUMS
 
       - name: sign SHA256SUMS (keyless)
         env:
