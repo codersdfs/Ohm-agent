@@ -34,11 +34,11 @@ split_commits = false
 # - entry 1: group commits by their conventional-commit type.
 # - entry 2: route revert: commits into a Reverted group.
 [[commit_parsers]]
-message = "^(?P<scope>[a-zA-Z0-9_-]+):\s*(?P<message>.+)$"
+message = "^(?P<scope>[a-zA-Z0-9_-]+):\\s*(?P<message>.+)$"
 body = "BREAKING[ -]CHANGE: (?P<breaking_change>.+)"
 
 [[commit_parsers]]
-match = "^(feat|fix|perf|refactor|docs|test|build|ci|chore|style|revert)(?:\([^)]*\))?!?:\s*.+"
+match = "^(feat|fix|perf|refactor|docs|test|build|ci|chore|style|revert)(?:\\([^)]*\\))?!?:\\s*.+"
 group = "{{ type }}"
 
 [[commit_parsers]]
