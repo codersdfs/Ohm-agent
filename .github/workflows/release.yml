@@ -112,9 +112,9 @@ jobs:
 
       - name: generate SBOM
         run: |
-          "${{ steps.syft.outputs.cmd }}" "src-tauri/crates/omega-cli/target/${{ matrix.target }}/release/${{ matrix.binary }}" \
-            --output spdx-json \
-            --output-file "omega-${{ matrix.target }}.spdx.json"
+          # Workspace root owns target/. See note on stage artifact step.
+          "${{ steps.syft.outputs.cmd }}" "target/${{ matrix.target }}/release/${{ matrix.binary }}" \
+            -o spdx-json="omega-${{ matrix.target }}.spdx.json"
 
       - name: upload artifacts
         uses: actions/upload-artifact@v4
